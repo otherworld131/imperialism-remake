@@ -421,6 +421,7 @@ fn plan_next_depot_with(
     nation_id: NationId,
     commitment: Option<&crate::nation::CommittedInfraTarget>,
     excluded_candidates: &HashSet<HexCoord>,
+    other_planned_depots: &HashSet<HexCoord>,
 ) -> PlanOutcome {
     use crate::map::infrastructure::collectable_hexes;
     use crate::turn::connected_provinces;
@@ -438,12 +439,28 @@ fn plan_next_depot_with(
         .iter()
         .filter(|p| p.owner == nation_id)
         .collect();
-    let already_covered = collectable_hexes(&game.world.hex_map, &owned_provinces, &connected);
+    let mut already_covered = collectable_hexes(&game.world.hex_map, &owned_provinces, &connected);
 
     let owned_hexes: HashSet<HexCoord> = owned_provinces
         .iter()
         .flat_map(|p| p.tiles.iter().copied())
         .collect();
+
+    // Trello #426: pretend each other in-flight depot commitment is already
+    // built — i.e. its 1-hex radius is already covered. Without this, two
+    // engineers planning in the same turn each see full coverage on their
+    // own candidate and happily commit to adjacent depots whose radii
+    // overlap, producing the zero-yield clusters the user reported.
+    for &center in other_planned_depots {
+        if owned_hexes.contains(&center) {
+            already_covered.insert(center);
+        }
+        for n in center.neighbors() {
+            if owned_hexes.contains(&n) {
+                already_covered.insert(n);
+            }
+        }
+    }
 
     // Seeds: every owned country-capital tile, plus every owned tile with a
     // built port. Ports are sea-accessible rail-network entry points — once
@@ -679,7 +696,32 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
             .committed_infra_target
             .as_ref()
     });
-    plan_next_depot_with(game, nation_id, commitment, &HashSet::new())
+    // When solo-planning (e.g. in tests), every *other* commitment on this
+    // nation counts as in-flight and should suppress overlapping picks.
+    let other: HashSet<HexCoord> = game
+        .get_nation(nation_id)
+        .map(|n| {
+            let primary = n.diplomacy.ai_priority_state.committed_infra_target.as_ref();
+            let primary_hex = commitment.map(|c| c.candidate);
+            let extras = n
+                .diplomacy
+                .ai_priority_state
+                .additional_committed_infra_targets
+                .iter()
+                .map(|c| c.candidate);
+            // If we're validating the primary, treat the additional ones as "other".
+            // If we're not validating anything, treat every commitment as "other".
+            match primary_hex {
+                Some(h) => extras
+                    .chain(primary.iter().map(|c| c.candidate).filter(|c| *c != h))
+                    .collect(),
+                None => extras
+                    .chain(primary.iter().map(|c| c.candidate))
+                    .collect(),
+            }
+        })
+        .unwrap_or_default();
+    plan_next_depot_with(game, nation_id, commitment, &HashSet::new(), &other)
 }
 
 pub(super) fn plan_next_depot_excluding(
@@ -687,8 +729,15 @@ pub(super) fn plan_next_depot_excluding(
     nation_id: NationId,
     commitment: Option<&crate::nation::CommittedInfraTarget>,
     excluded_candidates: &HashSet<HexCoord>,
+    other_planned_depots: &HashSet<HexCoord>,
 ) -> PlanOutcome {
-    plan_next_depot_with(game, nation_id, commitment, excluded_candidates)
+    plan_next_depot_with(
+        game,
+        nation_id,
+        commitment,
+        excluded_candidates,
+        other_planned_depots,
+    )
 }
 
 /// Provinces in which this nation already has an engineer assigned to a
@@ -3825,6 +3874,85 @@ mod tests {
             matches!(outcome, PlanOutcome::Fresh(_)),
             "zero-coverage commitment must clear and re-plan, got {outcome:?}"
         );
+    }
+
+    /// Trello #426 deeper bug: when two engineers plan in the same turn,
+    /// passing the first pick's center as an `other_planned_depots` entry
+    /// must suppress an overlapping second pick. Without this, both
+    /// engineers see full coverage on adjacent candidates and the AI
+    /// commits to redundant depots whose radii cover the same tiles.
+    #[test]
+    fn plan_treats_other_planned_depot_radius_as_covered() {
+        // Capital at (0,0) with a depot. Two candidates: `a=(2,0)` and
+        // `b=(3,0)`. Their 1-hex radii overlap at (2,0)/(3,0) and adjacent
+        // hexes. Owned timber tiles fall in both radii. With no "other"
+        // hint, both candidates score the same; with `a` marked as a
+        // planned depot, `b`'s coverage should collapse because the only
+        // owned timber tiles in `b`'s radius are also in `a`'s radius.
+        let capital = HexCoord::new(0, 0);
+        let a = HexCoord::new(2, 0);
+        let b = HexCoord::new(3, 0);
+        // Two timber tiles, both inside both candidates' radii (distance 1
+        // from both `a` and `b`).
+        let shared1 = HexCoord::new(2, 0); // is `a` itself, also neighbour of b
+        let shared2 = HexCoord::new(3, -1); // neighbour of both a and b? (3,-1)-(2,0)=(1,-1) dir, yes
+        let mut game = planner_game(
+            capital,
+            &[
+                (a, ResourceType::Timber),
+                (b, ResourceType::Grain),
+                (shared2, ResourceType::Timber),
+                // Path filler from capital to a.
+                (HexCoord::new(1, 0), ResourceType::Grain),
+            ],
+        );
+        let _ = shared1; // silence unused — a IS shared1
+
+        // First, with no other planned depots, `b` should be plannable.
+        let outcome_no_hint = plan_next_depot_excluding(
+            &game,
+            NationId(1),
+            None,
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        let plan_no_hint = outcome_no_hint
+            .as_plan()
+            .cloned()
+            .expect("baseline: planner should find some candidate");
+        assert!(
+            plan_no_hint.coverage_value > 0,
+            "baseline candidate should have positive coverage"
+        );
+
+        // Now seed a commitment to `a` (the first engineer picked it), then
+        // re-plan asking the planner to honour `a` AND pass `a` as an other
+        // planned depot. The planner's fresh pick for a second engineer
+        // (after the commitment) must NOT just pick `b`, because `b`'s
+        // only yield tiles are inside `a`'s radius.
+        game.get_nation_mut(NationId(1))
+            .unwrap()
+            .diplomacy
+            .ai_priority_state
+            .committed_infra_target = Some(crate::nation::CommittedInfraTarget {
+            candidate: a,
+            origin_capital: capital,
+            turn_committed: 1,
+        });
+        let mut other: HashSet<HexCoord> = HashSet::new();
+        other.insert(a);
+        let mut excluded: HashSet<HexCoord> = HashSet::new();
+        excluded.insert(a);
+        let outcome_with_hint =
+            plan_next_depot_excluding(&game, NationId(1), None, &excluded, &other);
+        if let Some(plan) = outcome_with_hint.as_plan() {
+            assert_ne!(
+                plan.candidate, b,
+                "with `a` already planned, the planner must not pick `b`: \
+                 its only yield tiles are inside `a`'s radius"
+            );
+        }
+        // Either no second pick or a non-overlapping one is acceptable.
     }
 
     /// `province_adjacent_to_any` and `provinces_with_port_under_construction`

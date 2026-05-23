@@ -432,6 +432,11 @@ fn refresh_infra_commitments(
     let mut plans: Vec<super::economy::DepotPlan> = Vec::new();
     let mut kept_commitments: Vec<crate::nation::CommittedInfraTarget> = Vec::new();
     let mut excluded: HashSet<HexCoord> = HashSet::new();
+    // Trello #426: every commitment we've already decided to keep this
+    // refresh has its 1-hex radius treated as already-covered by subsequent
+    // calls, so we don't pick a second depot whose coverage entirely
+    // overlaps the first.
+    let mut planned_centers: HashSet<HexCoord> = HashSet::new();
 
     for commitment in commitments.into_iter().take(desired) {
         let outcome = super::economy::plan_next_depot_excluding(
@@ -439,9 +444,11 @@ fn refresh_infra_commitments(
             nation_id,
             Some(&commitment),
             &excluded,
+            &planned_centers,
         );
         if let Some(plan) = outcome.as_plan() {
             excluded.insert(plan.candidate);
+            planned_centers.insert(plan.candidate);
             kept_commitments.push(crate::nation::CommittedInfraTarget {
                 candidate: plan.candidate,
                 origin_capital: plan.origin_capital,
@@ -452,11 +459,18 @@ fn refresh_infra_commitments(
     }
 
     while plans.len() < desired {
-        let outcome = super::economy::plan_next_depot_excluding(game, nation_id, None, &excluded);
+        let outcome = super::economy::plan_next_depot_excluding(
+            game,
+            nation_id,
+            None,
+            &excluded,
+            &planned_centers,
+        );
         let Some(plan) = outcome.as_plan().cloned() else {
             break;
         };
         excluded.insert(plan.candidate);
+        planned_centers.insert(plan.candidate);
         kept_commitments.push(crate::nation::CommittedInfraTarget {
             candidate: plan.candidate,
             origin_capital: plan.origin_capital,
