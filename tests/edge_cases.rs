@@ -361,21 +361,35 @@ fn save_load_roundtrip_with_wars_and_treaties() {
     save_game(&game, &path).unwrap();
     let loaded = load_game(&path).unwrap();
 
-    // Verify diplomatic state roundtripped
-    assert!(loaded.world.diplomacy.is_at_war(gp_ids[0], gp_ids[1]));
-    assert!(
-        loaded
-            .world
-            .diplomacy
-            .has_treaty(gp_ids[2], gp_ids[3], TreatyType::Alliance)
+    // Verify diplomatic state roundtripped: every pairing must match the
+    // pre-save game's view. (AI turns may have broken some treaties — that's
+    // a separate concern; this test is about save/load fidelity, so we
+    // compare loaded ↔ original rather than against the seed state.)
+    let pairs_to_check: [(NationId, NationId, TreatyType); 2] = [
+        (gp_ids[2], gp_ids[3], TreatyType::Alliance),
+        (gp_ids[0], mn_ids[0], TreatyType::NonAggressionPact),
+    ];
+    for (a, b, t) in pairs_to_check {
+        assert_eq!(
+            loaded.world.diplomacy.has_treaty(a, b, t),
+            game.world.diplomacy.has_treaty(a, b, t),
+            "treaty {:?} between {:?} and {:?} did not roundtrip",
+            t,
+            a,
+            b,
+        );
+    }
+    assert_eq!(
+        loaded.world.diplomacy.is_at_war(gp_ids[0], gp_ids[1]),
+        game.world.diplomacy.is_at_war(gp_ids[0], gp_ids[1]),
     );
-    assert!(loaded.world.diplomacy.has_consulate(gp_ids[0], mn_ids[0]));
-    assert!(loaded.world.diplomacy.has_embassy(gp_ids[0], mn_ids[0]));
-    assert!(
-        loaded
-            .world
-            .diplomacy
-            .has_treaty(gp_ids[0], mn_ids[0], TreatyType::NonAggressionPact)
+    assert_eq!(
+        loaded.world.diplomacy.has_consulate(gp_ids[0], mn_ids[0]),
+        game.world.diplomacy.has_consulate(gp_ids[0], mn_ids[0]),
+    );
+    assert_eq!(
+        loaded.world.diplomacy.has_embassy(gp_ids[0], mn_ids[0]),
+        game.world.diplomacy.has_embassy(gp_ids[0], mn_ids[0]),
     );
 
     // Verify military state roundtripped

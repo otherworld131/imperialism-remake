@@ -3,7 +3,7 @@ mod test_helpers;
 use domain::diplomacy::DiplomaticProposal;
 use domain::events::TreatyType;
 use domain::game_state::new_game;
-use domain::turn::process_turn;
+use domain::turn::{TurnReport, accept_request_to_join_empire, process_turn};
 use domain::types::*;
 
 // ── Full diplomatic lifecycle ─────────────────────────────────────
@@ -37,12 +37,34 @@ fn diplomatic_lifecycle_consulate_to_incorporation() {
             .send_grant(player, mn_id, Money::dollars(500));
     }
 
-    // Step 5: Process turns until voluntary incorporation happens
+    // Step 5: Process turns until the minor queues a RequestToJoinEmpire
+    // proposal addressed to the human player (voluntary incorporation no
+    // longer auto-applies to the human — it surfaces as a modal proposal).
+    let mut request: Option<DiplomaticProposal> = None;
     for _ in 0..10 {
         process_turn(&mut game);
+        if let Some(p) = game
+            .world
+            .diplomacy
+            .pending_proposals
+            .iter()
+            .find(|p| {
+                p.proposal_type == TreatyType::RequestToJoinEmpire
+                    && p.from == mn_id
+                    && p.to == player
+            })
+            .cloned()
+        {
+            request = Some(p);
+            break;
+        }
     }
+    let request = request.expect("minor should queue RequestToJoinEmpire proposal");
 
-    // Check: MN should have incorporated (provinces transferred to player)
+    // Step 6: Accept the proposal — the minor's provinces transfer to the player.
+    let mut report = TurnReport::empty();
+    accept_request_to_join_empire(&mut game, request.to, request.from, &mut report);
+
     let player_nation = game.get_nation(player).unwrap();
     assert!(
         player_nation.province_count() > 8,

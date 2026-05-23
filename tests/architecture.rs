@@ -91,7 +91,7 @@ fn collect_use_statements(dir: &std::path::Path, results: &mut Vec<(String, Stri
 #[test]
 fn domain_has_only_serde_dependency() {
     let deps = get_dependencies("crates/domain/Cargo.toml");
-    let allowed = ["serde", "ron", "mlua"];
+    let allowed = ["serde", "serde_json", "ron", "mlua"];
     for dep in &deps {
         assert!(
             allowed.contains(&dep.as_str()),

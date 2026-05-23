@@ -13,7 +13,7 @@
 //! 6. Workforce growth under constrained inputs
 
 use domain::economy::trade::Commodity;
-use domain::economy::transport::TransportSystem;
+use domain::economy::transport::{FreightTarget, TransportSystem};
 use domain::economy::{BlockReason, MarketState, WorkerType};
 use domain::game_state::{new_game, new_observer_game};
 use domain::turn::process_turn;
@@ -27,9 +27,13 @@ fn freight_overflow_limits_delivery_when_capacity_is_low() {
     let mut game = new_game("test", Difficulty::Normal, 0);
     let human_id = game.human_player_nation;
 
-    // Clear freight cars so any remote resource overflows.
+    // Clear freight cars *and* merchant fleet so the unified rail+sea pool is
+    // empty and any remote resource overflows. Card #84 collapsed rail and
+    // sea into a single `freight_total` budget; zeroing only rail leaves sea
+    // capacity (e.g. the starter merchant fleet) intact.
     let nation = game.get_nation_mut(human_id).unwrap();
     nation.military.transport.freight_cars = 0;
+    nation.military.merchant_fleet.clear();
 
     let report = process_turn(&mut game);
 
@@ -50,7 +54,7 @@ fn freight_overflow_limits_delivery_when_capacity_is_low() {
     let nation = game.get_nation(human_id).unwrap();
     assert_eq!(
         nation.economy.logistics.freight_total, 0,
-        "freight_total should be 0 when no freight cars are built"
+        "freight_total should be 0 when no rail cars and no merchant fleet"
     );
     assert_eq!(
         nation.economy.logistics.freight_committed, 0,
@@ -535,6 +539,9 @@ fn queued_immigration_occurs_with_canned_food_and_clothing() {
         .add(Commodity::Goods(GoodsType::Clothing), 20);
     nation
         .economy
+        .add(Commodity::Goods(GoodsType::Furniture), 20);
+    nation
+        .economy
         .add(Commodity::Material(MaterialType::CannedFood), 20);
 
     // Record initial worker counts.
@@ -604,7 +611,7 @@ fn set_allocation_stores_units() {
     let units = ts
         .allocations
         .iter()
-        .find(|(r, _)| *r == ResourceType::Coal)
+        .find(|(r, _)| *r == FreightTarget::Resource(ResourceType::Coal))
         .map(|(_, p)| *p);
     assert_eq!(
         units,
