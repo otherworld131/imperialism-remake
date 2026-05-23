@@ -1402,13 +1402,12 @@ pub(super) fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
 /// Works on the resources collected this turn (from `report.resource_production`), not on the
 /// total warehouse. Resources already in the warehouse from prior turns are unaffected.
 ///
-/// For each nation:
-/// - The capital tile itself delivers for free.
-/// - All other collectable tiles draw from the freight pool.
-/// - If freight cars == 0: only capital-tile resources are delivered.
-/// - If freight cars > 0: total resources from non-capital tiles are capped at freight capacity.
-///   Excess resources are removed from warehouse.
-/// - Resources lost are tracked in `report.transport_overflow`.
+/// Every collected resource — including the capital tile itself — must draw
+/// from the freight pool (rail freight cars + merchant-marine cargo). Resources
+/// without an allocation or that exceed the combined capacity are removed from
+/// the warehouse and recorded in `report.transport_overflow`. There is no
+/// "free" capital-tile delivery; the original Imperialism model is that
+/// everything moves on rails.
 fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
     // Gather per-nation resource production from this turn
     let nation_ids: Vec<NationId> = game.world.nations.iter().map(|n| n.id).collect();
@@ -1425,7 +1424,7 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
         let rail_capacity = nation.economy.transport.total_capacity();
         let sea_capacity = nation.total_cargo_capacity(&game.game_data);
         let transport = nation.economy.transport.clone();
-        // Remote deliveries use rail freight + merchant-marine cargo as a
+        // Deliveries draw from rail freight + merchant-marine cargo as a
         // single combined pool. The UI's freight panel already projects against
         // this combined capacity (`crates/wasm-bridge/src/lib.rs:3079`); the
         // turn processor must agree, otherwise sea capacity is shown but never
@@ -1441,19 +1440,26 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
             _ => 1.0,
         };
 
-        let (mut local_items, mut remote_items) =
+        // Trello #484: capital-tile yields are NOT free — collapse local and
+        // remote into a single demand pool. Both go through the same freight
+        // gate so a nation with zero (or unallocated) freight loses every
+        // resource it collected this turn, capital tile included.
+        let (local_items, remote_items) =
             crate::economy::current_collectable_resources(game, nation_id);
-        for items in [&mut local_items, &mut remote_items] {
-            for (_, qty) in items.iter_mut() {
-                *qty = (*qty as f64 * bonus_multiplier).round() as u32;
+        let mut items: Vec<(ResourceType, u32)> = Vec::new();
+        for (resource, qty) in local_items.into_iter().chain(remote_items.into_iter()) {
+            if qty == 0 {
+                continue;
+            }
+            let adjusted = (qty as f64 * bonus_multiplier).round() as u32;
+            if let Some(entry) = items.iter_mut().find(|(r, _)| *r == resource) {
+                entry.1 = entry.1.saturating_add(adjusted);
+            } else {
+                items.push((resource, adjusted));
             }
         }
 
-        let total_produced: u32 = local_items
-            .iter()
-            .chain(remote_items.iter())
-            .map(|(_, q)| *q)
-            .sum();
+        let total_produced: u32 = items.iter().map(|(_, q)| *q).sum();
         if total_produced == 0 {
             // No production this turn, but still record capacity so freight_unused
             // is non-zero and military rail-move checks later in the turn work correctly.
@@ -1466,22 +1472,22 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
         }
 
         let has_positive_allocations = transport.allocations.iter().any(|(_, units)| *units > 0);
-        let delivered_remote_items = if require_explicit_allocations && !has_positive_allocations {
+        let delivered_items = if require_explicit_allocations && !has_positive_allocations {
             Vec::new()
         } else {
-            combined_transport.calculate_deliveries(&remote_items)
+            combined_transport.calculate_deliveries(&items)
         };
 
         let Some(nation) = game.world.nations.iter_mut().find(|n| n.id == nation_id) else {
             continue;
         };
-        for (resource, remote_available) in &remote_items {
-            let delivered = delivered_remote_items
+        for (resource, available) in &items {
+            let delivered = delivered_items
                 .iter()
                 .find(|(r, _)| r == resource)
                 .map(|(_, qty)| *qty)
                 .unwrap_or(0);
-            let overflow = remote_available.saturating_sub(delivered);
+            let overflow = available.saturating_sub(delivered);
             if overflow > 0 {
                 let removable = overflow.min(nation.resource_amount(*resource));
                 if removable > 0 {
@@ -1493,19 +1499,10 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
             }
         }
 
-        if remote_items.is_empty() {
-            nation
-                .economy
-                .logistics
-                .update(rail_capacity, sea_capacity, &[], &[]);
-        } else {
-            nation.economy.logistics.update(
-                rail_capacity,
-                sea_capacity,
-                &remote_items,
-                &delivered_remote_items,
-            );
-        }
+        nation
+            .economy
+            .logistics
+            .update(rail_capacity, sea_capacity, &items, &delivered_items);
     }
 }
 
@@ -6458,6 +6455,14 @@ mod tests {
     #[test]
     fn gold_converts_to_money() {
         let mut game = test_game_state_with_gold();
+        // Trello #484: the capital-tile gold needs freight + allocation; otherwise
+        // it overflows before it can be converted.
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.economy.transport.build_freight_cars(2);
+        nation
+            .economy
+            .transport
+            .set_resource_allocation(ResourceType::Gold, 1);
         let initial_treasury = game.get_nation(NationId(1)).unwrap().economy.treasury;
 
         let report = process_turn(&mut game);
@@ -7235,6 +7240,13 @@ mod tests {
         nation.add_resource(ResourceType::Fruit, 10);
         nation.add_resource(ResourceType::Livestock, 10);
         nation.economy.labor.untrained = 8;
+        // Trello #484: capital-tile grain needs freight + an explicit
+        // allocation to be delivered for the human player.
+        nation.economy.transport.build_freight_cars(2);
+        nation
+            .economy
+            .transport
+            .set_resource_allocation(ResourceType::Grain, 1);
 
         let report = process_turn(&mut game);
 
@@ -7575,31 +7587,39 @@ mod tests {
     // ── Transport resolution ──────────────────────────────────
 
     #[test]
-    fn transport_no_overflow_when_capacity_exceeds_production() {
+    fn transport_no_overflow_when_capacity_and_allocations_cover_production() {
         let mut game = test_game_state();
-        // Give nation freight cars: capacity 10, production is 2 (1 Grain + 1 Timber)
-        game.get_nation_mut(NationId(1))
-            .unwrap()
+        // Give nation 10 freight cars and explicit allocations covering
+        // production: 1 Grain (capital tile) + 1 Timber (adjacent tile).
+        // Trello #484: the capital tile is no longer free — it also needs an
+        // allocation.
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.economy.transport.build_freight_cars(10);
+        nation
             .economy
             .transport
-            .build_freight_cars(10);
+            .set_resource_allocation(ResourceType::Grain, 1);
+        nation
+            .economy
+            .transport
+            .set_resource_allocation(ResourceType::Timber, 1);
 
         let report = process_turn(&mut game);
 
         assert!(
             report.transport_overflow.is_empty(),
-            "No overflow when capacity >= production"
+            "No overflow when allocated capacity >= production"
         );
-        // Resources should be fully delivered
         let nation = game.get_nation(NationId(1)).unwrap();
         assert_eq!(nation.resource_amount(ResourceType::Grain), 1);
         assert_eq!(nation.resource_amount(ResourceType::Timber), 1);
     }
 
     #[test]
-    fn only_capital_tile_resources_are_delivered_without_transport() {
-        // The capital tile itself delivers for free. Neighboring tiles inside
-        // the capital's collection radius still need freight.
+    fn capital_tile_resources_overflow_without_freight() {
+        // Trello #484: the capital tile is no longer a free-delivery slot.
+        // Without freight + allocations, every collected resource overflows,
+        // including the grain sitting on the capital tile itself.
         let mut hex_map = HexMap::new(10, 10);
         let capital = HexCoord::new(2, 2);
         let mut tiles = vec![capital];
@@ -7635,7 +7655,6 @@ mod tests {
             ProvinceId(1),
         );
         nation.economy.treasury = Money::dollars(5000);
-        // Zero freight cars — only the capital tile should still arrive.
         nation.economy.labor = LaborPool::new();
 
         let mut game = crate::test_game_state! {
@@ -7667,8 +7686,8 @@ mod tests {
 
         let report = process_turn(&mut game);
 
-        // The 6 neighboring farms are collectable but require freight, so they
-        // should overflow when no transport exists.
+        // All 7 grain tiles (capital + 6 neighbors) need freight; with 0 cars
+        // every unit overflows.
         let total_overflow: u32 = report
             .transport_overflow
             .iter()
@@ -7676,34 +7695,38 @@ mod tests {
             .map(|(_, _, q)| *q)
             .sum();
         assert_eq!(
-            total_overflow, 6,
-            "capital-radius collection should overflow without freight"
+            total_overflow, 7,
+            "every collected resource — capital tile included — should overflow without freight"
         );
 
-        // Only the capital tile's grain remains delivered for free.
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert_eq!(nation.resource_amount(ResourceType::Grain), 1);
+        assert_eq!(nation.resource_amount(ResourceType::Grain), 0);
     }
 
     #[test]
-    fn transport_zero_cars_keeps_only_capital_tile_resources() {
+    fn transport_zero_cars_loses_all_collected_resources() {
+        // Trello #484: with no freight, both the capital tile (Grain) and the
+        // adjacent collectable tile (Timber) overflow.
         let mut game = test_game_state();
-        // Default: 0 freight cars, 2 collectable tiles in the capital
-        // province. Only the capital tile should stay delivered.
 
         let report = process_turn(&mut game);
 
+        let overflowed_resources: std::collections::HashSet<ResourceType> = report
+            .transport_overflow
+            .iter()
+            .filter(|(nid, _, _)| *nid == NationId(1))
+            .map(|(_, r, _)| *r)
+            .collect();
         assert!(
-            report
-                .transport_overflow
-                .iter()
-                .any(|(nid, resource, qty)| *nid == NationId(1)
-                    && *resource == ResourceType::Timber
-                    && *qty == 1),
-            "non-capital capital-radius resources should overflow without freight"
+            overflowed_resources.contains(&ResourceType::Grain),
+            "capital-tile grain should overflow without freight"
+        );
+        assert!(
+            overflowed_resources.contains(&ResourceType::Timber),
+            "adjacent timber should overflow without freight"
         );
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert_eq!(nation.resource_amount(ResourceType::Grain), 1);
+        assert_eq!(nation.resource_amount(ResourceType::Grain), 0);
         assert_eq!(nation.resource_amount(ResourceType::Timber), 0);
     }
 
@@ -7792,19 +7815,29 @@ mod tests {
         let report = process_turn(&mut game);
         let nation = game.get_nation(NationId(1)).unwrap();
 
-        assert_eq!(nation.resource_amount(ResourceType::Grain), 1);
+        assert_eq!(
+            nation.resource_amount(ResourceType::Grain),
+            0,
+            "with no allocations, even the capital-tile grain overflows (Trello #484)"
+        );
         assert_eq!(
             nation.resource_amount(ResourceType::Timber),
             0,
             "remote timber should not be collected without an explicit allocation"
         );
+        let overflowed: std::collections::HashSet<ResourceType> = report
+            .transport_overflow
+            .iter()
+            .filter(|(nid, _, _)| *nid == NationId(1))
+            .map(|(_, r, _)| *r)
+            .collect();
         assert!(
-            report
-                .transport_overflow
-                .iter()
-                .any(|(nid, resource, qty)| *nid == NationId(1)
-                    && *resource == ResourceType::Timber
-                    && *qty == 1)
+            overflowed.contains(&ResourceType::Grain),
+            "capital grain should overflow without allocation"
+        );
+        assert!(
+            overflowed.contains(&ResourceType::Timber),
+            "remote timber should overflow without allocation"
         );
     }
 

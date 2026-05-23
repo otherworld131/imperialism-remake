@@ -57,18 +57,33 @@ pub fn ai_allocate_transport(game: &mut GameState, nation_id: NationId) {
         return;
     }
 
-    let (local_items, mut remote_items) =
+    // Trello #484: capital-tile ("local") yields now also need freight, so
+    // fold them into the same demand pool as remote items. Passing an empty
+    // local supply to `compute_remote_demand` makes it stop treating local
+    // food/fiber/meat as "already covered for free".
+    let (local_items, remote_items) =
         crate::economy::current_collectable_resources(game, nation_id);
-    // Mirror `resolve_transport` (processor.rs:1252): AI difficulty multipliers
-    // scale up remote yields. Apply the same multiplier here so demand caps and
+    let mut all_items: Vec<(ResourceType, u32)> = Vec::new();
+    for (resource, qty) in local_items.into_iter().chain(remote_items.into_iter()) {
+        if qty == 0 {
+            continue;
+        }
+        if let Some(entry) = all_items.iter_mut().find(|(r, _)| *r == resource) {
+            entry.1 = entry.1.saturating_add(qty);
+        } else {
+            all_items.push((resource, qty));
+        }
+    }
+    // Mirror `resolve_transport` (processor.rs:1442): AI difficulty multipliers
+    // scale up yields. Apply the same multiplier here so demand caps and
     // delivery-time availability agree.
     let multiplier = ai_difficulty_multiplier(game, nation_id);
     if (multiplier - 1.0).abs() > f64::EPSILON {
-        for (_, qty) in remote_items.iter_mut() {
+        for (_, qty) in all_items.iter_mut() {
             *qty = (*qty as f64 * multiplier).round() as u32;
         }
     }
-    if remote_items.is_empty() {
+    if all_items.is_empty() {
         if let Some(n) = game.get_nation_mut(nation_id) {
             n.economy.transport.allocations.clear();
         }
@@ -81,8 +96,8 @@ pub fn ai_allocate_transport(game: &mut GameState, nation_id: NationId) {
         game,
         nation,
         &game.game_data,
-        &local_items,
-        &remote_items,
+        &[],
+        &all_items,
         &remote_outputs,
     );
 

@@ -283,7 +283,10 @@ pub fn resolve_trades_with_preference(
 }
 
 /// Auto-generate trade offers from Minor Nations based on their resources.
-/// Minor Nations sell their surplus resources at base price.
+/// Minor Nations sell their surplus resources at base price. Minors that have
+/// been incorporated into a great power's empire stop offering — their
+/// resources now belong to the overlord (the minor still consumes goods, but
+/// nothing flows from it to the world market).
 pub fn generate_minor_nation_offers(
     nations: &[Nation],
     provinces: &[Province],
@@ -292,7 +295,10 @@ pub fn generate_minor_nation_offers(
     let mut offers = Vec::new();
 
     for nation in nations {
-        if nation.is_great_power() || nation.diplomacy.is_in_anarchy {
+        if nation.is_great_power()
+            || nation.diplomacy.is_in_anarchy
+            || nation.diplomacy.integrated_by.is_some()
+        {
             continue;
         }
 
