@@ -37,3 +37,25 @@ export function resourceLabel(name: string): string {
 }
 
 export { EMOJI as RESOURCE_EMOJI_MAP };
+
+export const RESOURCES: readonly string[] = [
+  'Grain', 'Fruit', 'Cotton', 'Wool', 'Timber', 'Livestock', 'Fish', 'Horses',
+  'Coal', 'Iron', 'Gold', 'Gems', 'Oil',
+];
+
+export const MATERIALS: readonly string[] = [
+  'Lumber', 'Steel', 'Fabric', 'Paper', 'Arms', 'CannedFood', 'Canned Food',
+];
+
+export const GOODS: readonly string[] = [
+  'Furniture', 'Clothing', 'Hardware',
+];
+
+export type CommodityCategory = 'resource' | 'material' | 'good';
+
+export function commodityCategory(name: string): CommodityCategory | null {
+  if (RESOURCES.includes(name)) return 'resource';
+  if (MATERIALS.includes(name)) return 'material';
+  if (GOODS.includes(name)) return 'good';
+  return null;
+}

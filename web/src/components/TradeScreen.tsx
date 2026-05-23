@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import type { TradeData, ShipDetail } from '../wasm';
-import { resourceLabel } from '../resourceEmoji';
+import { resourceLabel, resourceEmoji, commodityCategory } from '../resourceEmoji';
 import Flag from './Flag';
+import FilterDropdown, { type FilterOption } from './FilterDropdown';
 
 interface NationLite {
   id: number;
@@ -111,6 +112,16 @@ export default function TradeScreen({ trade, nations = [], merchants = [], onSet
   }, []);
   const [selectedMarketTurn, setSelectedMarketTurn] = useState<number | null>(null);
 
+  // Per-table multi-select filters (commodity + country involved in the exchange).
+  // The country filter matches sellers/partners — for the market table it also matches any buyer in the fills.
+  // Empty array = no filter (show everything).
+  const [offerCommodity, setOfferCommodity] = useState<string[]>([]);
+  const [offerCountry, setOfferCountry] = useState<string[]>([]);
+  const [histCommodity, setHistCommodity] = useState<string[]>([]);
+  const [histCountry, setHistCountry] = useState<string[]>([]);
+  const [marketCommodity, setMarketCommodity] = useState<string[]>([]);
+  const [marketCountry, setMarketCountry] = useState<string[]>([]);
+
   const tradeHistory: any[] = trade?.trade_history ?? [];
   const marketArchive: any[] = (trade as any)?.market_archive ?? [];
 
@@ -120,9 +131,16 @@ export default function TradeScreen({ trade, nations = [], merchants = [], onSet
     return turns.sort((a, b) => b - a);
   }, [tradeHistory]);
 
-  const sortedOffers = useMemo(() => {
+  const filteredOffers = useMemo(() => {
     if (!trade) return [];
-    return [...trade.available_offers].sort((a: any, b: any) => {
+    return trade.available_offers.filter((o: any) =>
+      (offerCommodity.length === 0 || offerCommodity.includes(o.resource)) &&
+      (offerCountry.length === 0 || offerCountry.includes(String(o.seller_id)))
+    );
+  }, [trade, offerCommodity, offerCountry]);
+
+  const sortedOffers = useMemo(() => {
+    return [...filteredOffers].sort((a: any, b: any) => {
       for (const { key, dir } of offerSort) {
         const av = a[key], bv = b[key];
         const cmp = typeof av === 'boolean' ? (av === bv ? 0 : av ? -1 : 1)
@@ -132,10 +150,61 @@ export default function TradeScreen({ trade, nations = [], merchants = [], onSet
       }
       return 0;
     });
-  }, [trade, offerSort]);
+  }, [filteredOffers, offerSort]);
+
+  const offerCommodityOptions = useMemo<FilterOption[]>(() => {
+    const names = new Set<string>();
+    for (const o of trade?.available_offers ?? []) names.add((o as any).resource);
+    return Array.from(names).sort().map(n => ({ value: n, label: n, emoji: resourceEmoji(n) }));
+  }, [trade]);
+
+  const offerCountryOptions = useMemo<FilterOption[]>(() => {
+    const map = new Map<number, string>();
+    for (const o of trade?.available_offers ?? []) map.set((o as any).seller_id, (o as any).seller_name);
+    return Array.from(map.entries())
+      .sort((a, b) => a[1].localeCompare(b[1]))
+      .map(([id, name]) => ({ value: String(id), label: name, flagSvg: flagBySellerId[id] }));
+  }, [trade, flagBySellerId]);
+
+  const offerCommodityGroups = useMemo(() => partitionCommodities(offerCommodityOptions), [offerCommodityOptions]);
+  const offerCountryGroups = useMemo(() => {
+    const gp = new Set<number>();
+    for (const o of trade?.available_offers ?? []) if ((o as any).is_great_power) gp.add((o as any).seller_id);
+    return partitionCountries(offerCountryOptions, gp);
+  }, [trade, offerCountryOptions]);
+
+  const filteredHistory = useMemo(() => {
+    return tradeHistory.filter((h: any) =>
+      (histCommodity.length === 0 || histCommodity.includes(h.resource)) &&
+      (histCountry.length === 0 || histCountry.includes(String(h.partner_id)))
+    );
+  }, [tradeHistory, histCommodity, histCountry]);
+
+  const histCommodityOptions = useMemo<FilterOption[]>(() => {
+    const names = new Set<string>();
+    for (const h of tradeHistory) names.add(h.resource);
+    return Array.from(names).sort().map(n => ({ value: n, label: n, emoji: resourceEmoji(n) }));
+  }, [tradeHistory]);
+
+  const histCountryOptions = useMemo<FilterOption[]>(() => {
+    const map = new Map<number, string>();
+    for (const h of tradeHistory) {
+      if (h.partner_id != null) map.set(h.partner_id, h.partner_name ?? 'Unknown');
+    }
+    return Array.from(map.entries())
+      .sort((a, b) => a[1].localeCompare(b[1]))
+      .map(([id, name]) => ({ value: String(id), label: name, flagSvg: flagBySellerId[id] }));
+  }, [tradeHistory, flagBySellerId]);
+
+  const histCommodityGroups = useMemo(() => partitionCommodities(histCommodityOptions), [histCommodityOptions]);
+  const histCountryGroups = useMemo(() => {
+    const gp = new Set<number>();
+    for (const h of tradeHistory) if (h.partner_is_great_power && h.partner_id != null) gp.add(h.partner_id);
+    return partitionCountries(histCountryOptions, gp);
+  }, [tradeHistory, histCountryOptions]);
 
   const sortedHistory = useMemo(() => {
-    return [...tradeHistory].sort((a: any, b: any) => {
+    return [...filteredHistory].sort((a: any, b: any) => {
       for (const { key, dir } of histSort) {
         const av = a[key], bv = b[key];
         const cmp = typeof av === 'boolean' ? (av === bv ? 0 : av ? -1 : 1)
@@ -145,10 +214,10 @@ export default function TradeScreen({ trade, nations = [], merchants = [], onSet
       }
       return 0;
     });
-  }, [tradeHistory, histSort]);
+  }, [filteredHistory, histSort]);
 
   const aggregatedHistory = useMemo(() => {
-    const filtered = selectedSummaryTurn === null ? tradeHistory : tradeHistory.filter((h: any) => h.turn === selectedSummaryTurn);
+    const filtered = (selectedSummaryTurn === null ? filteredHistory : filteredHistory.filter((h: any) => h.turn === selectedSummaryTurn));
     type Row = {
       turn: number;
       resource: string;
@@ -185,7 +254,7 @@ export default function TradeScreen({ trade, nations = [], merchants = [], onSet
       }
       return 0;
     });
-  }, [tradeHistory, selectedSummaryTurn, aggSort]);
+  }, [filteredHistory, selectedSummaryTurn, aggSort]);
 
   // Market history: turns available, newest first.
   const marketTurnsSorted = useMemo(() => {
@@ -196,12 +265,51 @@ export default function TradeScreen({ trade, nations = [], merchants = [], onSet
 
   // Sorted offer rows for the currently-selected market turn (or the latest if
   // none is explicitly selected). Returns [] if archive is empty.
-  const sortedMarketOffers = useMemo(() => {
-    if (marketArchive.length === 0) return [] as any[];
+  const currentMarketRec = useMemo(() => {
+    if (marketArchive.length === 0) return null;
     const turn = selectedMarketTurn ?? marketTurnsSorted[0];
-    const rec = marketArchive.find((r: any) => r.turn === turn);
-    if (!rec) return [];
-    const rows: any[] = [...(rec.offers ?? [])];
+    return marketArchive.find((r: any) => r.turn === turn) ?? null;
+  }, [marketArchive, marketTurnsSorted, selectedMarketTurn]);
+
+  const marketCommodityOptions = useMemo<FilterOption[]>(() => {
+    const names = new Set<string>();
+    for (const o of (currentMarketRec?.offers ?? [])) names.add(o.resource);
+    return Array.from(names).sort().map(n => ({ value: n, label: n, emoji: resourceEmoji(n) }));
+  }, [currentMarketRec]);
+
+  const marketCountryOptions = useMemo<FilterOption[]>(() => {
+    const map = new Map<number, string>();
+    for (const o of (currentMarketRec?.offers ?? [])) {
+      if (o.seller_id != null) map.set(o.seller_id, o.seller_name ?? 'Unknown');
+      for (const f of (o.fills ?? [])) {
+        if (f.buyer_id != null) map.set(f.buyer_id, f.buyer_name ?? 'Unknown');
+      }
+    }
+    return Array.from(map.entries())
+      .sort((a, b) => a[1].localeCompare(b[1]))
+      .map(([id, name]) => ({ value: String(id), label: name, flagSvg: flagBySellerId[id] }));
+  }, [currentMarketRec, flagBySellerId]);
+
+  const marketCommodityGroups = useMemo(() => partitionCommodities(marketCommodityOptions), [marketCommodityOptions]);
+  const marketCountryGroups = useMemo(() => {
+    const gp = new Set<number>();
+    for (const o of (currentMarketRec?.offers ?? [])) {
+      if (o.seller_is_great_power && o.seller_id != null) gp.add(o.seller_id);
+      for (const f of (o.fills ?? [])) {
+        if (f.buyer_is_great_power && f.buyer_id != null) gp.add(f.buyer_id);
+      }
+    }
+    return partitionCountries(marketCountryOptions, gp);
+  }, [currentMarketRec, marketCountryOptions]);
+
+  const sortedMarketOffers = useMemo(() => {
+    if (!currentMarketRec) return [] as any[];
+    const rows: any[] = (currentMarketRec.offers ?? []).filter((o: any) =>
+      (marketCommodity.length === 0 || marketCommodity.includes(o.resource)) &&
+      (marketCountry.length === 0
+        || marketCountry.includes(String(o.seller_id))
+        || (o.fills ?? []).some((f: any) => marketCountry.includes(String(f.buyer_id))))
+    );
     return rows.sort((a, b) => {
       for (const { key, dir } of marketSort) {
         const av = (a as any)[key], bv = (b as any)[key];
@@ -210,7 +318,7 @@ export default function TradeScreen({ trade, nations = [], merchants = [], onSet
       }
       return 0;
     });
-  }, [marketArchive, marketTurnsSorted, selectedMarketTurn, marketSort]);
+  }, [currentMarketRec, marketSort, marketCommodity, marketCountry]);
 
   if (!trade) {
     return (
@@ -311,6 +419,26 @@ export default function TradeScreen({ trade, nations = [], merchants = [], onSet
               <div style={styles.column}>
                 <h3 style={styles.sectionTitle}>Buy Orders</h3>
                 <div style={styles.subLabel}>Available on Market</div>
+                <div style={styles.filterRow}>
+                  <FilterDropdown
+                    values={offerCommodity}
+                    options={offerCommodityOptions}
+                    onChange={setOfferCommodity}
+                    placeholder="All commodities"
+                  />
+                  <QuickChip label="Goods" groupValues={offerCommodityGroups.goods} values={offerCommodity} onChange={setOfferCommodity} />
+                  <QuickChip label="Materials" groupValues={offerCommodityGroups.materials} values={offerCommodity} onChange={setOfferCommodity} />
+                  <QuickChip label="Resources" groupValues={offerCommodityGroups.resources} values={offerCommodity} onChange={setOfferCommodity} />
+                  <span style={styles.filterDivider} />
+                  <FilterDropdown
+                    values={offerCountry}
+                    options={offerCountryOptions}
+                    onChange={setOfferCountry}
+                    placeholder="All sellers"
+                  />
+                  <QuickChip label="Great Powers" groupValues={offerCountryGroups.great} values={offerCountry} onChange={setOfferCountry} />
+                  <QuickChip label="Minor Powers" groupValues={offerCountryGroups.minor} values={offerCountry} onChange={setOfferCountry} />
+                </div>
                 <table style={styles.table}>
                   <thead>
                     <tr>
@@ -416,7 +544,7 @@ export default function TradeScreen({ trade, nations = [], merchants = [], onSet
 
             {/* Historical content */}
             <div style={styles.summaryContent}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' as const }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#999', cursor: 'pointer' }}>
                   <input
                     type="checkbox"
@@ -426,6 +554,24 @@ export default function TradeScreen({ trade, nations = [], merchants = [], onSet
                   />
                   Split individual transactions
                 </label>
+                <FilterDropdown
+                  values={histCommodity}
+                  options={histCommodityOptions}
+                  onChange={setHistCommodity}
+                  placeholder="All commodities"
+                />
+                <QuickChip label="Goods" groupValues={histCommodityGroups.goods} values={histCommodity} onChange={setHistCommodity} />
+                <QuickChip label="Materials" groupValues={histCommodityGroups.materials} values={histCommodity} onChange={setHistCommodity} />
+                <QuickChip label="Resources" groupValues={histCommodityGroups.resources} values={histCommodity} onChange={setHistCommodity} />
+                <span style={styles.filterDivider} />
+                <FilterDropdown
+                  values={histCountry}
+                  options={histCountryOptions}
+                  onChange={setHistCountry}
+                  placeholder="All partners"
+                />
+                <QuickChip label="Great Powers" groupValues={histCountryGroups.great} values={histCountry} onChange={setHistCountry} />
+                <QuickChip label="Minor Powers" groupValues={histCountryGroups.minor} values={histCountry} onChange={setHistCountry} />
               </div>
               {trade_history.length === 0 ? (
                 <p style={{ color: '#666' }}>No trade data available.</p>
@@ -550,10 +696,32 @@ export default function TradeScreen({ trade, nations = [], merchants = [], onSet
 
             {/* Market content */}
             <div style={styles.summaryContent}>
+              {marketArchive.length > 0 && (
+                <div style={{ ...styles.filterRow, marginBottom: 12 }}>
+                  <FilterDropdown
+                    values={marketCommodity}
+                    options={marketCommodityOptions}
+                    onChange={setMarketCommodity}
+                    placeholder="All commodities"
+                  />
+                  <QuickChip label="Goods" groupValues={marketCommodityGroups.goods} values={marketCommodity} onChange={setMarketCommodity} />
+                  <QuickChip label="Materials" groupValues={marketCommodityGroups.materials} values={marketCommodity} onChange={setMarketCommodity} />
+                  <QuickChip label="Resources" groupValues={marketCommodityGroups.resources} values={marketCommodity} onChange={setMarketCommodity} />
+                  <span style={styles.filterDivider} />
+                  <FilterDropdown
+                    values={marketCountry}
+                    options={marketCountryOptions}
+                    onChange={setMarketCountry}
+                    placeholder="All countries"
+                  />
+                  <QuickChip label="Great Powers" groupValues={marketCountryGroups.great} values={marketCountry} onChange={setMarketCountry} />
+                  <QuickChip label="Minor Powers" groupValues={marketCountryGroups.minor} values={marketCountry} onChange={setMarketCountry} />
+                </div>
+              )}
               {marketArchive.length === 0 ? (
                 <p style={{ color: '#666' }}>No market activity recorded yet.</p>
               ) : sortedMarketOffers.length === 0 ? (
-                <p style={{ color: '#666' }}>No offers on this turn.</p>
+                <p style={{ color: '#666' }}>No offers match the filters.</p>
               ) : (
                 <table style={styles.table}>
                   <thead>
@@ -723,6 +891,72 @@ function CargoSummary({ used, total, merchants }: { used: number; total: number;
   );
 }
 
+function partitionCommodities(opts: FilterOption[]): { goods: string[]; materials: string[]; resources: string[] } {
+  const goods: string[] = [], materials: string[] = [], resources: string[] = [];
+  for (const o of opts) {
+    const c = commodityCategory(o.value);
+    if (c === 'good') goods.push(o.value);
+    else if (c === 'material') materials.push(o.value);
+    else if (c === 'resource') resources.push(o.value);
+  }
+  return { goods, materials, resources };
+}
+
+function partitionCountries(opts: FilterOption[], gpIds: Set<number>): { great: string[]; minor: string[] } {
+  const great: string[] = [], minor: string[] = [];
+  for (const o of opts) {
+    const id = Number(o.value);
+    if (gpIds.has(id)) great.push(o.value);
+    else minor.push(o.value);
+  }
+  return { great, minor };
+}
+
+interface QuickChipProps {
+  label: string;
+  groupValues: string[];
+  values: string[];
+  onChange: (v: string[]) => void;
+}
+
+function QuickChip({ label, groupValues, values, onChange }: QuickChipProps) {
+  if (groupValues.length === 0) return null;
+  const selectedSet = new Set(values);
+  const allSelected = groupValues.every(v => selectedSet.has(v));
+  const someSelected = !allSelected && groupValues.some(v => selectedSet.has(v));
+  const active = allSelected;
+  const toggle = () => {
+    if (allSelected) {
+      const remove = new Set(groupValues);
+      onChange(values.filter(v => !remove.has(v)));
+    } else {
+      const merged = new Set(values);
+      for (const v of groupValues) merged.add(v);
+      onChange(Array.from(merged));
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      title={`${label} (${groupValues.length})`}
+      style={{
+        padding: '3px 8px',
+        background: active ? 'rgba(218,165,32,0.18)' : 'transparent',
+        border: `1px solid ${active ? '#daa520' : someSelected ? '#7a5a20' : '#3a3520'}`,
+        color: active ? '#daa520' : someSelected ? '#c0a050' : '#888',
+        cursor: 'pointer', fontFamily: "'Georgia', serif", fontSize: 11,
+        borderRadius: 12, whiteSpace: 'nowrap',
+      }}
+    >
+      {label}
+      <span style={{ marginLeft: 4, color: active ? '#daa520' : '#666', fontSize: 10 }}>
+        {groupValues.length}
+      </span>
+    </button>
+  );
+}
+
 const styles: Record<string, React.CSSProperties> = {
   overlay: {
     flex: 1, minHeight: 0,
@@ -796,6 +1030,14 @@ const styles: Record<string, React.CSSProperties> = {
   subLabel: {
     fontSize: 11, textTransform: 'uppercase' as const, letterSpacing: 1,
     color: '#888', marginBottom: 8,
+  },
+  filterRow: {
+    display: 'flex', alignItems: 'center', gap: 8,
+    marginBottom: 8, flexWrap: 'wrap' as const,
+  },
+  filterDivider: {
+    display: 'inline-block', width: 1, alignSelf: 'stretch',
+    background: '#3a3520', margin: '0 4px',
   },
   tradeRow: {
     display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', fontSize: 'var(--ui-font-size, 14px)',
