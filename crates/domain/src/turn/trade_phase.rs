@@ -49,7 +49,7 @@ pub(super) fn resolve_trade_session(
     let withhold_chance = game
         .game_data
         .game_config
-        .minor_resource_withhold_chance
+        .minor_resource_skip_chance
         .min(100);
     let mut offers = trade::generate_minor_nation_offers_with_seed(
         &game.world.nations,
@@ -57,6 +57,7 @@ pub(super) fn resolve_trade_session(
         &game.world.hex_map,
         withhold_chance,
         minor_offer_seed,
+        &game.world.market_state,
     );
 
     // 1b. Add human player's resource sell offers to the pool
@@ -68,7 +69,10 @@ pub(super) fn resolve_trade_session(
                     seller: human_id,
                     commodity: trade::Commodity::Resource(order.resource),
                     quantity: order.quantity,
-                    price_per_unit: trade::base_price(order.resource),
+                    price_per_unit: game
+                        .world
+                        .market_state
+                        .current_price(trade::Commodity::Resource(order.resource)),
                 });
             }
         }
@@ -130,6 +134,7 @@ pub(super) fn resolve_trade_session(
                 cargo_capacity,
                 Money::dollars(treasury_floor),
                 buffer_turns,
+                &game.world.market_state,
             );
 
             if game.ai_debug {
@@ -192,15 +197,14 @@ pub(super) fn resolve_trade_session(
 
     // 2b. Each GP offers its manufactured-commodity surplus (stock - reserve)
     // into the SAME unified offer pool that `resolve_trades_with_preference`
-    // consumes, priced at the fixed `minor_goods_buy_price`. In the same loop,
-    // each AI GP (and the observer-mode human seat) also places BUY bids for
-    // the 5 intermediate materials it is short of — sequenced after its
-    // resource bids so the shared cargo capacity and treasury floor are
-    // respected. Minors become bidders for the manufactured offers via the
+    // consumes, priced at the current per-commodity market price (drifted from
+    // the material/goods tier base). In the same loop, each AI GP (and the
+    // observer-mode human seat) also places BUY bids for the 5 intermediate
+    // materials it is short of — sequenced after its resource bids so the
+    // shared cargo capacity and treasury floor are respected. Minors become
+    // bidders for the manufactured offers via the
     // `generate_minor_manufactured_bids` helper.
     {
-        let buy_price = Money::dollars(game.game_data.game_config.minor_goods_buy_price);
-
         // Build (seller, commodity, quantity) surplus offers from every GP.
         // Deterministic ordering: by GP id, then commodity enum order.
         for gp_id in &gp_ids {
@@ -363,7 +367,7 @@ pub(super) fn resolve_trade_session(
                         seller: *gp_id,
                         commodity: unified,
                         quantity: surplus,
-                        price_per_unit: buy_price,
+                        price_per_unit: game.world.market_state.current_price(unified),
                     });
                 }
             }
@@ -387,16 +391,18 @@ pub(super) fn resolve_trade_session(
                 .map(|b| b.quantity)
                 .sum();
             let remaining_cargo = cargo_capacity.saturating_sub(resource_bid_qty);
-            // Estimate the resource bids' spend at base price — the price minor
-            // offers actually clear at — rather than their 120%-of-base max, so
-            // the shared budget isn't over-stated and material bids aren't
-            // suppressed unnecessarily.
+            // Estimate the resource bids' spend at current market price — the
+            // price minor offers actually clear at — rather than their
+            // 120%-of-base max, so the shared budget isn't over-stated and
+            // material bids aren't suppressed unnecessarily.
             let resource_bid_spend: i64 = all_bids
                 .iter()
                 .filter(|b| b.buyer == *gp_id)
                 .map(|b| {
                     let unit = match b.commodity {
-                        trade::Commodity::Resource(r) => trade::base_price(r),
+                        trade::Commodity::Resource(_) => {
+                            game.world.market_state.current_price(b.commodity)
+                        }
                         _ => b.max_price_per_unit,
                     };
                     unit.as_dollars() * b.quantity as i64
@@ -428,7 +434,7 @@ pub(super) fn resolve_trade_session(
                 &materials,
                 remaining_cargo,
                 cash_available,
-                buy_price,
+                &game.world.market_state,
             ));
         }
 
@@ -707,30 +713,40 @@ pub(super) fn resolve_trade_session(
         all_commodities.extend(supply_map.keys().copied());
         all_commodities.extend(demand_map.keys().copied());
 
-        for commodity in all_commodities {
-            let supply = supply_map.get(&commodity).copied().unwrap_or(0);
-            let demand = demand_map.get(&commodity).copied().unwrap_or(0);
-            let sold = sold_map.get(&commodity).copied().unwrap_or(0);
-            let price = if let Some(&(ps, pq)) = price_sum_map.get(&commodity)
+        for commodity in &all_commodities {
+            let supply = supply_map.get(commodity).copied().unwrap_or(0);
+            let demand = demand_map.get(commodity).copied().unwrap_or(0);
+            let sold = sold_map.get(commodity).copied().unwrap_or(0);
+            let price = if let Some(&(ps, pq)) = price_sum_map.get(commodity)
                 && pq > 0
             {
                 Money::dollars(ps / pq as i64)
             } else {
-                match commodity {
-                    Commodity::Resource(r) => trade::base_price(r),
-                    Commodity::Material(_) | Commodity::Goods(_) => {
-                        Money::dollars(game.game_data.game_config.minor_goods_buy_price)
-                    }
-                }
+                game.world.market_state.current_price(*commodity)
             };
             game.world.market_state.record_tick(
-                commodity,
+                *commodity,
                 current_turn,
                 price,
                 supply,
                 demand,
                 sold,
             );
+        }
+
+        // 8c. Apply per-turn price drift for EVERY commodity, not just those
+        //     that traded — idle ones mean-revert toward tier base.
+        let all_commodities_for_drift: Vec<Commodity> = game
+            .world
+            .market_state
+            .commodities_with_price()
+            .map(|(c, _)| c)
+            .collect();
+        let config = &game.game_data.game_config;
+        for commodity in all_commodities_for_drift {
+            game.world
+                .market_state
+                .apply_drift(commodity, current_turn, config);
         }
     }
 
@@ -756,9 +772,8 @@ fn material_buy_bids(
     materials: &[(MaterialType, u32, u32)],
     mut remaining_cargo: u32,
     mut cash_available: i64,
-    buy_price: Money,
+    market: &crate::economy::market::MarketState,
 ) -> Vec<trade::TradeBid> {
-    let unit_price = buy_price.as_dollars().max(1);
     let mut bids = Vec::new();
     for &(m, reserve, stock) in materials {
         if remaining_cargo == 0 || cash_available <= 0 {
@@ -768,6 +783,8 @@ fn material_buy_bids(
         if gap == 0 {
             continue;
         }
+        let buy_price = market.current_price(trade::Commodity::Material(m));
+        let unit_price = buy_price.as_dollars().max(1);
         let affordable = (cash_available / unit_price).clamp(0, u32::MAX as i64) as u32;
         let qty = gap.min(remaining_cargo).min(affordable);
         if qty == 0 {
@@ -840,7 +857,15 @@ fn generate_minor_manufactured_bids(
     let mut rng_state = seed.max(1);
     // Deterministic iteration: minors (already in nation order) × offers (in
     // the order they were pushed — GP id, then commodity).
+    //
+    // Per-turn budget: a minor buys at most ONE manufactured commodity per
+    // turn. The per-(minor, commodity) skip roll first narrows the candidate
+    // pool; the minor then picks one survivor uniformly at random. This
+    // shapes demand the way real wholesale markets work — small economies
+    // can only absorb so much per turn — and lets manufactured prices
+    // breathe rather than monotonically climbing.
     for &mid in &minor_ids {
+        let mut candidates: Vec<&trade::TradeOffer> = Vec::new();
         for offer in &manufactured {
             if offer.seller == human_id && !human_allows_minors {
                 continue;
@@ -853,13 +878,24 @@ fn generate_minor_manufactured_bids(
             if roll < skip_chance {
                 continue; // minor skips this commodity this turn
             }
-            bids.push(trade::TradeBid {
-                buyer: mid,
-                commodity: offer.commodity,
-                quantity: offer.quantity,
-                max_price_per_unit: offer.price_per_unit,
-            });
+            candidates.push(*offer);
         }
+        if candidates.is_empty() {
+            continue;
+        }
+        // Pick one candidate uniformly using the same RNG stream so the
+        // choice is deterministic and seed-driven.
+        rng_state ^= rng_state << 13;
+        rng_state ^= rng_state >> 7;
+        rng_state ^= rng_state << 17;
+        let idx = ((rng_state >> 32) as usize) % candidates.len();
+        let chosen = candidates[idx];
+        bids.push(trade::TradeBid {
+            buyer: mid,
+            commodity: chosen.commodity,
+            quantity: chosen.quantity,
+            max_price_per_unit: chosen.price_per_unit,
+        });
     }
     bids
 }
@@ -937,7 +973,10 @@ mod tests {
     }
 
     #[test]
-    fn minor_bids_for_each_manufactured_offer_when_never_skipping() {
+    fn minor_bids_for_at_most_one_manufactured_offer_per_turn() {
+        // Per-turn budget: a minor buys at most ONE manufactured commodity
+        // per turn. With skip_chance=0 (never skips), the candidate pool
+        // covers every offer, and the minor picks exactly one of them.
         let game = game_with_gp_and_minor(0);
         let offers = vec![
             trade::TradeOffer {
@@ -954,20 +993,50 @@ mod tests {
             },
         ];
         let bids = generate_minor_manufactured_bids(&game, &offers, 12345);
-        // skip_chance 0 ⇒ the lone minor bids on both manufactured offers,
-        // for the full offered quantity, tagged with its own NationId.
-        assert_eq!(bids.len(), 2);
-        assert!(bids.iter().all(|b| b.buyer == NationId(10)));
-        let steel = bids
+        assert_eq!(bids.len(), 1, "minor must bid for at most one commodity");
+        let bid = &bids[0];
+        assert_eq!(bid.buyer, NationId(10));
+        // The chosen commodity is one of the two offered, at its full quantity.
+        let matched_offer = offers
             .iter()
-            .find(|b| b.commodity == trade::Commodity::Material(MaterialType::Steel))
-            .unwrap();
-        assert_eq!(steel.quantity, 4);
-        let arms = bids
-            .iter()
-            .find(|b| b.commodity == trade::Commodity::Goods(GoodsType::Arms))
-            .unwrap();
-        assert_eq!(arms.quantity, 2);
+            .find(|o| o.commodity == bid.commodity)
+            .expect("bid commodity must match one of the offers");
+        assert_eq!(bid.quantity, matched_offer.quantity);
+    }
+
+    #[test]
+    fn minor_picks_different_commodities_across_seeds() {
+        // The one-per-turn pick is uniformly random across surviving
+        // candidates, so different seeds should surface different choices.
+        let game = game_with_gp_and_minor(0);
+        let offers = vec![
+            trade::TradeOffer {
+                seller: NationId(1),
+                commodity: trade::Commodity::Material(MaterialType::Steel),
+                quantity: 4,
+                price_per_unit: Money::dollars(150),
+            },
+            trade::TradeOffer {
+                seller: NationId(1),
+                commodity: trade::Commodity::Goods(GoodsType::Arms),
+                quantity: 2,
+                price_per_unit: Money::dollars(150),
+            },
+        ];
+        let mut saw_steel = false;
+        let mut saw_arms = false;
+        for seed in 1..50u64 {
+            let bids = generate_minor_manufactured_bids(&game, &offers, seed);
+            if bids.len() != 1 {
+                continue;
+            }
+            match bids[0].commodity {
+                trade::Commodity::Material(MaterialType::Steel) => saw_steel = true,
+                trade::Commodity::Goods(GoodsType::Arms) => saw_arms = true,
+                _ => {}
+            }
+        }
+        assert!(saw_steel && saw_arms, "both commodities should be picked across seeds");
     }
 
     #[test]
@@ -1025,7 +1094,12 @@ mod tests {
 
     // ── material_buy_bids ───────────────────────────────────────────
 
-    const BUY_PRICE: Money = Money::dollars(150);
+    /// Default-config MarketState — every Material price equals
+    /// `market_material_base_price` ($150), matching the legacy `&test_market()`
+    /// constant these tests were written against.
+    fn test_market() -> crate::economy::market::MarketState {
+        crate::economy::market::MarketState::with_config(&crate::data::GameConfig::default())
+    }
 
     #[test]
     fn material_buy_bids_no_bid_when_stock_meets_reserve() {
@@ -1035,7 +1109,7 @@ mod tests {
             (MaterialType::Steel, 20, 25),
             (MaterialType::Fabric, 10, 10),
         ];
-        let bids = material_buy_bids(NationId(1), &materials, 999, 1_000_000, BUY_PRICE);
+        let bids = material_buy_bids(NationId(1), &materials, 999, 1_000_000, &test_market());
         assert!(bids.is_empty());
     }
 
@@ -1046,7 +1120,7 @@ mod tests {
             (MaterialType::Paper, 8, 8),   // gap 0 — skipped
             (MaterialType::Fabric, 12, 9), // gap 3
         ];
-        let bids = material_buy_bids(NationId(1), &materials, 999, 1_000_000, BUY_PRICE);
+        let bids = material_buy_bids(NationId(1), &materials, 999, 1_000_000, &test_market());
         assert_eq!(bids.len(), 2);
         assert_eq!(bids[0].commodity, trade::Commodity::Material(MaterialType::Steel));
         assert_eq!(bids[0].quantity, 15);
@@ -1063,33 +1137,34 @@ mod tests {
             (MaterialType::Steel, 20, 5),
             (MaterialType::Fabric, 12, 0),
         ];
-        let bids = material_buy_bids(NationId(1), &materials, 10, 1_000_000, BUY_PRICE);
+        let bids = material_buy_bids(NationId(1), &materials, 10, 1_000_000, &test_market());
         assert_eq!(bids.len(), 1);
         assert_eq!(bids[0].quantity, 10);
     }
 
     #[test]
     fn material_buy_bids_capped_by_available_cash() {
-        // Budget only affords 4 units at $150 apiece.
+        // Budget only affords 2 units at the material tier base ($300).
         let materials = vec![(MaterialType::Steel, 20, 5)];
-        let bids = material_buy_bids(NationId(1), &materials, 999, 600, BUY_PRICE);
+        let bids = material_buy_bids(NationId(1), &materials, 999, 600, &test_market());
         assert_eq!(bids.len(), 1);
-        assert_eq!(bids[0].quantity, 4);
+        assert_eq!(bids[0].quantity, 2);
     }
 
     #[test]
     fn material_buy_bids_no_bid_when_budget_nonpositive() {
         let materials = vec![(MaterialType::Steel, 20, 0)];
-        let bids = material_buy_bids(NationId(1), &materials, 999, 0, BUY_PRICE);
+        let bids = material_buy_bids(NationId(1), &materials, 999, 0, &test_market());
         assert!(bids.is_empty());
     }
 
     #[test]
     fn minor_bids_resolve_deterministically_across_multiple_sellers() {
-        // Two GP sellers offer the same commodity. Minor bids are commodity-keyed
-        // (seller-agnostic by design); confirm resolution is deterministic, fills
-        // from both sellers, and never over-allocates.
-        let game = game_with_gp_and_minor(0); // skip_chance 0 → minor always bids
+        // Two GP sellers offer the same commodity. The minor is now
+        // capped at one bid per turn — it picks one of the two offers
+        // and the matcher fills that bid from one or both sellers.
+        // Determinism: same seed must yield identical results.
+        let game = game_with_gp_and_minor(0);
         let offers = vec![
             trade::TradeOffer {
                 seller: NationId(11),
@@ -1105,20 +1180,26 @@ mod tests {
             },
         ];
         let bids = generate_minor_manufactured_bids(&game, &offers, 42);
-        // The lone minor (id 10) bids once per offer when it never skips.
-        assert_eq!(bids.len(), 2);
-        assert!(bids.iter().all(|b| b.buyer == NationId(10)));
+        // One-per-turn budget: a single bid from the lone minor.
+        assert_eq!(bids.len(), 1);
+        assert_eq!(bids[0].buyer, NationId(10));
+        assert_eq!(
+            bids[0].commodity,
+            trade::Commodity::Material(MaterialType::Steel)
+        );
 
-        // Same seed → identical bid set (determinism).
+        // Same seed → identical bid (determinism).
         let bids_again = generate_minor_manufactured_bids(&game, &offers, 42);
         assert_eq!(bids.len(), bids_again.len());
+        assert_eq!(bids[0].quantity, bids_again[0].quantity);
 
-        // Resolution fills from both sellers, total exactly the offered 7 units.
+        // Resolution: the bid fills against one or both sellers up to its
+        // own quantity, never over-allocating.
         let rel = std::collections::HashMap::new();
         let subs = std::collections::HashMap::new();
         let txns = trade::resolve_trades_with_preference(&offers, &bids, &rel, &subs);
         let total: u32 = txns.iter().map(|t| t.quantity).sum();
-        assert_eq!(total, 7);
+        assert_eq!(total, bids[0].quantity);
         assert!(txns.iter().all(|t| t.buyer == NationId(10)));
     }
 }

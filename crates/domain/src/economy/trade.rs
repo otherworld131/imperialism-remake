@@ -1,4 +1,5 @@
 use crate::diplomacy::DiplomacyState;
+use crate::economy::market::MarketState;
 use crate::map::{HexMap, Province};
 use crate::nation::Nation;
 use crate::types::*;
@@ -87,42 +88,11 @@ pub struct PlayerBuyOrder {
     pub max_price_per_unit: Money,
 }
 
-/// Base prices for tradeable commodities.
-pub fn base_price(resource: ResourceType) -> Money {
-    match resource {
-        ResourceType::Timber => Money::dollars(50),
-        ResourceType::Coal => Money::dollars(75),
-        ResourceType::Iron => Money::dollars(75),
-        ResourceType::Cotton => Money::dollars(60),
-        ResourceType::Wool => Money::dollars(60),
-        ResourceType::Fruit => Money::dollars(40),
-        ResourceType::Livestock => Money::dollars(40),
-        ResourceType::Oil => Money::dollars(100),
-        ResourceType::Gold => Money::dollars(500),
-        ResourceType::Gems => Money::dollars(1000),
-        ResourceType::Grain => Money::dollars(40),
-        ResourceType::Horses => Money::dollars(60),
-        ResourceType::Fish => Money::dollars(40),
-    }
-}
-
 /// Apply subsidy to trade prices. Subsidized nations get better prices.
 pub fn apply_subsidy(base_price: Money, subsidy: Money) -> Money {
     // Subsidy reduces the effective price the buyer pays
     let reduced = base_price.as_dollars() - subsidy.as_dollars();
     Money::dollars(reduced.max(1))
-}
-
-/// Adjusted price based on supply. More sellers = lower price.
-pub fn market_price(resource: ResourceType, total_supply: u32) -> Money {
-    let base = base_price(resource);
-    // Price drops 5% per unit of supply above 10
-    if total_supply > 10 {
-        let discount = ((total_supply - 10) * 5).min(50) as i64; // max 50% discount
-        Money::dollars(base.as_dollars() * (100 - discount) / 100)
-    } else {
-        base
-    }
 }
 
 /// Resolve trade offers and bids, producing transactions.
@@ -291,6 +261,7 @@ pub fn generate_minor_nation_offers(
     nations: &[Nation],
     provinces: &[Province],
     hex_map: &HexMap,
+    market: &MarketState,
 ) -> Vec<TradeOffer> {
     let mut offers = Vec::new();
 
@@ -322,10 +293,13 @@ pub fn generate_minor_nation_offers(
             }
         }
 
-        // Create offers for tradeable resources at base price
+        // Create offers for tradeable resources at current market price.
+        // Minors hoard Gold and Gems (monetary resources) — those are
+        // strategic wealth they keep for their own treasury conversion, not
+        // commodities they put up for sale to Great Powers.
         for (resource, quantity) in production {
-            if resource.is_tradeable() && quantity > 0 {
-                let price = base_price(resource);
+            if resource.is_tradeable() && !resource.is_monetary() && quantity > 0 {
+                let price = market.current_price(Commodity::Resource(resource));
                 if price != Money::ZERO {
                     offers.push(TradeOffer {
                         seller: nation.id,
@@ -361,6 +335,7 @@ pub fn generate_minor_nation_offers_with_seed(
     hex_map: &crate::map::HexMap,
     withhold_chance: u32,
     seed: u64,
+    market: &MarketState,
 ) -> Vec<TradeOffer> {
     let mut offers = Vec::new();
     let mut rng_state = seed.max(1);
@@ -394,58 +369,46 @@ pub fn generate_minor_nation_offers_with_seed(
             }
         }
 
-        // Trello: each turn the minor nation puts up for sale a random subset
-        // of its tradeable resource types — between 1 and N, where N is the
-        // count of distinct tradeable types it produces. For every type in
-        // the chosen subset it offers the *full* turn yield (one offer per
-        // type, not split). When `withhold_chance == 0` the subset is the
-        // full set (back-compat behavior — every type offered every turn).
-        let mut tradeable: Vec<ResourceType> = production
-            .keys()
-            .copied()
-            .filter(|r| r.is_tradeable())
+        // Per-(minor, resource) skip roll: for each tradeable resource the
+        // minor produces, roll d100; if the roll is below `skip_chance` the
+        // minor withholds *that specific resource* this turn. Independent
+        // rolls per resource — symmetric with the per-(minor, commodity)
+        // skip on the buy side (`minor_goods_skip_chance`). Resources are
+        // visited in deterministic sorted order so the seed → skip mapping
+        // is stable across runs and platforms.
+        //
+        // Monetary resources (Gold, Gems) are excluded: minors hoard them
+        // for their own treasury conversion rather than putting them on the
+        // world market. They never enter the sell-side offer pool.
+        let mut tradeable: Vec<(ResourceType, u32)> = production
+            .iter()
+            .filter(|(r, _)| r.is_tradeable() && !r.is_monetary())
+            .map(|(r, q)| (*r, *q))
             .collect();
-        // Sort for determinism — BTreeMap iteration is already stable but
-        // an explicit sort makes the seed→subset mapping readable in tests.
-        tradeable.sort_by_key(|r| format!("{r:?}"));
+        tradeable.sort_by_key(|(r, _)| format!("{r:?}"));
 
-        let offered_set: std::collections::HashSet<ResourceType> = if tradeable.is_empty() {
-            std::collections::HashSet::new()
-        } else if withhold_chance == 0 {
-            tradeable.iter().copied().collect()
-        } else {
-            // Pick K ∈ [1, N] uniformly, then sample K types from `tradeable`
-            // using a Fisher-Yates partial shuffle driven by xorshift64.
-            let n = tradeable.len();
+        for (resource, quantity) in &tradeable {
+            // Advance RNG and consume one roll per (minor, resource) pair —
+            // this happens unconditionally so the roll sequence doesn't
+            // change based on availability or price (cleaner determinism).
             rng_state ^= rng_state << 13;
             rng_state ^= rng_state >> 7;
             rng_state ^= rng_state << 17;
-            let k = ((rng_state >> 32) as usize) % n + 1;
-            let mut deck = tradeable.clone();
-            for i in 0..k {
-                rng_state ^= rng_state << 13;
-                rng_state ^= rng_state >> 7;
-                rng_state ^= rng_state << 17;
-                let pick = i + ((rng_state >> 32) as usize) % (n - i);
-                deck.swap(i, pick);
-            }
-            deck.into_iter().take(k).collect()
-        };
-
-        for (resource, quantity) in &production {
-            if !offered_set.contains(resource) {
+            let roll = (rng_state >> 32) as u32 % 100;
+            if roll < withhold_chance {
                 continue;
             }
-            if resource.is_tradeable() && *quantity > 0 {
-                let price = base_price(*resource);
-                if price != Money::ZERO {
-                    offers.push(TradeOffer {
-                        seller: nation.id,
-                        commodity: Commodity::Resource(*resource),
-                        quantity: *quantity,
-                        price_per_unit: price,
-                    });
-                }
+            if *quantity == 0 {
+                continue;
+            }
+            let price = market.current_price(Commodity::Resource(*resource));
+            if price != Money::ZERO {
+                offers.push(TradeOffer {
+                    seller: nation.id,
+                    commodity: Commodity::Resource(*resource),
+                    quantity: *quantity,
+                    price_per_unit: price,
+                });
             }
         }
     }
@@ -582,6 +545,7 @@ pub fn generate_smart_bids(
     available_offers: &[TradeOffer],
     _diplomacy: &DiplomacyState,
     max_cargo: u32,
+    market: &MarketState,
 ) -> Vec<TradeBid> {
     if max_cargo == 0 {
         return Vec::new();
@@ -631,7 +595,7 @@ pub fn generate_smart_bids(
             continue;
         }
 
-        let bp = base_price(*resource);
+        let bp = market.current_price(Commodity::Resource(*resource));
         if bp == Money::ZERO {
             continue;
         }
@@ -639,7 +603,7 @@ pub fn generate_smart_bids(
         // Bid for min(available, remaining_cargo)
         let bid_qty = total_available.min(remaining_cargo);
 
-        // Max price at 120% of base price
+        // Max price at 120% of current market price
         let max_price = Money::dollars(bp.as_dollars() * 120 / 100);
 
         bids.push(TradeBid {
@@ -678,6 +642,7 @@ pub fn generate_smart_bids(
 /// (local + remote = `current_collectable_resources`). Pass an empty slice
 /// from tests; the priority then degenerates to "largest gap first" which
 /// matches the legacy ordering.
+#[allow(clippy::too_many_arguments)]
 pub fn generate_need_based_bids(
     nation: &Nation,
     all_nations: &[Nation],
@@ -686,6 +651,7 @@ pub fn generate_need_based_bids(
     max_cargo: u32,
     treasury_floor: Money,
     buffer_turns: u32,
+    market: &MarketState,
 ) -> Vec<TradeBid> {
     if max_cargo == 0 || buffer_turns == 0 {
         return Vec::new();
@@ -794,7 +760,7 @@ pub fn generate_need_based_bids(
         if avail == 0 {
             continue;
         }
-        let bp = base_price(*resource);
+        let bp = market.current_price(Commodity::Resource(*resource));
         if bp == Money::ZERO {
             continue;
         }
@@ -820,7 +786,7 @@ pub fn generate_need_based_bids(
         }
         let already = bid_qty_for.get(resource).copied().unwrap_or(0);
         let avail = total_available_for(*resource);
-        let bp = base_price(*resource);
+        let bp = market.current_price(Commodity::Resource(*resource));
         if bp == Money::ZERO {
             continue;
         }
@@ -844,7 +810,7 @@ pub fn generate_need_based_bids(
         if qty == 0 {
             continue;
         }
-        let bp = base_price(*resource);
+        let bp = market.current_price(Commodity::Resource(*resource));
         let max_price = Money::dollars(bp.as_dollars() * 120 / 100);
         bids.push(TradeBid {
             buyer: nation.id,
@@ -864,26 +830,62 @@ mod tests {
     use crate::map::tile::Tile;
     use crate::nation::NationColor;
 
-    // ── base_price ──────────────────────────────────────────────
-
-    #[test]
-    fn base_price_returns_correct_values() {
-        assert_eq!(base_price(ResourceType::Timber), Money::dollars(50));
-        assert_eq!(base_price(ResourceType::Coal), Money::dollars(75));
-        assert_eq!(base_price(ResourceType::Iron), Money::dollars(75));
-        assert_eq!(base_price(ResourceType::Cotton), Money::dollars(60));
-        assert_eq!(base_price(ResourceType::Wool), Money::dollars(60));
-        assert_eq!(base_price(ResourceType::Fruit), Money::dollars(40));
-        assert_eq!(base_price(ResourceType::Livestock), Money::dollars(40));
-        assert_eq!(base_price(ResourceType::Oil), Money::dollars(100));
-        assert_eq!(base_price(ResourceType::Gold), Money::dollars(500));
-        assert_eq!(base_price(ResourceType::Gems), Money::dollars(1000));
+    /// Test fixture: a MarketState seeded from the default GameConfig so
+    /// every commodity starts at its tier base. Equivalent to "fresh game".
+    fn test_market() -> MarketState {
+        MarketState::with_config(&crate::data::GameConfig::default())
     }
 
+    /// Test fixture: the tier base price for a Resource under default config.
+    fn r_base() -> Money {
+        Money::dollars(crate::data::GameConfig::default().market_resource_base_price)
+    }
+
+    // ── tier base price ─────────────────────────────────────────
+
     #[test]
-    fn all_resources_have_positive_price() {
-        assert_eq!(base_price(ResourceType::Grain), Money::dollars(40));
-        assert_eq!(base_price(ResourceType::Horses), Money::dollars(60));
+    fn tier_base_price_uniform_within_tier() {
+        let cfg = crate::data::GameConfig::default();
+        let r_base = Money::dollars(cfg.market_resource_base_price);
+        let m_base = Money::dollars(cfg.market_material_base_price);
+        let g_base = Money::dollars(cfg.market_goods_base_price);
+        // Industrial resources and raw food sit at the resource tier.
+        for r in [
+            ResourceType::Coal,
+            ResourceType::Gems,
+            ResourceType::Grain,
+            ResourceType::Fruit,
+            ResourceType::Livestock,
+            ResourceType::Fish,
+        ] {
+            assert_eq!(
+                MarketState::tier_base_price(Commodity::Resource(r), &cfg),
+                r_base,
+                "{:?} should price at the resource tier",
+                r
+            );
+        }
+        // Processed materials (including Canned Food) PLUS Horses sit at
+        // the material tier. Horses is a raw `ResourceType` but commands a
+        // material-tier price.
+        assert_eq!(
+            MarketState::tier_base_price(Commodity::Resource(ResourceType::Horses), &cfg),
+            m_base,
+            "Horses should price at the material tier"
+        );
+        for m in [MaterialType::Steel, MaterialType::CannedFood] {
+            assert_eq!(
+                MarketState::tier_base_price(Commodity::Material(m), &cfg),
+                m_base,
+                "{:?} should price at the material tier",
+                m
+            );
+        }
+        // Finished goods sit at the goods tier.
+        assert_eq!(
+            MarketState::tier_base_price(Commodity::Goods(GoodsType::Arms), &cfg),
+            g_base
+        );
     }
 
     // ── resolve_trades ──────────────────────────────────────────
@@ -1100,7 +1102,7 @@ mod tests {
         let nations = vec![great_power, minor_nation];
         let provinces = vec![province];
 
-        let offers = generate_minor_nation_offers(&nations, &provinces, &hex_map);
+        let offers = generate_minor_nation_offers(&nations, &provinces, &hex_map, &test_market());
 
         // Should have offers for Timber and Cotton (both tradeable)
         assert!(!offers.is_empty());
@@ -1115,16 +1117,18 @@ mod tests {
             .collect();
 
         // Card #464: minors offer at level-1 yield. For surface resources
-        // (Timber, Cotton) on unimproved tiles that's 1 + 1 = 2.
+        // (Timber, Cotton) on unimproved tiles that's 1 + 1 = 2. All
+        // resources price at the resource-tier base under the dynamic-pricing
+        // model (no per-commodity static prices anymore).
         assert_eq!(timber_offers.len(), 1);
         assert_eq!(timber_offers[0].seller, NationId(10));
         assert_eq!(timber_offers[0].quantity, 2);
-        assert_eq!(timber_offers[0].price_per_unit, Money::dollars(50));
+        assert_eq!(timber_offers[0].price_per_unit, r_base());
 
         assert_eq!(cotton_offers.len(), 1);
         assert_eq!(cotton_offers[0].seller, NationId(10));
         assert_eq!(cotton_offers[0].quantity, 2);
-        assert_eq!(cotton_offers[0].price_per_unit, Money::dollars(60));
+        assert_eq!(cotton_offers[0].price_per_unit, r_base());
     }
 
     #[test]
@@ -1156,7 +1160,7 @@ mod tests {
         let nations = vec![great_power];
         let provinces = vec![province];
 
-        let offers = generate_minor_nation_offers(&nations, &provinces, &hex_map);
+        let offers = generate_minor_nation_offers(&nations, &provinces, &hex_map, &test_market());
         assert!(
             offers.is_empty(),
             "Great Powers should not generate trade offers"
@@ -1192,7 +1196,7 @@ mod tests {
         let nations = vec![minor_nation];
         let provinces = vec![province];
 
-        let offers = generate_minor_nation_offers(&nations, &provinces, &hex_map);
+        let offers = generate_minor_nation_offers(&nations, &provinces, &hex_map, &test_market());
         assert!(
             !offers.is_empty(),
             "Grain is tradeable and should appear in offers"
@@ -1223,29 +1227,6 @@ mod tests {
         let subsidy = Money::ZERO;
         let result = apply_subsidy(price, subsidy);
         assert_eq!(result, Money::dollars(75));
-    }
-
-    // ── market_price ────────────────────────────────────────────
-
-    #[test]
-    fn market_price_no_discount_at_low_supply() {
-        // Supply <= 10: no discount
-        assert_eq!(market_price(ResourceType::Timber, 5), Money::dollars(50));
-        assert_eq!(market_price(ResourceType::Timber, 10), Money::dollars(50));
-    }
-
-    #[test]
-    fn market_price_drops_with_high_supply() {
-        // Supply 15: (15-10)*5 = 25% discount -> 50 * 75/100 = 37
-        assert_eq!(market_price(ResourceType::Timber, 15), Money::dollars(37));
-    }
-
-    #[test]
-    fn market_price_caps_discount_at_50_percent() {
-        // Supply 30: (30-10)*5 = 100, capped at 50% -> 50 * 50/100 = 25
-        assert_eq!(market_price(ResourceType::Timber, 30), Money::dollars(25));
-        // Even higher supply: still 50%
-        assert_eq!(market_price(ResourceType::Timber, 100), Money::dollars(25));
     }
 
     // ── resolve_trades_with_preference ──────────────────────────
@@ -1432,7 +1413,7 @@ mod tests {
             ProvinceId(20),
         );
 
-        let offers = generate_minor_nation_offers(&[minor], &[province], &hex_map);
+        let offers = generate_minor_nation_offers(&[minor], &[province], &hex_map, &test_market());
         let coal_offer = offers
             .iter()
             .find(|o| o.commodity == Commodity::Resource(ResourceType::Coal));
@@ -1444,60 +1425,129 @@ mod tests {
         assert_eq!(coal_offer.unwrap().quantity, 2);
         assert_eq!(
             coal_offer.unwrap().price_per_unit,
-            base_price(ResourceType::Coal)
+            r_base()
         );
+    }
+
+    #[test]
+    fn minors_never_offer_gold_or_gems() {
+        use crate::map::Province;
+        // A minor with Gold and Gems tiles must produce zero offers — these
+        // are monetary resources the minor hoards for its own treasury,
+        // never the world market. Test both generator entrypoints.
+        let coord_gold = HexCoord::new(0, 0);
+        let coord_gems = HexCoord::new(1, 0);
+        let mut hex_map = HexMap::new(10, 10);
+        let mut tile_gold = Tile::with_province(TerrainType::Hills, ProvinceId(20));
+        tile_gold.set_resource(ResourceType::Gold);
+        hex_map.set_tile(coord_gold, tile_gold);
+        let mut tile_gems = Tile::with_province(TerrainType::Hills, ProvinceId(20));
+        tile_gems.set_resource(ResourceType::Gems);
+        hex_map.set_tile(coord_gems, tile_gems);
+        let province = Province::new(
+            ProvinceId(20),
+            "Treasure Coast".to_string(),
+            NationId(10),
+            coord_gold,
+            vec![coord_gold, coord_gems],
+            3,
+        );
+        let minor = Nation::new(
+            NationId(10),
+            "Auria".to_string(),
+            NationColor::Gray,
+            NationType::MinorNation,
+            ProvinceId(20),
+        );
+        let nations = vec![minor];
+        let provinces = vec![province];
+
+        let offers = generate_minor_nation_offers(&nations, &provinces, &hex_map, &test_market());
+        assert!(
+            !offers
+                .iter()
+                .any(|o| matches!(o.commodity, Commodity::Resource(r) if r.is_monetary())),
+            "legacy generator must not offer monetary resources from minors; got {:?}",
+            offers.iter().map(|o| o.commodity).collect::<Vec<_>>()
+        );
+
+        for seed in 1u64..=50 {
+            let offers = generate_minor_nation_offers_with_seed(
+                &nations,
+                &provinces,
+                &hex_map,
+                0, // never skip — every roll passes
+                seed,
+                &test_market(),
+            );
+            assert!(
+                !offers
+                    .iter()
+                    .any(|o| matches!(o.commodity, Commodity::Resource(r) if r.is_monetary())),
+                "seeded generator must not offer monetary resources from minors (seed {seed})"
+            );
+        }
     }
 
     #[test]
     fn withhold_chance_zero_never_withholds() {
         let (nations, provinces, hex_map) = make_minor_with_resources();
-        let offers_normal = generate_minor_nation_offers(&nations, &provinces, &hex_map);
+        let offers_normal = generate_minor_nation_offers(&nations, &provinces, &hex_map, &test_market());
         let offers_seeded =
-            generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 0, 42);
+            generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 0, 42, &test_market());
         // withhold_chance=0 must produce identical count as the unseeded version
         assert_eq!(offers_seeded.len(), offers_normal.len());
         assert_eq!(offers_seeded.len(), 2); // Timber + Cotton
     }
 
     #[test]
-    fn withhold_chance_nonzero_picks_subset_in_range() {
+    fn skip_chance_50_yields_variable_subset_of_resources() {
+        // At 50% skip per (minor, resource), across many seeds the offer
+        // count must vary — sometimes nothing, sometimes some, sometimes
+        // everything. We assert ≥ 2 distinct counts appear, which is the
+        // load-bearing claim (per-roll, not always-on or always-off).
         let (nations, provinces, hex_map) = make_minor_with_resources();
-        let offers_full = generate_minor_nation_offers(&nations, &provinces, &hex_map);
+        let offers_full = generate_minor_nation_offers(&nations, &provinces, &hex_map, &test_market());
         assert_eq!(offers_full.len(), 2, "setup: minor must have 2 resources");
-        // With a nonzero withhold_chance the offer count is K ∈ [1, N].
-        // Verify across several seeds that we observe both K=1 and K=2.
-        let mut saw_one = false;
-        let mut saw_two = false;
-        for seed in 1..50u64 {
-            let n =
-                generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 100, seed)
-                    .len();
-            assert!(
-                (1..=2).contains(&n),
-                "subset size must stay in [1, N=2], got {n}"
-            );
-            if n == 1 {
-                saw_one = true;
-            }
-            if n == 2 {
-                saw_two = true;
-            }
+        let mut saw = [false; 3]; // counts 0, 1, 2
+        for seed in 1..200u64 {
+            let n = generate_minor_nation_offers_with_seed(
+                &nations,
+                &provinces,
+                &hex_map,
+                50,
+                seed,
+                &test_market(),
+            )
+            .len();
+            assert!(n <= 2, "offer count must not exceed N=2, got {n}");
+            saw[n] = true;
         }
-        assert!(saw_one && saw_two, "subset size must vary across seeds");
+        let distinct: usize = saw.iter().filter(|x| **x).count();
+        assert!(
+            distinct >= 2,
+            "across 200 seeds at 50% skip we must observe at least 2 distinct counts; saw {saw:?}"
+        );
     }
 
     #[test]
-    fn withhold_chance_nonzero_offers_full_quantity_when_type_is_chosen() {
-        // Whatever subset of types is offered, each offer carries the full
-        // turn yield for that type (no quantity splitting).
+    fn skip_chance_preserves_full_quantity_when_resource_is_offered() {
+        // Whatever resources survive the per-roll skip, each offer carries
+        // the full turn yield for that resource (no quantity splitting).
         let (nations, provinces, hex_map) = make_minor_with_resources();
-        let full = generate_minor_nation_offers(&nations, &provinces, &hex_map);
+        let full = generate_minor_nation_offers(&nations, &provinces, &hex_map, &test_market());
         let by_resource: std::collections::HashMap<_, _> =
             full.iter().map(|o| (o.commodity, o.quantity)).collect();
 
         for seed in 1..20u64 {
-            let offers =
-                generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 100, seed);
+            let offers = generate_minor_nation_offers_with_seed(
+                &nations,
+                &provinces,
+                &hex_map,
+                50,
+                seed,
+                &test_market(),
+            );
             for o in &offers {
                 let expected = by_resource[&o.commodity];
                 assert_eq!(
@@ -1512,8 +1562,8 @@ mod tests {
     #[test]
     fn seeded_offers_are_deterministic() {
         let (nations, provinces, hex_map) = make_minor_with_resources();
-        let a = generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 50, 12345);
-        let b = generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 50, 12345);
+        let a = generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 50, 12345, &test_market());
+        let b = generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 50, 12345, &test_market());
         assert_eq!(a.len(), b.len());
         for (x, y) in a.iter().zip(b.iter()) {
             assert_eq!(x.seller, y.seller);
@@ -1522,29 +1572,64 @@ mod tests {
     }
 
     #[test]
-    fn different_seeds_can_withhold_different_resources() {
+    fn skip_chance_50_can_withhold_each_resource_across_seeds() {
+        // Across enough seeds at 50% skip, each individual resource should
+        // sometimes be withheld and sometimes present. Confirms the per-roll
+        // model is truly per-resource and not coupled across them.
         let (nations, provinces, hex_map) = make_minor_with_resources();
-        // Try many seeds; with 100% chance, each seed consistently withholds one specific resource.
-        // Collect the withheld resource across seeds and verify they differ (not always same one).
-        let full = generate_minor_nation_offers(&nations, &provinces, &hex_map);
+        let full = generate_minor_nation_offers(&nations, &provinces, &hex_map, &test_market());
         assert_eq!(full.len(), 2, "setup: minor must have Timber + Cotton");
-        let withheld: Vec<Commodity> = (1u64..=200)
-            .filter_map(|seed| {
-                let offers = generate_minor_nation_offers_with_seed(
-                    &nations, &provinces, &hex_map, 100, seed,
-                );
-                // withheld = resource present in full but absent in offers
-                full.iter()
-                    .find(|o| !offers.iter().any(|x| x.commodity == o.commodity))
-                    .map(|o| o.commodity)
-            })
-            .collect();
-        let has_timber = withheld.contains(&Commodity::Resource(ResourceType::Timber));
-        let has_cotton = withheld.contains(&Commodity::Resource(ResourceType::Cotton));
-        // With 200 seeds both resources should appear as withheld at some point
+        let mut timber_withheld = false;
+        let mut cotton_withheld = false;
+        let mut timber_offered = false;
+        let mut cotton_offered = false;
+        for seed in 1u64..=200 {
+            let offers = generate_minor_nation_offers_with_seed(
+                &nations,
+                &provinces,
+                &hex_map,
+                50,
+                seed,
+                &test_market(),
+            );
+            let has_timber = offers
+                .iter()
+                .any(|o| o.commodity == Commodity::Resource(ResourceType::Timber));
+            let has_cotton = offers
+                .iter()
+                .any(|o| o.commodity == Commodity::Resource(ResourceType::Cotton));
+            if has_timber {
+                timber_offered = true;
+            } else {
+                timber_withheld = true;
+            }
+            if has_cotton {
+                cotton_offered = true;
+            } else {
+                cotton_withheld = true;
+            }
+        }
         assert!(
-            has_timber && has_cotton,
-            "different seeds should withhold different resources across 200 seeds"
+            timber_withheld && timber_offered && cotton_withheld && cotton_offered,
+            "each resource must be both withheld and offered across 200 seeds at 50% skip"
+        );
+    }
+
+    #[test]
+    fn skip_chance_100_withholds_everything() {
+        let (nations, provinces, hex_map) = make_minor_with_resources();
+        let offers = generate_minor_nation_offers_with_seed(
+            &nations,
+            &provinces,
+            &hex_map,
+            100,
+            42,
+            &test_market(),
+        );
+        assert!(
+            offers.is_empty(),
+            "100% skip must withhold every resource — got {} offer(s)",
+            offers.len()
         );
     }
 
@@ -1612,13 +1697,13 @@ mod tests {
                 seller: NationId(3),
                 commodity: Commodity::Resource(ResourceType::Coal),
                 quantity: 10,
-                price_per_unit: base_price(ResourceType::Coal),
+                price_per_unit: r_base(),
             },
             TradeOffer {
                 seller: NationId(3),
                 commodity: Commodity::Resource(ResourceType::Iron),
                 quantity: 10,
-                price_per_unit: base_price(ResourceType::Iron),
+                price_per_unit: r_base(),
             },
         ];
 
@@ -1630,6 +1715,7 @@ mod tests {
             100,                   // ample cargo
             Money::dollars(5_000), // treasury floor
             3,                     // buffer turns
+            &test_market(),
         );
 
         let coal_bid = bids
@@ -1670,7 +1756,7 @@ mod tests {
             seller: NationId(3),
             commodity: Commodity::Resource(ResourceType::Coal),
             quantity: 10,
-            price_per_unit: base_price(ResourceType::Coal),
+            price_per_unit: r_base(),
         }];
 
         let bids = generate_need_based_bids(
@@ -1681,6 +1767,7 @@ mod tests {
             100,
             Money::dollars(5_000),
             3,
+            &test_market(),
         );
         assert!(bids.is_empty(), "well-stocked AI must not bid");
     }
@@ -1703,7 +1790,7 @@ mod tests {
             seller: NationId(3),
             commodity: Commodity::Resource(ResourceType::Coal),
             quantity: 10,
-            price_per_unit: base_price(ResourceType::Coal),
+            price_per_unit: r_base(),
         }];
 
         let bids = generate_need_based_bids(
@@ -1714,6 +1801,7 @@ mod tests {
             100,
             Money::dollars(5_000),
             3,
+            &test_market(),
         );
         assert!(bids.is_empty(), "must not spend below the treasury floor");
     }
@@ -1722,7 +1810,7 @@ mod tests {
     fn need_based_caps_bid_quantity_by_cash() {
         use crate::economy::buildings::{Building, BuildingType};
         let mut buyer = make_gp(2);
-        // Coal base price = $75. Above floor of $5k we have $300 → 4 coal max.
+        // Resource tier base = $60. Above floor of $5k we have $300 → 5 max.
         buyer.economy.treasury = Money::dollars(5_300);
         buyer
             .economy
@@ -1737,7 +1825,7 @@ mod tests {
             seller: NationId(3),
             commodity: Commodity::Resource(ResourceType::Coal),
             quantity: 100,
-            price_per_unit: base_price(ResourceType::Coal),
+            price_per_unit: r_base(),
         }];
 
         let bids = generate_need_based_bids(
@@ -1748,14 +1836,15 @@ mod tests {
             100,
             Money::dollars(5_000),
             3,
+            &test_market(),
         );
         let coal = bids
             .iter()
             .find(|b| b.commodity == Commodity::Resource(ResourceType::Coal))
             .unwrap();
-        // $300 cash budget / $75 = 4 max coal.
+        // $300 cash budget / $60 (resource tier base) = 5 max coal.
         assert!(
-            coal.quantity <= 4,
+            coal.quantity <= 5,
             "cash floor must cap bid qty (got {})",
             coal.quantity
         );
@@ -1780,7 +1869,7 @@ mod tests {
             seller: NationId(3),
             commodity: Commodity::Resource(ResourceType::Coal),
             quantity: 10,
-            price_per_unit: base_price(ResourceType::Coal),
+            price_per_unit: r_base(),
         }];
 
         let bids = generate_need_based_bids(
@@ -1791,6 +1880,7 @@ mod tests {
             100,
             Money::dollars(5_000),
             3,
+            &test_market(),
         );
         assert!(
             bids.is_empty(),
@@ -1817,7 +1907,7 @@ mod tests {
             seller: NationId(3),
             commodity: Commodity::Resource(ResourceType::Coal),
             quantity: 10,
-            price_per_unit: base_price(ResourceType::Coal),
+            price_per_unit: r_base(),
         }];
 
         let bids = generate_need_based_bids(
@@ -1828,6 +1918,7 @@ mod tests {
             100,
             Money::dollars(5_000),
             3,
+            &test_market(),
         );
         assert!(
             bids.iter()
@@ -1893,7 +1984,7 @@ mod tests {
             seller: NationId(3),
             commodity: Commodity::Resource(ResourceType::Coal),
             quantity: 10,
-            price_per_unit: base_price(ResourceType::Coal),
+            price_per_unit: r_base(),
         }];
 
         let bids = generate_need_based_bids(
@@ -1904,6 +1995,7 @@ mod tests {
             100,
             Money::dollars(5_000),
             0, // disable buy-side trade
+            &test_market(),
         );
         assert!(
             bids.is_empty(),

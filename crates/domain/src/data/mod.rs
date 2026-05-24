@@ -335,11 +335,16 @@ pub struct GameConfig {
     pub ai_consulate_treasury_threshold: i64,
     // Minor nation trade behaviour
     // Chance (0–100) that a minor nation withholds one random resource offer each turn.
-    pub minor_resource_withhold_chance: u32,
-    // Price minor nations pay per unit when buying manufactured goods (materials/finished goods).
-    pub minor_goods_buy_price: i64,
+    pub minor_resource_skip_chance: u32,
     // Chance (0–100) that an individual minor nation skips a given manufactured-goods offer this turn.
     pub minor_goods_skip_chance: u32,
+    // Dynamic market pricing — tier base prices and drift tunables.
+    pub market_resource_base_price: i64,
+    pub market_material_base_price: i64,
+    pub market_goods_base_price: i64,
+    pub market_drift_step_pct: u32,
+    pub market_floor_multiplier: f64,
+    pub market_ceiling_multiplier: f64,
     /// Free-form string written from `scripts/config/game.lua`. Surfaced to
     /// the browser via `wasm_debug_marker()`. Edit the Lua value, rebuild
     /// WASM, and read the new value from the JS console — proves the
@@ -528,9 +533,14 @@ impl Default for GameConfig {
             labor_hire_civilian_tier2_treasury: 2000,
             labor_hire_civilian_tier2_max: 4,
             ai_consulate_treasury_threshold: 2000,
-            minor_resource_withhold_chance: 20,
-            minor_goods_buy_price: 150,
-            minor_goods_skip_chance: 20,
+            minor_resource_skip_chance: 50,
+            minor_goods_skip_chance: 50,
+            market_resource_base_price: 100,
+            market_material_base_price: 300,
+            market_goods_base_price: 900,
+            market_drift_step_pct: 2,
+            market_floor_multiplier: 0.8,
+            market_ceiling_multiplier: 1.2,
             debug_marker: "rust-default".to_string(),
         }
     }

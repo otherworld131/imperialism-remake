@@ -3,7 +3,7 @@
 
 use crate::ApplicationError;
 use domain::diplomacy::DiplomaticRelation;
-use domain::economy::trade::base_price;
+use domain::economy::trade::Commodity;
 use domain::game_state::GameState;
 use domain::nation::Nation;
 
@@ -214,7 +214,10 @@ pub fn get_trade_screen(game: &GameState) -> Result<TradeScreenData, Application
             .iter()
             .filter(|(_, qty)| **qty > 0)
             .map(|(resource, qty)| {
-                let price = base_price(*resource);
+                let price = game
+                    .world
+                    .market_state
+                    .current_price(Commodity::Resource(*resource));
                 (format!("{:?}", resource), *qty, format!("{}", price))
             })
             .collect();

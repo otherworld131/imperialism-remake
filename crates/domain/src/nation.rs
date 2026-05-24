@@ -2150,7 +2150,9 @@ mod tests {
     #[test]
     fn can_recruit_unit_fails_when_arms_insufficient() {
         let mut n = recruit_ready_nation();
-        n.economy.materials.clear();
+        // Arms live in `goods`, not `materials` — clearing the wrong map
+        // would leave arms intact and the recruit check would still pass.
+        n.economy.goods.clear();
         assert!(!n.can_recruit_unit(ArmyUnitType::Regulars));
     }
 

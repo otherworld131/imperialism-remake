@@ -10,7 +10,7 @@ use domain::economy::production::{
     ProductionChain, calculate_armory_production, calculate_canned_food_production,
     calculate_factory_production, calculate_mill_production, calculate_paper_production,
 };
-use domain::economy::trade::base_price;
+use domain::economy::trade::Commodity;
 use domain::economy::transport::TransportSystem;
 use domain::events::TreatyType;
 use domain::game_state::{
@@ -4533,11 +4533,14 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
     let market_prices: Vec<serde_json::Value> = all_resources
         .iter()
         .map(|&r| {
-            let bp = base_price(r);
+            let commodity = Commodity::Resource(r);
+            let bp = game.world.market_state.current_price(commodity);
+            let trend = game.world.market_state.trend(commodity, 5);
             let stock = nation.resource_amount(r);
             serde_json::json!({
                 "resource": format!("{:?}", r),
                 "base_price": bp.as_dollars(),
+                "trend": trend.to_string(),
                 "stock": stock,
             })
         })
@@ -4668,7 +4671,11 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
                 "commodity_type": "resource",
                 "commodity_name": name,
                 "quantity": o.quantity,
-                "price": base_price(o.resource).as_dollars(),
+                "price": game
+                    .world
+                    .market_state
+                    .current_price(Commodity::Resource(o.resource))
+                    .as_dollars(),
             })
         })
         .collect();
@@ -4696,7 +4703,7 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
     let withhold_chance = game
         .game_data
         .game_config
-        .minor_resource_withhold_chance
+        .minor_resource_skip_chance
         .min(100);
     let mut available_offers: Vec<serde_json::Value> =
         domain::economy::trade::generate_minor_nation_offers_with_seed(
@@ -4705,6 +4712,7 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
             &game.world.hex_map,
             withhold_chance,
             minor_offer_seed,
+            &game.world.market_state,
         )
         .iter()
         .map(|o| {
@@ -4731,7 +4739,10 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
         for (&resource, &qty) in &gp.economy.warehouse {
             if qty > 3 {
                 let surplus = qty - 3;
-                let price = base_price(resource);
+                let price = game
+                    .world
+                    .market_state
+                    .current_price(Commodity::Resource(resource));
                 available_offers.push(serde_json::json!({
                     "seller_id": gp.id.0,
                     "seller_name": gp.name,
@@ -4753,7 +4764,11 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
                 Some(serde_json::json!({
                     "name": format!("{:?}", r),
                     "stock": stock,
-                    "price": base_price(r).as_dollars(),
+                    "price": game
+                        .world
+                        .market_state
+                        .current_price(Commodity::Resource(r))
+                        .as_dollars(),
                 }))
             } else {
                 None
@@ -5009,6 +5024,17 @@ pub fn wasm_set_player_buy_order(
         None => return r#"{"error":"nation not found"}"#.to_string(),
     };
 
+    // Snapshot the market price before taking the mutable nation borrow so the
+    // immutable read of `game.world.market_state` doesn't conflict.
+    let default_max_price = Money::dollars(
+        game.world
+            .market_state
+            .current_price(Commodity::Resource(resource))
+            .as_dollars()
+            * 120
+            / 100,
+    );
+
     let nation = match game.get_nation_mut(nid) {
         Some(n) => n,
         None => return r#"{"error":"nation not found"}"#.to_string(),
@@ -5035,7 +5061,7 @@ pub fn wasm_set_player_buy_order(
     let max_price_per_unit = if max_price > 0 {
         Money::dollars(max_price)
     } else {
-        Money::dollars(base_price(resource).as_dollars() * 120 / 100)
+        default_max_price
     };
 
     nation

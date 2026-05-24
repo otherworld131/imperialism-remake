@@ -336,17 +336,44 @@ game_config = {
     -- a minor nation through passive trade alone. Set to 1 for every turn.
     trade_relation_turn_interval = 3,
 
-    -- Minor nation trade behaviour
-    -- Chance (0–100) that a minor nation withholds one random resource offer each turn.
-    -- This adds variety: a minor is not always a perfectly predictable supplier.
-    minor_resource_withhold_chance = 20,
-    -- Price ($/unit) minor nations pay when purchasing manufactured goods each turn.
-    minor_goods_buy_price = 150,
-    -- Chance (0–100) that an individual minor nation declines to buy a given
-    -- manufactured-goods offer from a GP this turn. Minors are tried in order
-    -- of descending relationship with the seller; if every minor skips, the
-    -- offer goes unfilled and the surplus stays in the GP's stockpile.
-    minor_goods_skip_chance = 20,
+    -- Minor nation trade behaviour. Per-(minor, commodity) skip rolls:
+    -- each turn, for each commodity, each minor rolls d100 and skips
+    -- participating on that side of the market if it lands under the
+    -- threshold. Symmetric for sell-side (resources) and buy-side
+    -- (manufactured materials + goods). 50% means roughly half of the
+    -- (minor × commodity) combinations participate each turn — keeps both
+    -- supply and demand jagged so prices don't monotonically drift to
+    -- their floor/ceiling.
+    minor_resource_skip_chance = 50,  -- chance a minor doesn't OFFER a given resource
+    minor_goods_skip_chance    = 50,  -- chance a minor doesn't BID for a given manufactured commodity
+
+    -- Dynamic market pricing. Each commodity starts at its tier base price and
+    -- drifts up under sustained shortage / down under sustained surplus. Drift
+    -- is cumulative: every turn's imbalance permanently nudges the price.
+    -- Prices are clamped to [floor_multiplier, ceiling_multiplier] × tier base.
+    -- "Resource tier" covers every raw ResourceType: industrial inputs
+    -- (Timber, Coal, Iron, Cotton, Wool, Oil, Gold, Gems), raw food (Grain,
+    -- Fruit, Livestock, Fish) and Horses. Canned Food is a processed
+    -- MaterialType — it sits at the Material tier on its own.
+    market_resource_base_price = 100,   -- Raw resources ($/unit)
+    market_material_base_price = 300,   -- Processed materials, incl. Canned Food ($/unit)
+    market_goods_base_price    = 900,   -- Finished goods ($/unit)
+    -- Per-turn drift step as a percentage of the tier base — this is the
+    -- HARD CAP on how much a single commodity's price can move in one turn.
+    -- The signed imbalance ratio ((demand−supply)/max(supply,demand,1) ∈
+    -- [−1, 1]) scales this step, so a full shortage with no supply nudges by
+    -- exactly market_drift_step_pct % of tier base; weaker imbalances move
+    -- proportionally less. At 2% the per-turn cap is:
+    --   Resource $100 → ±$2/turn, Material $300 → ±$6/turn, Goods $900 → ±$18/turn.
+    -- Sustained imbalance walks the price up/down but in small steps so
+    -- the AI and human have time to react before things spike.
+    market_drift_step_pct      = 2,
+    -- Hard bounds on drift. 0.8 / 1.2 means prices can swing ±20% from the
+    -- tier base — Resource $80–$120, Material $240–$360, Goods $720–$1080.
+    -- Tight band: enough room for supply/demand to matter, but the AI's
+    -- treasury planning never has to deal with 4× price spikes.
+    market_floor_multiplier    = 0.8,
+    market_ceiling_multiplier  = 1.2,
 
     -- AI trade behaviour
     ai_consulate_target = 4,                  -- AI GPs aim for this many consulates in minor nations

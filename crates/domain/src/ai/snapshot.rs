@@ -369,7 +369,9 @@ mod tests {
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
             next_unit_id: 0,
-            market_state: crate::economy::market::MarketState::new(),
+            market_state: crate::economy::market::MarketState::with_config(
+                &crate::data::GameConfig::default(),
+            ),
         }
     }
 

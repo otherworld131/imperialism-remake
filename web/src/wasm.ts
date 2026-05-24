@@ -1308,7 +1308,11 @@ export async function setPendingImmigration(gameJson: string, nationId: number, 
 
 export interface MarketPrice {
   resource: string;
+  /** Current drifted market price ($/unit). Used to be the static base price; */
+  /** keeps the field name for backward compatibility with the WASM payload. */
   base_price: number;
+  /** Price trend glyph: "↑" rising, "↓" falling, "→" stable. */
+  trend: string;
   stock: number;
 }
 

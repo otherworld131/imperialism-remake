@@ -453,6 +453,7 @@ pub(crate) fn print_trade(game: &GameState) {
         &game.world.nations,
         &game.world.provinces,
         &game.world.hex_map,
+        &game.world.market_state,
     );
 
     if offers.is_empty() {

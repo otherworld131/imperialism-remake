@@ -771,7 +771,10 @@ pub(crate) fn cmd_sell(game: &mut GameState, args: &str) {
         return;
     }
 
-    let price = domain::economy::trade::base_price(resource);
+    let price = game
+        .world
+        .market_state
+        .current_price(domain::economy::trade::Commodity::Resource(resource));
     if price == Money::ZERO {
         println!("  {:?} has no trade value.", resource);
         return;

@@ -398,9 +398,15 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
             .get("ai_consulate_treasury_threshold")
             .unwrap_or(2000),
         // Minor nation trade behaviour
-        minor_resource_withhold_chance: table.get("minor_resource_withhold_chance").unwrap_or(20),
-        minor_goods_buy_price: table.get("minor_goods_buy_price").unwrap_or(150),
+        minor_resource_skip_chance: table.get("minor_resource_skip_chance").unwrap_or(50),
         minor_goods_skip_chance: table.get("minor_goods_skip_chance").unwrap_or(20),
+        // Dynamic market pricing
+        market_resource_base_price: table.get("market_resource_base_price").unwrap_or(60),
+        market_material_base_price: table.get("market_material_base_price").unwrap_or(150),
+        market_goods_base_price: table.get("market_goods_base_price").unwrap_or(300),
+        market_drift_step_pct: table.get("market_drift_step_pct").unwrap_or(2),
+        market_floor_multiplier: table.get("market_floor_multiplier").unwrap_or(0.8),
+        market_ceiling_multiplier: table.get("market_ceiling_multiplier").unwrap_or(1.2),
         debug_marker: table
             .get::<String>("debug_marker")
             .unwrap_or_else(|_| "lua-key-missing".to_string()),
@@ -660,9 +666,15 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         // D-7: AI consulate treasury threshold
         ai_consulate_treasury_threshold: cfg.ai_consulate_treasury_threshold.clamp(0, 1_000_000),
         // Minor nation trade tunables
-        minor_resource_withhold_chance: cfg.minor_resource_withhold_chance.min(100),
-        minor_goods_buy_price: cfg.minor_goods_buy_price.clamp(1, 1_000_000),
+        minor_resource_skip_chance: cfg.minor_resource_skip_chance.min(100),
         minor_goods_skip_chance: cfg.minor_goods_skip_chance.min(100),
+        // Dynamic market pricing
+        market_resource_base_price: cfg.market_resource_base_price.clamp(1, 1_000_000),
+        market_material_base_price: cfg.market_material_base_price.clamp(1, 1_000_000),
+        market_goods_base_price: cfg.market_goods_base_price.clamp(1, 1_000_000),
+        market_drift_step_pct: cfg.market_drift_step_pct.clamp(0, 100),
+        market_floor_multiplier: cfg.market_floor_multiplier.clamp(0.01, 1.0),
+        market_ceiling_multiplier: cfg.market_ceiling_multiplier.clamp(1.0, 100.0),
         ..cfg
     }
 }
@@ -2088,25 +2100,29 @@ mod tests {
     fn read_aggressive_config() {
         let engine = engine_with_scripts();
         let config = lua_get_config(&engine, AiPersonality::Aggressive).unwrap();
-        assert_eq!(config.research_strategy, "military");
-        assert_eq!(config.min_army_size, 5);
-        assert_eq!(config.max_army_size, 12);
+        // All four personalities have been synced to the Rust defaults in
+        // scripts/ai/*.lua — personality differentiation now lives in
+        // tunables not exercised by this smoke test. Verify the core fields
+        // round-trip from Lua to the Rust struct.
+        assert_eq!(config.research_strategy, "cheapest");
+        assert_eq!(config.min_army_size, 3);
+        assert_eq!(config.max_army_size, 7);
     }
 
     #[test]
     fn read_diplomatic_config() {
         let engine = engine_with_scripts();
         let config = lua_get_config(&engine, AiPersonality::Diplomatic).unwrap();
-        assert_eq!(config.research_strategy, "economic");
-        assert!((config.alliance_preference - 0.9).abs() < f64::EPSILON);
+        assert_eq!(config.research_strategy, "cheapest");
+        assert!((config.alliance_preference - 0.5).abs() < f64::EPSILON);
     }
 
     #[test]
     fn read_economic_config() {
         let engine = engine_with_scripts();
         let config = lua_get_config(&engine, AiPersonality::Economic).unwrap();
-        assert_eq!(config.research_strategy, "expensive");
-        assert_eq!(config.infrastructure_budget, 3000);
+        assert_eq!(config.research_strategy, "cheapest");
+        assert_eq!(config.infrastructure_budget, 2000);
     }
 
     /// Drive the Rust-resident `lua_evaluate_war`/`lua_pick_tech` against a
@@ -2170,8 +2186,11 @@ mod tests {
     fn aggressive_pick_tech_prefers_military() {
         use crate::economy::buildings::BuildingType;
         use crate::military::units::ArmyUnitType;
-        let engine = engine_with_scripts();
-        let cfg = lua_get_config(&engine, AiPersonality::Aggressive).unwrap();
+        // The Lua scripts now use "cheapest" for every personality, so we
+        // inject a config with research_strategy = "military" directly to
+        // verify lua_pick_tech's military-priority dispatch.
+        let mut cfg = LuaAiConfig::default();
+        cfg.research_strategy = "military".to_string();
         let game = game_with_personality_config(AiPersonality::Aggressive, cfg);
         let avail: Vec<(TechId, Money, String, Vec<TechEffect>)> = vec![
             (
@@ -2191,14 +2210,16 @@ mod tests {
         assert_eq!(
             picked,
             Some(TechId(2)),
-            "Aggressive should pick military tech"
+            "military strategy should pick military tech"
         );
     }
 
     #[test]
     fn economic_pick_tech_prefers_expensive() {
-        let engine = engine_with_scripts();
-        let cfg = lua_get_config(&engine, AiPersonality::Economic).unwrap();
+        // Same as above: inject the strategy we want to test rather than
+        // reading from Lua (which now hardcodes "cheapest" everywhere).
+        let mut cfg = LuaAiConfig::default();
+        cfg.research_strategy = "expensive".to_string();
         let game = game_with_personality_config(AiPersonality::Economic, cfg);
         let avail: Vec<(TechId, Money, String, Vec<TechEffect>)> = vec![
             (TechId(1), Money::dollars(500), "Cheap".into(), vec![]),
@@ -2208,7 +2229,7 @@ mod tests {
         assert_eq!(
             picked,
             Some(TechId(2)),
-            "Economic should pick most expensive tech"
+            "expensive strategy should pick most expensive tech"
         );
     }
 

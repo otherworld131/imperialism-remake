@@ -619,28 +619,38 @@ pub(crate) fn run_batch(n: u32, verbose_cashflow: bool, max_turns: Option<u32>) 
 pub(crate) fn auto_manage_human(game: &mut GameState) {
     let player_id = game.human_player_nation;
 
-    // Auto-sell excess resources for income (same as AI trade logic)
+    // Auto-sell excess resources for income (same as AI trade logic).
+    // Snapshot prices first so we can take the mutable nation borrow without
+    // a borrow-checker conflict with `game.world.market_state`.
+    let tradeable = [
+        ResourceType::Timber,
+        ResourceType::Coal,
+        ResourceType::Iron,
+        ResourceType::Cotton,
+        ResourceType::Wool,
+        ResourceType::Fruit,
+        ResourceType::Livestock,
+        ResourceType::Oil,
+    ];
+    let prices: Vec<(ResourceType, Money)> = tradeable
+        .iter()
+        .map(|&r| {
+            (
+                r,
+                game.world
+                    .market_state
+                    .current_price(domain::economy::trade::Commodity::Resource(r)),
+            )
+        })
+        .collect();
     if let Some(nation) = game.get_nation_mut(player_id) {
-        let tradeable = [
-            ResourceType::Timber,
-            ResourceType::Coal,
-            ResourceType::Iron,
-            ResourceType::Cotton,
-            ResourceType::Wool,
-            ResourceType::Fruit,
-            ResourceType::Livestock,
-            ResourceType::Oil,
-        ];
-        for resource in tradeable {
+        for (resource, price) in prices {
             let amount = nation.resource_amount(resource);
-            if amount > 10 {
+            if amount > 10 && price != Money::ZERO {
                 let excess = amount - 10;
-                let price = domain::economy::trade::base_price(resource);
-                if price != Money::ZERO {
-                    let revenue = price * excess as i64;
-                    nation.remove_resource(resource, excess);
-                    nation.economy.treasury += revenue;
-                }
+                let revenue = price * excess as i64;
+                nation.remove_resource(resource, excess);
+                nation.economy.treasury += revenue;
             }
         }
     }

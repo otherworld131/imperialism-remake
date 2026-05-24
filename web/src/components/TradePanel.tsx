@@ -13,8 +13,12 @@ export default function TradePanel({ trade, onSetSubsidy, onSetSellOrder, onSetB
   const {
     trade_history, subsidies, trade_balance, total_cargo,
     remaining_cargo, minor_nations, player_sell_orders, player_buy_orders,
-    available_offers, sellable_resources,
+    available_offers, sellable_resources, market_prices,
   } = trade;
+
+  // Map resource → trend glyph for the buy section's price column.
+  const trendByResource: Record<string, string> = {};
+  for (const m of market_prices) trendByResource[m.resource] = m.trend;
 
   const [expandedMN, setExpandedMN] = useState<number | null>(null);
   const [buyModalResource, setBuyModalResource] = useState<string | null>(null);
@@ -87,7 +91,17 @@ export default function TradePanel({ trade, onSetSubsidy, onSetSellOrder, onSetB
                   <React.Fragment key={resource}>
                     <span>{resourceLabel(resource)}</span>
                     <span style={{ color: '#aaa' }}>{totalAvail}</span>
-                    <span style={{ color: '#daa520' }}>${avgPrice}</span>
+                    <span style={{ color: '#daa520' }}>
+                      ${avgPrice}
+                      {trendByResource[resource] && (
+                        <span
+                          style={{ color: trendColor(trendByResource[resource]), marginLeft: 3 }}
+                          title={`Price trend (5 turns): ${trendLabel(trendByResource[resource])}`}
+                        >
+                          {trendByResource[resource]}
+                        </span>
+                      )}
+                    </span>
                     <button
                       onClick={() => setBuyModalResource(resource)}
                       style={{
@@ -202,6 +216,18 @@ export default function TradePanel({ trade, onSetSubsidy, onSetSellOrder, onSetB
       )}
     </div>
   );
+}
+
+function trendColor(glyph: string): string {
+  if (glyph === '↑') return '#e66';      // rising — bad for buyers
+  if (glyph === '↓') return '#6e6';      // falling — good for buyers
+  return '#888';                          // stable
+}
+
+function trendLabel(glyph: string): string {
+  if (glyph === '↑') return 'rising';
+  if (glyph === '↓') return 'falling';
+  return 'stable';
 }
 
 // ── SellSection component ──

@@ -882,6 +882,11 @@ mod tests {
     fn delivery_with_zero_available_filtered_out() {
         let mut ts = TransportSystem::new();
         ts.build_freight_cars(10);
+        // calculate_deliveries now requires explicit allocations — set them
+        // for both resources so the zero-availability filter is the only
+        // reason Timber gets dropped from the result.
+        ts.set_resource_allocation(ResourceType::Timber, 10);
+        ts.set_resource_allocation(ResourceType::Coal, 10);
 
         let available = vec![(ResourceType::Timber, 0), (ResourceType::Coal, 10)];
         let deliveries = ts.calculate_deliveries(&available);

@@ -735,6 +735,7 @@ fn reserve_trade_phase(game: &mut GameState) -> Vec<NationReservation> {
         &game.world.nations,
         &game.world.provinces,
         &game.world.hex_map,
+        &game.world.market_state,
     );
     let mut all_bids = Vec::new();
     for gp_id in &gp_ids {
@@ -764,6 +765,7 @@ fn reserve_trade_phase(game: &mut GameState) -> Vec<NationReservation> {
                 &offers,
                 &game.world.diplomacy,
                 cargo_capacity,
+                &game.world.market_state,
             ));
         }
     }

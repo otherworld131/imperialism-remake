@@ -1443,6 +1443,7 @@ fn new_game_inner(
         .collect();
     diplomacy.initialize_great_powers(&gp_ids);
 
+    let market_state = MarketState::with_config(&game_data.game_config);
     let mut game_state = GameState {
         turn: TurnNumber::new(1),
         difficulty,
@@ -1458,7 +1459,7 @@ fn new_game_inner(
             provinces: generated.provinces,
             nations,
             diplomacy,
-            market_state: MarketState::new(),
+            market_state,
             sea_zones: generated.sea_zones,
         },
         archive: GameArchive::default(),
@@ -1820,7 +1821,7 @@ mod tests {
                 provinces: vec![province1, province2],
                 nations: vec![nation1, nation2],
                 diplomacy: DiplomacyState::new(),
-                market_state: MarketState::new(),
+                market_state: MarketState::with_config(&crate::data::GameConfig::default()),
                 sea_zones: Vec::new(),
             },
             archive: GameArchive::default(),

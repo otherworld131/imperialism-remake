@@ -131,7 +131,9 @@ macro_rules! test_game_state {
         }
     };
     (@market_state $market_state:expr) => { $market_state };
-    (@market_state) => { $crate::economy::market::MarketState::new() };
+    (@market_state) => {
+        $crate::economy::market::MarketState::with_config(&$crate::data::GameConfig::default())
+    };
 }
 
 pub mod ai;
