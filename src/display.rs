@@ -1286,7 +1286,7 @@ pub(crate) fn print_turn_report(game: &GameState, report: &TurnReport) {
             .world
             .provinces
             .iter()
-            .filter(|p| p.owner == player_id && p.can_produce())
+            .filter(|p| p.owner == player_id && p.is_industrialized())
             .map(|p| format!("{} ({:?})", p.name, p.settlement_level))
             .collect();
         let prov_info = if producing_provinces.is_empty() {

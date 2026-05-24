@@ -43,6 +43,32 @@ game_config = {
     materials_per_good = 2,        -- 2 lumber -> 1 furniture, 2 steel -> 1 hardware
     coal_iron_ratio = 1,           -- 1 coal + 1 iron -> 1 steel (special case)
 
+    -- Town-development tunables. Imp1: each connected non-capital province
+    -- contributes "free" materials/goods on top of the player's manual factory
+    -- output, throttled by the player's national consumer-goods factory size.
+    --
+    --   town_first_production_delay_turns
+    --     Turns after a province first becomes connected_to_capital before
+    --     it can output any town material (the 6-turn hamlet ramp).
+    --
+    --   town_materials_per_factory_tier
+    --     Capacity points of the goods factory required for each +1 town
+    --     material per qualifying province. With the default of 4, the wiki
+    --     table reads: factory cap 4 -> 1 mat, 8 -> 2, 12 -> 3, 16 -> 4.
+    --     Per-province output is also capped by floor(in-province raw / 2)
+    --     (or min(coal, iron) for the steel chain).
+    --
+    --   town_goods_per_factory_tier
+    --     Same idea for finished goods. Default 8 mirrors the wiki: factory
+    --     cap 8 -> 1 good, 16 -> 2 goods, 24 -> 3 goods.
+    --
+    -- Factory-to-chain mapping is fixed in code (Furniture Factory -> Lumber/
+    -- Furniture, Hardware Factory -> Steel/Hardware, Clothing Factory ->
+    -- Fabric/Clothing) since the building types themselves are not data-driven.
+    town_first_production_delay_turns = 6,
+    town_materials_per_factory_tier = 4,
+    town_goods_per_factory_tier = 8,
+
     -- Food
     food_per_worker = 1,           -- each worker eats 1 food per turn
     starvation_cap = 2,            -- max workers lost to starvation per turn

@@ -1,5 +1,6 @@
+use crate::data::GameConfig;
+use crate::economy::buildings::BuildingType;
 use crate::game_state::GameState;
-use crate::map::SettlementLevel;
 use crate::map::infrastructure::{collectable_hexes, is_province_connected_multi};
 use crate::military::ships::Ship;
 use crate::military::units::{ArmyUnit, ArmyUnitType};
@@ -336,47 +337,117 @@ pub fn compute_demand_forecast(
     demand.into_iter().collect()
 }
 
-/// Project village/town auto-production, split into:
-/// - local/free delivery from the capital province
-/// - remote/freight-gated delivery from all other producing provinces
+/// Per-province town-development output, before freight allocation.
+///
+/// Imp1: every eligible non-capital province contributes some amount of
+/// "free" milled materials and finished goods on top of the player's manual
+/// factory output, throttled by the player's national consumer-goods factory
+/// capacity (Furniture Factory gates Lumber/Furniture, Hardware Factory gates
+/// Steel/Hardware, Clothing Factory gates Fabric/Clothing).
+#[derive(Debug, Clone)]
+pub struct TownProvinceOutput {
+    pub province_id: ProvinceId,
+    /// Listed in canonical chain order: Lumber, Steel, Fabric, Furniture,
+    /// Hardware, Clothing. Zero-quantity entries are omitted.
+    pub outputs: Vec<(FreightTarget, u32)>,
+}
+
+impl TownProvinceOutput {
+    /// Whether this province contributed any town material this turn (Lumber,
+    /// Steel, or Fabric). Used to promote Hamlet → Village.
+    pub fn produced_any_material(&self) -> bool {
+        self.outputs
+            .iter()
+            .any(|(t, q)| *q > 0 && matches!(t, FreightTarget::Material(_)))
+    }
+
+    /// Whether this province contributed any consumer good this turn
+    /// (Furniture, Hardware, or Clothing). Used to promote Village → Town.
+    pub fn produced_any_good(&self) -> bool {
+        self.outputs
+            .iter()
+            .any(|(t, q)| *q > 0 && matches!(t, FreightTarget::Goods(_)))
+    }
+}
+
+/// Project Imp1-style town-development output for every eligible province
+/// owned by `nation_id`.
+///
+/// Eligibility: the province must be connected to the capital AND have
+/// finished its first-production delay (`industrialization_turns_remaining`
+/// is `None`) AND not contain the national capital tile.
+///
+/// Per-chain output formula (capital factory `cap`, in-province raw resources
+/// `raw`):
+///   `materials = min(floor(raw / 2), cap / town_materials_per_factory_tier)`
+///   `goods     = min(floor(materials / 2), cap / town_goods_per_factory_tier)`
+/// For the Steel chain `raw / 2` becomes `min(coal, iron)`.
+///
+/// Returns per-province outputs so the caller can both aggregate for freight
+/// allocation and react per province (settlement promotion).
 pub fn project_town_outputs(
     game: &GameState,
     nation_id: NationId,
-) -> (Vec<(FreightTarget, u32)>, Vec<(FreightTarget, u32)>) {
+    cfg: &GameConfig,
+) -> Vec<TownProvinceOutput> {
     let Some(nation) = game.get_nation(nation_id) else {
-        return (Vec::new(), Vec::new());
+        return Vec::new();
     };
     if nation.diplomacy.is_in_anarchy {
-        return (Vec::new(), Vec::new());
+        return Vec::new();
     }
 
-    let mut local: HashMap<FreightTarget, u32> = HashMap::new();
-    let mut remote: HashMap<FreightTarget, u32> = HashMap::new();
+    let factory_cap = |bt: BuildingType| -> u32 {
+        nation
+            .economy
+            .buildings
+            .iter()
+            .filter(|b| b.building_type == bt)
+            .map(|b| b.effective_capacity())
+            .sum()
+    };
+    let furniture_cap = factory_cap(BuildingType::FurnitureFactory);
+    let hardware_cap = factory_cap(BuildingType::HardwareFactory);
+    let clothing_cap = factory_cap(BuildingType::ClothingFactory);
+
+    let mat_tier = cfg.town_materials_per_factory_tier.max(1);
+    let good_tier = cfg.town_goods_per_factory_tier.max(1);
+    let lumber_mat_cap = furniture_cap / mat_tier;
+    let lumber_good_cap = furniture_cap / good_tier;
+    let steel_mat_cap = hardware_cap / mat_tier;
+    let steel_good_cap = hardware_cap / good_tier;
+    let fabric_mat_cap = clothing_cap / mat_tier;
+    let fabric_good_cap = clothing_cap / good_tier;
+
+    let chain_order = [
+        FreightTarget::Material(MaterialType::Lumber),
+        FreightTarget::Material(MaterialType::Steel),
+        FreightTarget::Material(MaterialType::Fabric),
+        FreightTarget::Goods(GoodsType::Furniture),
+        FreightTarget::Goods(GoodsType::Hardware),
+        FreightTarget::Goods(GoodsType::Clothing),
+    ];
+
+    let mut per_province: Vec<TownProvinceOutput> = Vec::new();
 
     for province in game.world.provinces.iter().filter(|p| p.owner == nation_id) {
-        if !province.can_produce() {
+        if !province.is_industrialized() {
             continue;
         }
 
-        let rate_multiplier: u32 = if province.settlement_level == SettlementLevel::Town {
-            2
-        } else {
-            1
-        };
-
+        let mut contains_country_capital = false;
         let mut timber_yield: u32 = 0;
         let mut coal_yield: u32 = 0;
         let mut iron_yield: u32 = 0;
         let mut cotton_yield: u32 = 0;
         let mut wool_yield: u32 = 0;
-        let mut is_local = false;
 
         for tile_coord in &province.tiles {
             let Some(tile) = game.world.hex_map.get_tile(*tile_coord) else {
                 continue;
             };
             if tile.is_country_capital {
-                is_local = true;
+                contains_country_capital = true;
             }
             if let Some(yield_amount) = tile.calculate_yield() {
                 match yield_amount.resource {
@@ -389,45 +460,76 @@ pub fn project_town_outputs(
                 }
             }
         }
+        if contains_country_capital {
+            continue;
+        }
 
-        let lumber = (timber_yield / 2).saturating_mul(rate_multiplier);
-        let steel = coal_yield.min(iron_yield).saturating_mul(rate_multiplier);
-        let fabric = ((cotton_yield + wool_yield) / 2).saturating_mul(rate_multiplier);
-        let furniture = lumber / 2;
-        let hardware = steel / 2;
-        let clothing = fabric / 2;
+        let lumber_raw = timber_yield / 2;
+        let steel_raw = coal_yield.min(iron_yield);
+        let fabric_raw = (cotton_yield + wool_yield) / 2;
 
-        let target = if is_local { &mut local } else { &mut remote };
-        for (stockpile, qty) in [
+        let lumber = lumber_raw.min(lumber_mat_cap);
+        let steel = steel_raw.min(steel_mat_cap);
+        let fabric = fabric_raw.min(fabric_mat_cap);
+
+        let furniture = (lumber / 2).min(lumber_good_cap);
+        let hardware = (steel / 2).min(steel_good_cap);
+        let clothing = (fabric / 2).min(fabric_good_cap);
+
+        let qty_by_target: HashMap<FreightTarget, u32> = [
             (FreightTarget::Material(MaterialType::Lumber), lumber),
             (FreightTarget::Material(MaterialType::Steel), steel),
             (FreightTarget::Material(MaterialType::Fabric), fabric),
             (FreightTarget::Goods(GoodsType::Furniture), furniture),
             (FreightTarget::Goods(GoodsType::Hardware), hardware),
             (FreightTarget::Goods(GoodsType::Clothing), clothing),
-        ] {
-            if qty > 0 {
-                *target.entry(stockpile).or_insert(0) += qty;
-            }
+        ]
+        .into_iter()
+        .filter(|(_, q)| *q > 0)
+        .collect();
+
+        if qty_by_target.is_empty() {
+            continue;
+        }
+
+        let outputs: Vec<(FreightTarget, u32)> = chain_order
+            .iter()
+            .filter_map(|t| qty_by_target.get(t).copied().map(|q| (*t, q)))
+            .collect();
+
+        per_province.push(TownProvinceOutput {
+            province_id: province.id,
+            outputs,
+        });
+    }
+
+    per_province
+}
+
+/// Aggregate per-province town outputs into a single `(target, total)` list
+/// in canonical chain order. Convenience wrapper for callers that only need
+/// the totals (freight allocator, AI demand planner).
+pub fn aggregate_town_outputs(
+    per_province: &[TownProvinceOutput],
+) -> Vec<(FreightTarget, u32)> {
+    let mut totals: HashMap<FreightTarget, u32> = HashMap::new();
+    for prov in per_province {
+        for (target, qty) in &prov.outputs {
+            *totals.entry(*target).or_insert(0) += *qty;
         }
     }
-
-    fn ordered(map: HashMap<FreightTarget, u32>) -> Vec<(FreightTarget, u32)> {
-        let order = [
-            FreightTarget::Material(MaterialType::Lumber),
-            FreightTarget::Material(MaterialType::Steel),
-            FreightTarget::Material(MaterialType::Fabric),
-            FreightTarget::Goods(GoodsType::Furniture),
-            FreightTarget::Goods(GoodsType::Hardware),
-            FreightTarget::Goods(GoodsType::Clothing),
-        ];
-        order
-            .into_iter()
-            .filter_map(|stockpile| map.get(&stockpile).copied().map(|qty| (stockpile, qty)))
-            .collect()
-    }
-
-    (ordered(local), ordered(remote))
+    let order = [
+        FreightTarget::Material(MaterialType::Lumber),
+        FreightTarget::Material(MaterialType::Steel),
+        FreightTarget::Material(MaterialType::Fabric),
+        FreightTarget::Goods(GoodsType::Furniture),
+        FreightTarget::Goods(GoodsType::Hardware),
+        FreightTarget::Goods(GoodsType::Clothing),
+    ];
+    order
+        .into_iter()
+        .filter_map(|t| totals.get(&t).copied().map(|q| (t, q)))
+        .collect()
 }
 
 fn priority_resources_for_town_output(target: FreightTarget) -> &'static [ResourceType] {

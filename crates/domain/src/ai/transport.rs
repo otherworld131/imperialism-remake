@@ -90,7 +90,9 @@ pub fn ai_allocate_transport(game: &mut GameState, nation_id: NationId) {
         return;
     }
 
-    let (_, remote_outputs) = crate::economy::project_town_outputs(game, nation_id);
+    let per_province =
+        crate::economy::project_town_outputs(game, nation_id, &game.game_data.game_config);
+    let town_totals = crate::economy::aggregate_town_outputs(&per_province);
     let nation = game.get_nation(nation_id).expect("nation present");
     let demand = compute_remote_demand(
         game,
@@ -98,7 +100,7 @@ pub fn ai_allocate_transport(game: &mut GameState, nation_id: NationId) {
         &game.game_data,
         &[],
         &all_items,
-        &remote_outputs,
+        &town_totals,
     );
 
     let allocations = distribute_freight(total_capacity, &demand);

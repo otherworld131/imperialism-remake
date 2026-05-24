@@ -71,6 +71,18 @@ pub struct GameConfig {
     pub resources_per_material: u32,
     pub materials_per_good: u32,
     pub coal_iron_ratio: u32,
+    /// Town development (Imp1): turns from "province becomes connected" to
+    /// "province can produce its first free town material". The 6-turn hamlet
+    /// ramp. See `scripts/config/game.lua` for the full description.
+    pub town_first_production_delay_turns: u8,
+    /// Town development: goods-factory capacity points required per +1 town
+    /// material per qualifying province. Default 4 — capacity 4 unlocks the
+    /// first material, 8 the second, etc., per the wiki table.
+    pub town_materials_per_factory_tier: u32,
+    /// Town development: goods-factory capacity points required per +1 town
+    /// good per qualifying province. Default 8 — capacity 8 unlocks the first
+    /// good, 16 the second, etc.
+    pub town_goods_per_factory_tier: u32,
     // Food
     pub food_per_worker: u32,
     pub starvation_cap: u32,
@@ -365,6 +377,9 @@ impl Default for GameConfig {
             resources_per_material: 2,
             materials_per_good: 2,
             coal_iron_ratio: 1,
+            town_first_production_delay_turns: 6,
+            town_materials_per_factory_tier: 4,
+            town_goods_per_factory_tier: 8,
             food_per_worker: 1,
             starvation_cap: 2,
             canned_food_ratio: 2,

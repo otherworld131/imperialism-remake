@@ -1,14 +1,11 @@
 //! Civilian/settlement phase of the turn pipeline.
 //!
-//! Tracks province connectivity to the capital and the Hamlet → Village →
-//! Town progression. The heavier `resolve_civilian_actions` (engineer work,
-//! prospector reveals, farmer improvements) remains in `processor.rs` for
-//! a follow-up PR; this module owns the post-combat connectivity sweep
-//! and settlement upgrade headlines.
+//! Tracks province connectivity to the capital and the first-production
+//! delay countdown (Imp1 6-turn hamlet ramp). The Hamlet → Village → Town
+//! promotion itself now happens in `resolve_town_production` based on
+//! actual per-turn output, not on a separate fixed timer.
 
-use crate::events::{Headline, HeadlineCategory};
 use crate::game_state::GameState;
-use crate::map::SettlementLevel;
 use crate::turn::processor::{TurnReport, connected_provinces};
 use crate::types::*;
 
@@ -33,8 +30,8 @@ pub(super) fn update_province_connectivity(game: &mut GameState) {
     }
 }
 
-pub(super) fn update_settlements(game: &mut GameState, report: &mut TurnReport) {
-    // Collect province IDs and their owner for processing
+pub(super) fn update_settlements(game: &mut GameState, _report: &mut TurnReport) {
+    let delay_turns = game.game_data.game_config.town_first_production_delay_turns;
     let province_data: Vec<(ProvinceId, NationId)> = game
         .world
         .provinces
@@ -48,9 +45,8 @@ pub(super) fn update_settlements(game: &mut GameState, report: &mut TurnReport) 
             None => continue,
         };
 
+        // Skip settlement progression for Minor Nation provinces or anarchic nations.
         let owner_nation = game.world.nations.iter().find(|n| n.id == *owner_id);
-
-        // Skip settlement progression for Minor Nation provinces or anarchic nations
         let skip = owner_nation
             .map(|n| !n.is_great_power() || n.diplomacy.is_in_anarchy)
             .unwrap_or(false);
@@ -58,101 +54,54 @@ pub(super) fn update_settlements(game: &mut GameState, report: &mut TurnReport) 
             continue;
         }
 
-        if province.connected_to_capital {
-            let mut just_became_village = false;
+        // The national capital province never industrializes (Imp1: home
+        // capital uses the player's manual factories instead of contributing
+        // free town output). Treat as a permanent Hamlet.
+        let is_country_capital_province = province
+            .tiles
+            .iter()
+            .any(|c| game.world.hex_map.get_tile(*c).is_some_and(|t| t.is_country_capital));
+        if is_country_capital_province {
+            continue;
+        }
 
-            match province.industrialization_turns_remaining {
-                None => {
-                    // Just connected or already industrialized; if still Hamlet, start countdown
-                    if province.settlement_level == SettlementLevel::Hamlet {
-                        let prov = game
-                            .world
-                            .provinces
-                            .iter_mut()
-                            .find(|p| p.id == *province_id)
-                            .unwrap();
-                        prov.industrialization_turns_remaining = Some(6);
-                    }
-                }
-                Some(remaining) => {
-                    if remaining <= 1 {
-                        // Countdown complete: upgrade settlement
-                        let prov = game
-                            .world
-                            .provinces
-                            .iter_mut()
-                            .find(|p| p.id == *province_id)
-                            .unwrap();
+        if !province.connected_to_capital {
+            continue;
+        }
 
-                        if prov.settlement_level == SettlementLevel::Hamlet {
-                            prov.settlement_level = SettlementLevel::Village;
-                            prov.industrialization_turns_remaining = None;
-                            // Start the Town countdown (12 turns)
-                            prov.town_countdown = Some(12);
-                            just_became_village = true;
-
-                            let headline = format!("{} has grown into a Village!", prov.name);
-                            report.newspaper_headlines.push(
-                                Headline::new(headline.clone(), HeadlineCategory::Growth)
-                                    .for_nation(*owner_id),
-                            );
-                            report
-                                .settlement_upgrades
-                                .push((*province_id, "Village".to_string()));
-                        } else {
-                            prov.industrialization_turns_remaining = None;
-                        }
-                    } else {
-                        // Tick down
-                        let prov = game
-                            .world
-                            .provinces
-                            .iter_mut()
-                            .find(|p| p.id == *province_id)
-                            .unwrap();
-                        prov.industrialization_turns_remaining = Some(remaining - 1);
-                    }
-                }
-            }
-
-            // Village → Town progression: tick down the town_countdown
-            // Skip if the province just became a Village this turn
-            if !just_became_village {
-                let prov_level = game
+        match province.industrialization_turns_remaining {
+            None if !province.town_production_unlocked => {
+                // First turn connected and not yet ramping — start the delay.
+                let prov = game
                     .world
                     .provinces
-                    .iter()
+                    .iter_mut()
                     .find(|p| p.id == *province_id)
-                    .map(|p| (p.settlement_level, p.town_countdown));
-
-                if let Some((SettlementLevel::Village, Some(remaining))) = prov_level {
-                    if remaining <= 1 {
-                        let prov = game
-                            .world
-                            .provinces
-                            .iter_mut()
-                            .find(|p| p.id == *province_id)
-                            .unwrap();
-                        prov.settlement_level = SettlementLevel::Town;
-                        prov.town_countdown = None;
-
-                        let headline = format!("{} has grown into a Town!", prov.name);
-                        report.newspaper_headlines.push(
-                            Headline::new(headline.clone(), HeadlineCategory::Growth)
-                                .for_nation(*owner_id),
-                        );
-                        report
-                            .settlement_upgrades
-                            .push((*province_id, "Town".to_string()));
-                    } else {
-                        let prov = game
-                            .world
-                            .provinces
-                            .iter_mut()
-                            .find(|p| p.id == *province_id)
-                            .unwrap();
-                        prov.town_countdown = Some(remaining - 1);
-                    }
+                    .unwrap();
+                if delay_turns == 0 {
+                    prov.town_production_unlocked = true;
+                } else {
+                    prov.industrialization_turns_remaining = Some(delay_turns);
+                }
+            }
+            None => {
+                // Already unlocked; per-turn `project_town_outputs` and the
+                // promotion logic in `resolve_town_production` handle the
+                // rest. Nothing to do here.
+            }
+            Some(remaining) => {
+                let next = remaining.saturating_sub(1);
+                let prov = game
+                    .world
+                    .provinces
+                    .iter_mut()
+                    .find(|p| p.id == *province_id)
+                    .unwrap();
+                if next == 0 {
+                    prov.industrialization_turns_remaining = None;
+                    prov.town_production_unlocked = true;
+                } else {
+                    prov.industrialization_turns_remaining = Some(next);
                 }
             }
         }

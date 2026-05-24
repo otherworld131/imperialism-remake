@@ -34,16 +34,18 @@ pub struct Province {
     /// Whether this province is connected to the nation's capital via
     /// an unbroken chain of depots / ports.
     pub connected_to_capital: bool,
-    /// Turns remaining until industrialization completes.
-    /// `Some(n)` means industrialization is in progress with `n` turns left.
-    /// Starts at 6 when a province first becomes connected.
-    /// `None` means either not yet connected or already industrialized.
+    /// Turns remaining in the first-production delay (Imp1 hamlet ramp).
+    /// `Some(n)` while the countdown is ticking, `None` once it completes
+    /// (or before it starts — pair with `town_production_unlocked` to
+    /// distinguish). Started by `update_settlements` the turn the province
+    /// first becomes connected to the capital.
     pub industrialization_turns_remaining: Option<u8>,
-    /// Turns remaining until this Village upgrades to Town.
-    /// `Some(n)` means upgrade in progress; starts at 12 when a province
-    /// first reaches Village status while connected.
-    /// `None` means not yet a Village or already a Town.
-    pub town_countdown: Option<u8>,
+    /// True once the first-production delay has elapsed. Latches once and
+    /// stays true even if the province is never *currently* producing
+    /// (e.g. national factories too small, or no in-province raw resources).
+    /// Combined with `connected_to_capital`, this is what
+    /// `Province::is_industrialized` returns.
+    pub town_production_unlocked: bool,
     /// Whether this province has at least one tile adjacent to a Sea tile.
     /// Computed at map generation time. Coastal provinces can be targeted
     /// by naval landings (beachhead operations).
@@ -93,7 +95,7 @@ impl Province {
             settlement_level: SettlementLevel::Hamlet,
             connected_to_capital: false,
             industrialization_turns_remaining: None,
-            town_countdown: None,
+            town_production_unlocked: false,
             coastal: false,
             ocean_coastal: false,
             incorporated_from: None,
@@ -109,14 +111,16 @@ impl Province {
         format!("{nation_name} City")
     }
 
-    /// Whether this province can autonomously produce materials and goods.
+    /// Whether this province is eligible to contribute town output this turn.
     ///
-    /// Only Village and Town settlements produce autonomously.
-    pub fn can_produce(&self) -> bool {
-        matches!(
-            self.settlement_level,
-            SettlementLevel::Village | SettlementLevel::Town
-        )
+    /// Imp1: a connected non-capital province becomes industrialized after
+    /// the first-production delay elapses. After that, every turn it can
+    /// produce materials (and possibly goods) on top of the player's manual
+    /// factories — subject to in-province raw resources and the national
+    /// consumer-goods factory capacities. Settlement level is a cosmetic
+    /// stamp derived from observed production, not the gate.
+    pub fn is_industrialized(&self) -> bool {
+        self.connected_to_capital && self.town_production_unlocked
     }
 
     /// Whether this province contains any coastal tile (adjacent to Sea).
@@ -288,42 +292,37 @@ mod tests {
         assert_eq!(p.settlement_level, SettlementLevel::Town);
     }
 
-    // ── can_produce ─────────────────────────────────────────────
+    // ── is_industrialized ───────────────────────────────────────
 
     #[test]
-    fn hamlet_cannot_produce() {
+    fn unconnected_province_is_not_industrialized() {
         let p = sample_province();
-        assert_eq!(p.settlement_level, SettlementLevel::Hamlet);
-        assert!(!p.can_produce());
+        assert!(!p.is_industrialized());
     }
 
     #[test]
-    fn village_can_produce() {
+    fn connected_but_in_delay_is_not_industrialized() {
         let mut p = sample_province();
-        p.settlement_level = SettlementLevel::Village;
-        assert!(p.can_produce());
+        p.connected_to_capital = true;
+        p.industrialization_turns_remaining = Some(6);
+        assert!(!p.is_industrialized());
     }
 
     #[test]
-    fn town_can_produce() {
+    fn connected_and_unlocked_is_industrialized() {
         let mut p = sample_province();
-        p.settlement_level = SettlementLevel::Town;
-        assert!(p.can_produce());
-    }
-
-    // ── town_countdown ──────────────────────────────────────────
-
-    #[test]
-    fn town_countdown_defaults_to_none() {
-        let p = sample_province();
-        assert_eq!(p.town_countdown, None);
+        p.connected_to_capital = true;
+        p.industrialization_turns_remaining = None;
+        p.town_production_unlocked = true;
+        assert!(p.is_industrialized());
     }
 
     #[test]
-    fn town_countdown_can_be_set() {
+    fn unlocked_but_disconnected_is_not_industrialized() {
         let mut p = sample_province();
-        p.town_countdown = Some(12);
-        assert_eq!(p.town_countdown, Some(12));
+        p.town_production_unlocked = true;
+        p.connected_to_capital = false;
+        assert!(!p.is_industrialized());
     }
 
     // ── connectivity & industrialization ────────────────────────

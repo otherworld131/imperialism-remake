@@ -114,6 +114,14 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         resources_per_material: table.get("resources_per_material").unwrap_or(2),
         materials_per_good: table.get("materials_per_good").unwrap_or(2),
         coal_iron_ratio: table.get("coal_iron_ratio").unwrap_or(1),
+        town_first_production_delay_turns: table
+            .get::<u32>("town_first_production_delay_turns")
+            .unwrap_or(6)
+            .min(255) as u8,
+        town_materials_per_factory_tier: table
+            .get("town_materials_per_factory_tier")
+            .unwrap_or(4),
+        town_goods_per_factory_tier: table.get("town_goods_per_factory_tier").unwrap_or(8),
         food_per_worker: table.get("food_per_worker").unwrap_or(1),
         starvation_cap: table.get("starvation_cap").unwrap_or(2),
         canned_food_ratio: table.get("canned_food_ratio").unwrap_or(2),
@@ -423,6 +431,9 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         resources_per_material: cfg.resources_per_material.max(1),
         materials_per_good: cfg.materials_per_good.max(1),
         coal_iron_ratio: cfg.coal_iron_ratio.max(1),
+        town_first_production_delay_turns: cfg.town_first_production_delay_turns,
+        town_materials_per_factory_tier: cfg.town_materials_per_factory_tier.max(1),
+        town_goods_per_factory_tier: cfg.town_goods_per_factory_tier.max(1),
         food_per_worker: cfg.food_per_worker.max(1),
         starvation_cap: cfg.starvation_cap.max(1),
         canned_food_ratio: cfg.canned_food_ratio.max(1),

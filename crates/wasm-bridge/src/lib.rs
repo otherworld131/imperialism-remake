@@ -3551,15 +3551,19 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
         *delivered_map.entry(*resource).or_insert(0) += *qty;
     }
 
-    let (_local_town_outputs, remote_town_outputs) =
-        domain::economy::project_town_outputs(&game, nid);
+    let per_province_town = domain::economy::project_town_outputs(
+        &game,
+        nid,
+        &game.game_data.game_config,
+    );
+    let town_outputs = domain::economy::aggregate_town_outputs(&per_province_town);
     let freight_unused_after_raw = combined_transport
         .freight_cars
         .saturating_sub(delivered_map.values().copied().sum::<u32>());
     let (town_deliveries, _remaining_unused_after_towns) =
         domain::economy::allocate_town_output_freight(
             &mut delivered_map,
-            &remote_town_outputs,
+            &town_outputs,
             &transport.allocations,
             freight_unused_after_raw,
         );
@@ -3587,7 +3591,7 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
         })
         .collect();
 
-    let town_deliveries_json: Vec<serde_json::Value> = remote_town_outputs
+    let town_deliveries_json: Vec<serde_json::Value> = town_outputs
         .iter()
         .map(|(stockpile, avail)| {
             let delivered = town_deliveries

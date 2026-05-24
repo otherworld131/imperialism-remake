@@ -60,7 +60,7 @@ pub struct Province {
     pub connected_to_capital: bool,
     pub industrialization_turns_remaining: Option<u8>,
     #[serde(default)]
-    pub town_countdown: Option<u8>,
+    pub town_production_unlocked: bool,
     #[serde(default)]
     pub coastal: bool,
     #[serde(default)]
@@ -195,7 +195,7 @@ impl From<&dm::Province> for Province {
             settlement_level: v.settlement_level.into(),
             connected_to_capital: v.connected_to_capital,
             industrialization_turns_remaining: v.industrialization_turns_remaining,
-            town_countdown: v.town_countdown,
+            town_production_unlocked: v.town_production_unlocked,
             coastal: v.coastal,
             ocean_coastal: v.ocean_coastal,
             incorporated_from: v.incorporated_from.map(Into::into),
@@ -217,7 +217,7 @@ impl From<Province> for dm::Province {
         p.settlement_level = v.settlement_level.into();
         p.connected_to_capital = v.connected_to_capital;
         p.industrialization_turns_remaining = v.industrialization_turns_remaining;
-        p.town_countdown = v.town_countdown;
+        p.town_production_unlocked = v.town_production_unlocked;
         p.coastal = v.coastal;
         p.ocean_coastal = v.ocean_coastal;
         p.incorporated_from = v.incorporated_from.map(Into::into);

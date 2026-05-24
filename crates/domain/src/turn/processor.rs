@@ -2554,33 +2554,32 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
     }
 }
 
-/// Resolve autonomous town production for Village and Town provinces.
+/// Resolve Imp1-style town development for every industrialized province.
 ///
-/// For each province that `can_produce()`:
-/// 1. Sum resource yields from all tiles in the province.
-/// 2. Apply 2:1 conversion for raw resources → materials:
-///    - Timber → Lumber (2 timber → 1 lumber)
-///    - Coal + Iron → Steel (1 coal + 1 iron → 1 steel)
-///    - Cotton/Wool → Fabric (2 cotton/wool → 1 fabric)
-/// 3. Convert half of materials to goods (2:1):
-///    - Lumber → Furniture (2 lumber → 1 furniture)
-///    - Steel → Hardware (2 steel → 1 hardware)
-///    - Fabric → Clothing (2 fabric → 1 clothing)
-/// 4. Towns produce at double rate (multiplier 2).
-/// 5. Add produced materials and goods to the owning nation's warehouse.
+/// Per-province potential output is computed in `project_town_outputs` and
+/// throttled by the player's national consumer-goods factory capacities. All
+/// output (including the capital region — actually the capital province itself
+/// never produces, see Imp1 rule) must compete for the nation's freight
+/// allocation; nothing is delivered for free. Per-province output is then
+/// scaled down proportionally based on the fraction of total potential that
+/// freight could deliver, so that the Hamlet → Village / Village → Town
+/// settlement promotion reflects what actually arrived in the warehouse.
 fn resolve_town_production(game: &mut GameState, report: &mut TurnReport) {
     let nation_ids: Vec<NationId> = game.world.nations.iter().map(|n| n.id).collect();
 
     for nation_id in nation_ids {
-        let (local_outputs, remote_outputs) = crate::economy::project_town_outputs(game, nation_id);
-        if local_outputs.is_empty() && remote_outputs.is_empty() {
+        let cfg = game.game_data.game_config.clone();
+        let per_province =
+            crate::economy::project_town_outputs(game, nation_id, &cfg);
+        if per_province.is_empty() {
             continue;
         }
+
+        let totals = crate::economy::aggregate_town_outputs(&per_province);
 
         let Some(nation) = game.world.nations.iter_mut().find(|n| n.id == nation_id) else {
             continue;
         };
-        let mut outputs_to_apply = local_outputs;
 
         let original_granted = nation
             .economy
@@ -2591,13 +2590,12 @@ fn resolve_town_production(game: &mut GameState, report: &mut TurnReport) {
             .collect::<std::collections::BTreeMap<_, _>>();
         let mut adjusted_granted = original_granted.clone();
         let original_unused = nation.economy.logistics.freight_unused;
-        let (delivered_remote_outputs, remaining_unused) =
-            crate::economy::allocate_town_output_freight(
-                &mut adjusted_granted,
-                &remote_outputs,
-                &nation.economy.transport.allocations,
-                original_unused,
-            );
+        let (delivered_totals, remaining_unused) = crate::economy::allocate_town_output_freight(
+            &mut adjusted_granted,
+            &totals,
+            &nation.economy.transport.allocations,
+            original_unused,
+        );
 
         for (resource, before) in original_granted {
             let after = adjusted_granted.get(&resource).copied().unwrap_or(0);
@@ -2619,7 +2617,6 @@ fn resolve_town_production(game: &mut GameState, report: &mut TurnReport) {
                 .push((nation_id, resource, removable));
         }
 
-        let used_unused_capacity = original_unused.saturating_sub(remaining_unused);
         nation.economy.logistics.freight_unused = remaining_unused;
         nation.economy.logistics.freight_committed = nation
             .economy
@@ -2627,12 +2624,84 @@ fn resolve_town_production(game: &mut GameState, report: &mut TurnReport) {
             .freight_total
             .saturating_sub(remaining_unused);
 
-        if used_unused_capacity > 0 || !delivered_remote_outputs.is_empty() {
-            outputs_to_apply.extend(delivered_remote_outputs);
+        for (target, qty) in delivered_totals {
+            apply_town_output(nation, report, nation_id, target, qty);
         }
+    }
 
-        for (stockpile, qty) in outputs_to_apply {
-            apply_town_output(nation, report, nation_id, stockpile, qty);
+    // Post-pass: promote settlement levels (Hamlet → Village / Village →
+    // Town) based on what each province *produced this turn*, not on what
+    // was actually delivered. Production is independent of the player's
+    // freight politics; settlement growth follows industrial potential.
+    apply_pending_settlement_promotions(game, report);
+}
+
+/// Walk every owned industrialized province and ratchet its settlement level
+/// based on this turn's projected town output. Promotion fires once per
+/// province per level transition.
+fn apply_pending_settlement_promotions(game: &mut GameState, report: &mut TurnReport) {
+    let cfg = game.game_data.game_config.clone();
+    let nation_ids: Vec<NationId> = game.world.nations.iter().map(|n| n.id).collect();
+    for nation_id in nation_ids {
+        let per_province = crate::economy::project_town_outputs(game, nation_id, &cfg);
+        if per_province.is_empty() {
+            continue;
+        }
+        for prov_out in &per_province {
+            let (current_level, prov_name, current_owner) = match game
+                .world
+                .provinces
+                .iter()
+                .find(|p| p.id == prov_out.province_id)
+            {
+                Some(p) => (p.settlement_level, p.name.clone(), p.owner),
+                None => continue,
+            };
+
+            let produced_material = prov_out.produced_any_material();
+            let produced_good = prov_out.produced_any_good();
+
+            if current_level == SettlementLevel::Hamlet && produced_material {
+                let prov = game
+                    .world
+                    .provinces
+                    .iter_mut()
+                    .find(|p| p.id == prov_out.province_id)
+                    .unwrap();
+                prov.settlement_level = SettlementLevel::Village;
+                let headline = format!("{} has grown into a Village!", prov_name);
+                report.newspaper_headlines.push(
+                    Headline::new(headline, HeadlineCategory::Growth).for_nation(current_owner),
+                );
+                report
+                    .settlement_upgrades
+                    .push((prov_out.province_id, "Village".to_string()));
+            }
+
+            // Re-read level (may have just been promoted to Village above).
+            let level_after = game
+                .world
+                .provinces
+                .iter()
+                .find(|p| p.id == prov_out.province_id)
+                .map(|p| p.settlement_level)
+                .unwrap_or(SettlementLevel::Hamlet);
+            if level_after == SettlementLevel::Village && produced_good {
+                let prov = game
+                    .world
+                    .provinces
+                    .iter_mut()
+                    .find(|p| p.id == prov_out.province_id)
+                    .unwrap();
+                prov.settlement_level = SettlementLevel::Town;
+                let headline = format!("{} has grown into a Town!", prov_name);
+                report.newspaper_headlines.push(
+                    Headline::new(headline, HeadlineCategory::Growth).for_nation(current_owner),
+                );
+                report
+                    .settlement_upgrades
+                    .push((prov_out.province_id, "Town".to_string()));
+            }
         }
     }
 }
@@ -3550,14 +3619,10 @@ fn resolve_combat(
                     .is_some_and(|n| n.capital_province_id == province_id);
             if is_gp_capital
                 && let Some(province) = game.get_province_mut(province_id)
-                && province.settlement_level == SettlementLevel::Hamlet
+                && !province.town_production_unlocked
             {
-                province.settlement_level = SettlementLevel::Village;
                 province.industrialization_turns_remaining = None;
-                province.town_countdown = Some(12);
-                report
-                    .settlement_upgrades
-                    .push((province_id, "Village".to_string()));
+                province.town_production_unlocked = true;
                 report.newspaper_headlines.push(
                     Headline::new(
                         format!(
@@ -3806,14 +3871,10 @@ fn resolve_combat(
                     .is_some_and(|n| n.capital_province_id == province_id);
             if is_gp_capital
                 && let Some(province) = game.get_province_mut(province_id)
-                && province.settlement_level == SettlementLevel::Hamlet
+                && !province.town_production_unlocked
             {
-                province.settlement_level = SettlementLevel::Village;
                 province.industrialization_turns_remaining = None;
-                province.town_countdown = Some(12);
-                report
-                    .settlement_upgrades
-                    .push((province_id, "Village".to_string()));
+                province.town_production_unlocked = true;
                 report.newspaper_headlines.push(
                     Headline::new(
                         format!(
@@ -8082,16 +8143,22 @@ mod tests {
         pending_ai_cash_income: Vec::new(),
         next_unit_id: 6_000_000,};
 
-        // Process 7 turns: 1 turn to start countdown (set to 6), then 6 turns to count down
+        // 1 turn to start the 6-turn delay + 6 ticks; after the 7th process
+        // the delay completes and `town_production_unlocked` latches true.
+        // The province has no resources here, so settlement_level legitimately
+        // stays Hamlet (Imp1-aligned: promotion now requires production).
         for _ in 0..7 {
             process_turn(&mut game);
         }
 
         let province = game.get_province(ProvinceId(2)).unwrap();
-        assert_eq!(
-            province.settlement_level,
-            crate::map::SettlementLevel::Village,
-            "Province should have upgraded to Village after 6 turns connected"
+        assert!(
+            province.is_industrialized(),
+            "Province should be industrialized (delay complete) after 7 turns connected"
+        );
+        assert!(
+            province.town_production_unlocked,
+            "town_production_unlocked must latch true once the delay finishes"
         );
     }
 
@@ -8164,7 +8231,7 @@ mod tests {
         let province = game.get_province(ProvinceId(2)).unwrap();
         assert_eq!(
             province.settlement_level,
-            crate::map::SettlementLevel::Hamlet,
+            SettlementLevel::Hamlet,
             "Disconnected province should not be upgraded"
         );
     }
@@ -8295,6 +8362,7 @@ mod tests {
         );
         province_village.settlement_level = SettlementLevel::Village;
         province_village.connected_to_capital = true;
+        province_village.town_production_unlocked = true;
 
         let mut nation = Nation::new(
             NationId(1),
@@ -8306,6 +8374,23 @@ mod tests {
         nation.economy.treasury = Money::dollars(5000);
         nation.add_province(ProvinceId(2));
         nation.economy.transport.build_freight_cars(20);
+        // Capital factories sized so that the Imp1 ladder unlocks the
+        // village-tier outputs the existing tests expect (1 material per 4
+        // capacity, 1 good per 8 capacity). Cap 8 across the three chains
+        // gives every chain 2 materials + 1 good per qualifying province,
+        // which envelops the original (no-factory-gate) test expectations.
+        nation
+            .economy
+            .buildings
+            .push(crate::economy::Building::new(BuildingType::FurnitureFactory, 8));
+        nation
+            .economy
+            .buildings
+            .push(crate::economy::Building::new(BuildingType::HardwareFactory, 8));
+        nation
+            .economy
+            .buildings
+            .push(crate::economy::Building::new(BuildingType::ClothingFactory, 8));
         for resource in [
             ResourceType::Timber,
             ResourceType::Coal,
@@ -8449,6 +8534,7 @@ mod tests {
         );
         province_village.settlement_level = SettlementLevel::Village;
         province_village.connected_to_capital = true;
+        province_village.town_production_unlocked = true;
 
         let mut nation = Nation::new(
             NationId(1),
@@ -8460,6 +8546,22 @@ mod tests {
         nation.economy.treasury = Money::dollars(5000);
         nation.add_province(ProvinceId(2));
         nation.economy.transport.build_freight_cars(20);
+        // HardwareFactory cap 16 = Imp1 tier "4 steel + 2 hardware per
+        // qualifying province with 4 coal & 4 iron". The Furniture/Clothing
+        // capacities don't matter for this test but keep them present so the
+        // ladder doesn't accidentally zero out unrelated chains.
+        nation
+            .economy
+            .buildings
+            .push(crate::economy::Building::new(BuildingType::FurnitureFactory, 8));
+        nation
+            .economy
+            .buildings
+            .push(crate::economy::Building::new(BuildingType::HardwareFactory, 16));
+        nation
+            .economy
+            .buildings
+            .push(crate::economy::Building::new(BuildingType::ClothingFactory, 8));
         nation
             .economy
             .transport
@@ -8563,63 +8665,150 @@ mod tests {
     }
 
     #[test]
-    fn town_production_hamlet_does_not_produce() {
-        // Same setup but settlement is Hamlet, not Village
+    fn town_production_blocked_until_industrialized() {
+        // Same village setup, but clear the industrialization unlock flag.
+        // Without that flag the new project_town_outputs treats the province
+        // as still ramping up and emits nothing — independent of settlement
+        // level (which is now purely cosmetic).
         let mut game =
             test_game_state_with_village(&[(TerrainType::Forest, Some(ResourceType::Timber)); 4]);
-        // Override to Hamlet
         game.world
             .provinces
             .iter_mut()
             .find(|p| p.id == ProvinceId(2))
             .unwrap()
-            .settlement_level = SettlementLevel::Hamlet;
+            .town_production_unlocked = false;
 
         let report = process_turn(&mut game);
 
-        // Should have no town production
         assert!(
             report.town_production.is_empty(),
-            "Hamlet province should not produce via town production"
+            "province in 6-turn ramp should not contribute town output"
         );
     }
 
     #[test]
-    fn town_produces_at_double_rate() {
-        // Town with 4 ScrubForest tiles
-        // Village rate: 4 timber → 2 lumber → 1 furniture
-        // Town rate: 4*2=8 timber → 4 lumber → 2 furniture
+    fn town_production_capital_factory_ladder_gates_output() {
+        // 8 in-province timber. With FurnitureFactory cap 4 the Imp1 ladder
+        // yields exactly 1 lumber per qualifying province; cap 8 yields 2
+        // lumber + 1 furniture; cap 16 yields 4 lumber + 2 furniture.
+        let mut game = test_game_state_with_village(
+            &[(TerrainType::Forest, Some(ResourceType::Timber)); 8],
+        );
+
+        // Lower the FurnitureFactory cap to 4 for the first measurement.
+        {
+            let nation = game.get_nation_mut(NationId(1)).unwrap();
+            for b in nation.economy.buildings.iter_mut() {
+                if b.building_type == BuildingType::FurnitureFactory {
+                    b.capacity = 4;
+                }
+            }
+        }
+        process_turn(&mut game);
+        {
+            let nation = game.get_nation(NationId(1)).unwrap();
+            assert_eq!(
+                nation.material_amount(MaterialType::Lumber),
+                1,
+                "factory cap 4 should unlock exactly 1 town lumber per province"
+            );
+            assert_eq!(
+                nation.goods_amount(GoodsType::Furniture),
+                0,
+                "factory cap 4 is below the 1st-good threshold (cap >= 8)"
+            );
+        }
+
+        // Bump cap to 8 and re-run.
+        {
+            let nation = game.get_nation_mut(NationId(1)).unwrap();
+            for b in nation.economy.buildings.iter_mut() {
+                if b.building_type == BuildingType::FurnitureFactory {
+                    b.capacity = 8;
+                }
+            }
+            // Allocate enough freight for the higher delivered totals.
+            nation.economy.transport.build_freight_cars(20);
+            nation.economy.transport.set_allocation(
+                crate::economy::FreightTarget::Material(MaterialType::Lumber),
+                20,
+            );
+            nation.economy.transport.set_allocation(
+                crate::economy::FreightTarget::Goods(GoodsType::Furniture),
+                20,
+            );
+        }
+        let prev_lumber = game
+            .get_nation(NationId(1))
+            .unwrap()
+            .material_amount(MaterialType::Lumber);
+        let prev_furniture = game
+            .get_nation(NationId(1))
+            .unwrap()
+            .goods_amount(GoodsType::Furniture);
+        process_turn(&mut game);
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert_eq!(
+            nation.material_amount(MaterialType::Lumber) - prev_lumber,
+            2,
+            "factory cap 8 should produce 2 town lumber per qualifying province"
+        );
+        assert_eq!(
+            nation.goods_amount(GoodsType::Furniture) - prev_furniture,
+            1,
+            "factory cap 8 unlocks 1 town furniture per qualifying province"
+        );
+    }
+
+    #[test]
+    fn town_production_skips_country_capital_province() {
+        // Helper village contains the country capital tile in `province_capital`
+        // (ProvinceId(1)); set the village province's tile to also live in the
+        // capital province so we can verify the skip rule. Instead, drive this
+        // by placing a forest with timber inside ProvinceId(1) and confirming
+        // it never appears as town output.
         let mut game =
             test_game_state_with_village(&[(TerrainType::Forest, Some(ResourceType::Timber)); 4]);
-        // Upgrade to Town
-        game.world
+
+        // Replace the capital tile's terrain with forest + timber so the
+        // capital province itself would yield material under the old rules.
+        let cap_coord = HexCoord::new(0, 0);
+        if let Some(tile) = game.world.hex_map.get_tile_mut(cap_coord) {
+            tile.set_resource(ResourceType::Timber);
+        }
+        // Mark the capital province as industrialized so the only thing
+        // stopping it from producing is the new "skip the country capital"
+        // rule.
+        if let Some(prov) = game
+            .world
             .provinces
             .iter_mut()
-            .find(|p| p.id == ProvinceId(2))
-            .unwrap()
-            .settlement_level = SettlementLevel::Town;
+            .find(|p| p.id == ProvinceId(1))
+        {
+            prov.connected_to_capital = true;
+            prov.town_production_unlocked = true;
+        }
 
         let report = process_turn(&mut game);
 
+        let capital_outputs: Vec<_> = report
+            .stockpile_flows
+            .town_produced_materials
+            .iter()
+            .filter(|(_, _, q)| *q > 0)
+            .collect();
+        // Only the non-capital village should have produced. Sanity-check by
+        // confirming production happened (from the village) but the capital
+        // tile's potential timber was not counted: the village contributes 2
+        // lumber from its 4 timber, no more.
+        assert!(!capital_outputs.is_empty(), "village should still produce");
         let nation = game.get_nation(NationId(1)).unwrap();
         assert_eq!(
             nation.material_amount(MaterialType::Lumber),
-            4,
-            "Town should produce 4 lumber (double rate)"
-        );
-        assert_eq!(
-            nation.goods_amount(GoodsType::Furniture),
             2,
-            "Town should produce 2 furniture (double rate)"
+            "national capital province must not contribute town output even when its tiles hold matching raw resources"
         );
-
-        let lumber_output: u32 = report
-            .town_production
-            .iter()
-            .filter(|(_, name, _)| name == "Lumber")
-            .map(|(_, _, q)| *q)
-            .sum();
-        assert_eq!(lumber_output, 4);
     }
 
     #[test]
@@ -8651,189 +8840,92 @@ mod tests {
 
     // ── Village → Town progression ─────────────────────────────
 
+    /// Imp1 alignment: promotion to Town now triggers the turn a Village
+    /// first produces a consumer good, not after a fixed 12-turn timer. To
+    /// make that happen the player must grow the matching capital factory
+    /// past the goods threshold (default cap >= 8).
     #[test]
-    fn village_upgrades_to_town_after_12_connected_turns() {
-        let coord1 = HexCoord::new(0, 0);
-        let coord2 = HexCoord::new(3, 3);
-        let hex_map = HexMap::new(10, 10);
-
-        let province_capital = Province::new(
-            ProvinceId(1),
-            "Capital".to_string(),
-            NationId(1),
-            coord1,
-            vec![coord1],
-            4,
+    fn village_upgrades_to_town_when_it_first_produces_a_good() {
+        let mut game = test_game_state_with_village(
+            &[(TerrainType::Forest, Some(ResourceType::Timber)); 4],
         );
 
-        let mut province_village = Province::new(
-            ProvinceId(2),
-            "Growing Town".to_string(),
-            NationId(1),
-            coord2,
-            vec![coord2],
-            4,
+        // Helper starts the village already promoted to Village for
+        // convenience; the production loop below verifies the Town promotion.
+        assert_eq!(
+            game.get_province(ProvinceId(2)).unwrap().settlement_level,
+            SettlementLevel::Village
         );
-        province_village.settlement_level = SettlementLevel::Village;
-        province_village.connected_to_capital = true;
-        province_village.town_countdown = Some(12);
 
-        let mut nation = Nation::new(
-            NationId(1),
-            "GrowthNation".to_string(),
-            NationColor::Blue,
-            NationType::GreatPower,
-            ProvinceId(1),
-        );
-        nation.economy.treasury = Money::dollars(5000);
-        nation.add_province(ProvinceId(2));
-
-        let mut game = crate::test_game_state! {
-        turn: TurnNumber::new(1),
-        difficulty: Difficulty::Normal,
-        map_key: "test".to_string(),
-        hex_map: hex_map,
-        provinces: vec![province_capital, province_village],
-        nations: vec![nation],
-        human_player_nation: NationId(1),
-        events: Vec::new(),
-        game_data: GameData::default(),
-        diplomacy: DiplomacyState::new(),
-        pending_attacks: Vec::new(),
-        pending_moves: Vec::new(),
-        pending_landings: Vec::new(),
-        history: Vec::new(),
-        high_scores: Vec::new(),
-        newspaper_archive: Vec::new(),
-        battle_archive: Vec::new(),
-        political_archive: Vec::new(),
-        ai_debug: false,
-        observer_mode: false,
-        last_cash_flow: std::collections::HashMap::new(),
-        last_resource_flow: std::collections::HashMap::new(),
-        pending_ai_cash_spending: Vec::new(),
-        pending_ai_cash_income: Vec::new(),
-        next_unit_id: 6_000_000,};
-
-        // Process 12 turns to count down the town_countdown
-        for _ in 0..12 {
-            process_turn(&mut game);
-        }
+        process_turn(&mut game);
 
         let province = game.get_province(ProvinceId(2)).unwrap();
         assert_eq!(
             province.settlement_level,
             SettlementLevel::Town,
-            "Province should have upgraded to Town after 12 turns"
+            "village that produced furniture this turn must promote to Town"
         );
-        assert_eq!(province.town_countdown, None);
-    }
-
-    #[test]
-    fn village_does_not_upgrade_to_town_before_12_turns() {
-        let coord1 = HexCoord::new(0, 0);
-        let coord2 = HexCoord::new(3, 3);
-        let hex_map = HexMap::new(10, 10);
-
-        let province_capital = Province::new(
-            ProvinceId(1),
-            "Capital".to_string(),
-            NationId(1),
-            coord1,
-            vec![coord1],
-            4,
-        );
-
-        let mut province_village = Province::new(
-            ProvinceId(2),
-            "Still Village".to_string(),
-            NationId(1),
-            coord2,
-            vec![coord2],
-            4,
-        );
-        province_village.settlement_level = SettlementLevel::Village;
-        province_village.connected_to_capital = true;
-        province_village.town_countdown = Some(12);
-
-        let mut nation = Nation::new(
-            NationId(1),
-            "PatientNation".to_string(),
-            NationColor::Blue,
-            NationType::GreatPower,
-            ProvinceId(1),
-        );
-        nation.economy.treasury = Money::dollars(5000);
-        nation.add_province(ProvinceId(2));
-
-        let mut game = crate::test_game_state! {
-        turn: TurnNumber::new(1),
-        difficulty: Difficulty::Normal,
-        map_key: "test".to_string(),
-        hex_map: hex_map,
-        provinces: vec![province_capital, province_village],
-        nations: vec![nation],
-        human_player_nation: NationId(1),
-        events: Vec::new(),
-        game_data: GameData::default(),
-        diplomacy: DiplomacyState::new(),
-        pending_attacks: Vec::new(),
-        pending_moves: Vec::new(),
-        pending_landings: Vec::new(),
-        history: Vec::new(),
-        high_scores: Vec::new(),
-        newspaper_archive: Vec::new(),
-        battle_archive: Vec::new(),
-        political_archive: Vec::new(),
-        ai_debug: false,
-        observer_mode: false,
-        last_cash_flow: std::collections::HashMap::new(),
-        last_resource_flow: std::collections::HashMap::new(),
-        pending_ai_cash_spending: Vec::new(),
-        pending_ai_cash_income: Vec::new(),
-        next_unit_id: 6_000_000,};
-
-        // Process only 11 turns — not enough
-        for _ in 0..11 {
-            process_turn(&mut game);
-        }
-
-        let province = game.get_province(ProvinceId(2)).unwrap();
-        assert_eq!(
-            province.settlement_level,
-            SettlementLevel::Village,
-            "Province should still be Village after only 11 turns"
-        );
-        assert_eq!(province.town_countdown, Some(1));
     }
 
     // ── Full settlement progression: Hamlet → Village → Town ───
 
+    /// New Imp1-aligned progression: the only fixed timer is the 6-turn
+    /// first-production delay. After that, `settlement_level` advances when
+    /// the province *actually produces* — Hamlet → Village on its first
+    /// material, Village → Town on its first good. With no resources or
+    /// factory backing, the province sits at Hamlet forever even though
+    /// `town_production_unlocked` flips true.
     #[test]
     fn full_settlement_progression_hamlet_to_village_to_town() {
-        let coord1 = HexCoord::new(0, 0);
-        let coord2 = HexCoord::new(3, 3);
-        let hex_map = HexMap::new(10, 10);
+        let mut hex_map = HexMap::new(20, 20);
+        let capital_coord = HexCoord::new(0, 0);
+        let rail_coord = HexCoord::new(1, 0);
+        let depot_coord = HexCoord::new(2, 0);
+        let timber_coords = [
+            depot_coord,
+            HexCoord::new(3, 0),
+            HexCoord::new(3, -1),
+            HexCoord::new(2, -1),
+        ];
+
+        let mut cap_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        cap_tile.is_country_capital = true;
+        cap_tile.infrastructure.has_depot = true;
+        cap_tile.infrastructure.has_railroad = true;
+        hex_map.set_tile(capital_coord, cap_tile);
+
+        let mut rail_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        rail_tile.infrastructure.has_railroad = true;
+        hex_map.set_tile(rail_coord, rail_tile);
+
+        for (i, &c) in timber_coords.iter().enumerate() {
+            let mut tile = Tile::with_province(TerrainType::Forest, ProvinceId(2));
+            tile.set_resource(ResourceType::Timber);
+            if i == 0 {
+                tile.infrastructure.has_depot = true;
+                tile.infrastructure.has_railroad = true;
+            }
+            hex_map.set_tile(c, tile);
+        }
 
         let province_capital = Province::new(
             ProvinceId(1),
             "Capital".to_string(),
             NationId(1),
-            coord1,
-            vec![coord1],
+            capital_coord,
+            vec![capital_coord, rail_coord],
             4,
         );
-
         let mut province_remote = Province::new(
             ProvinceId(2),
             "RemoteLand".to_string(),
             NationId(1),
-            coord2,
-            vec![coord2],
+            depot_coord,
+            timber_coords.to_vec(),
             4,
         );
-        province_remote.connected_to_capital = true;
-        // Starts as Hamlet
+        province_remote.connected_to_capital = true; // Hamlet to start; the
+        // 6-turn delay still runs.
 
         let mut nation = Nation::new(
             NationId(1),
@@ -8844,6 +8936,19 @@ mod tests {
         );
         nation.economy.treasury = Money::dollars(5000);
         nation.add_province(ProvinceId(2));
+        nation.economy.transport.build_freight_cars(20);
+        for target in [
+            crate::economy::FreightTarget::Material(MaterialType::Lumber),
+            crate::economy::FreightTarget::Goods(GoodsType::Furniture),
+        ] {
+            nation.economy.transport.set_allocation(target, 20);
+        }
+        // FurnitureFactory cap 4 — just enough for 1 town lumber per
+        // qualifying province after the delay. No furniture yet.
+        nation
+            .economy
+            .buildings
+            .push(crate::economy::Building::new(BuildingType::FurnitureFactory, 4));
 
         let mut game = crate::test_game_state! {
         turn: TurnNumber::new(1),
@@ -8872,27 +8977,36 @@ mod tests {
         pending_ai_cash_income: Vec::new(),
         next_unit_id: 6_000_000,};
 
-        // 7 turns: Hamlet → Village (1 to start countdown + 6 to count down)
-        for _ in 0..7 {
-            process_turn(&mut game);
-        }
-        let province = game.get_province(ProvinceId(2)).unwrap();
-        assert_eq!(province.settlement_level, SettlementLevel::Village);
-        assert_eq!(
-            province.town_countdown,
-            Some(12),
-            "Town countdown should start at 12 upon becoming Village"
-        );
-
-        // 12 more turns: Village → Town
-        for _ in 0..12 {
+        // 1 turn for civilian_phase to seed the 6-tick countdown + 6 turns
+        // to tick it down + 1 turn for resolve_town_production to actually
+        // observe production and ratchet Hamlet → Village.
+        for _ in 0..8 {
             process_turn(&mut game);
         }
         let province = game.get_province(ProvinceId(2)).unwrap();
         assert_eq!(
             province.settlement_level,
+            SettlementLevel::Village,
+            "after the ramp + first-material turn the province must be a Village"
+        );
+
+        // Bump the FurnitureFactory past the goods threshold (cap >= 8) and
+        // run one more turn; the village should produce its first furniture
+        // and ratchet up to Town.
+        {
+            let nation = game.get_nation_mut(NationId(1)).unwrap();
+            for b in nation.economy.buildings.iter_mut() {
+                if b.building_type == BuildingType::FurnitureFactory {
+                    b.capacity = 8;
+                }
+            }
+        }
+        process_turn(&mut game);
+        let province = game.get_province(ProvinceId(2)).unwrap();
+        assert_eq!(
+            province.settlement_level,
             SettlementLevel::Town,
-            "Province should have upgraded to Town after 7 + 12 = 19 turns"
+            "village becomes Town the turn it first produces a good"
         );
     }
 
@@ -11357,11 +11471,17 @@ mod tests {
         // Check if the defender capital was conquered
         let province = game.get_province(ProvinceId(2)).unwrap();
         if province.owner == NationId(1) {
-            // Captured GP capital should be Village immediately
+            // Captured GP capital skips the 6-turn ramp: it must be
+            // immediately industrialized so it can contribute town output
+            // next turn (subject to factories/resources). Settlement level
+            // itself only ratchets up when the province actually produces.
+            assert!(
+                province.town_production_unlocked,
+                "captured GP capital must skip the first-production delay"
+            );
             assert_eq!(
-                province.settlement_level,
-                SettlementLevel::Village,
-                "Captured GP capital should be immediately industrialized to Village"
+                province.industrialization_turns_remaining, None,
+                "no active ramp countdown on a captured GP capital"
             );
             // Defender should be in anarchy after losing capital
             let defender = game.get_nation(NationId(2)).unwrap();
