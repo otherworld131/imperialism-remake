@@ -1145,37 +1145,40 @@ fn new_game_inner(
             nation.economy.buildings.push(Building::new(*bt, 1));
         }
 
-        // On Easy/Introductory, add starting mills and factories
-        if matches!(difficulty, Difficulty::Easy | Difficulty::Introductory) {
-            nation
-                .economy
-                .buildings
-                .push(Building::new(BuildingType::LumberMill, 2));
-            nation
-                .economy
-                .buildings
-                .push(Building::new(BuildingType::SteelMill, 2));
-            nation
-                .economy
-                .buildings
-                .push(Building::new(BuildingType::TextileMill, 2));
-            nation
-                .economy
-                .buildings
-                .push(Building::new(BuildingType::FurnitureFactory, 1));
-            nation
-                .economy
-                .buildings
-                .push(Building::new(BuildingType::HardwareFactory, 1));
-            nation
-                .economy
-                .buildings
-                .push(Building::new(BuildingType::ClothingFactory, 1));
-            nation
-                .economy
-                .buildings
-                .push(Building::new(BuildingType::PaperFactory, 1));
-        }
+        // Every Great Power starts with mills and consumer-goods factories.
+        // Goods factories begin at capacity 4 so the Imp1 town-development
+        // ladder unlocks the first material per qualifying province from
+        // turn 1 — matching the original game, where the capital industries
+        // were already in place when play began. Easy/Introductory can layer
+        // additional bonuses on top elsewhere if needed.
+        nation
+            .economy
+            .buildings
+            .push(Building::new(BuildingType::LumberMill, 2));
+        nation
+            .economy
+            .buildings
+            .push(Building::new(BuildingType::SteelMill, 2));
+        nation
+            .economy
+            .buildings
+            .push(Building::new(BuildingType::TextileMill, 2));
+        nation
+            .economy
+            .buildings
+            .push(Building::new(BuildingType::FurnitureFactory, 4));
+        nation
+            .economy
+            .buildings
+            .push(Building::new(BuildingType::HardwareFactory, 4));
+        nation
+            .economy
+            .buildings
+            .push(Building::new(BuildingType::ClothingFactory, 4));
+        nation
+            .economy
+            .buildings
+            .push(Building::new(BuildingType::PaperFactory, 1));
 
         // Starting warehouse contents based on difficulty.
         //
@@ -2230,40 +2233,53 @@ mod tests {
     }
 
     #[test]
-    fn new_game_normal_has_no_mills() {
+    fn new_game_normal_has_starting_mills_and_factories() {
+        // Imp1-aligned: every difficulty seeds the capital industries so the
+        // town-development ladder can fire from turn 1 (FurnitureFactory cap
+        // 4 unlocks the first town material per qualifying province).
         let gs = new_game("test", Difficulty::Normal, 0);
         for nation in gs.great_powers() {
-            // Normal does NOT get pre-built mills or factories
-            assert!(
-                !nation.has_building(BuildingType::LumberMill),
-                "{} should NOT have a LumberMill on Normal",
-                nation.name
-            );
-            assert!(
-                !nation.has_building(BuildingType::SteelMill),
-                "{} should NOT have a SteelMill on Normal",
-                nation.name
-            );
-            assert!(
-                !nation.has_building(BuildingType::TextileMill),
-                "{} should NOT have a TextileMill on Normal",
-                nation.name
-            );
-            assert!(
-                !nation.has_building(BuildingType::FurnitureFactory),
-                "{} should NOT have a FurnitureFactory on Normal",
-                nation.name
-            );
+            for bt in [
+                BuildingType::LumberMill,
+                BuildingType::SteelMill,
+                BuildingType::TextileMill,
+                BuildingType::FurnitureFactory,
+                BuildingType::HardwareFactory,
+                BuildingType::ClothingFactory,
+                BuildingType::PaperFactory,
+            ] {
+                assert!(
+                    nation.has_building(bt),
+                    "{} should have a {:?} on Normal",
+                    nation.name,
+                    bt
+                );
+            }
+            for bt in [
+                BuildingType::FurnitureFactory,
+                BuildingType::HardwareFactory,
+                BuildingType::ClothingFactory,
+            ] {
+                let cap = nation
+                    .economy
+                    .buildings
+                    .iter()
+                    .find(|b| b.building_type == bt)
+                    .map(|b| b.capacity)
+                    .unwrap_or(0);
+                assert_eq!(
+                    cap, 4,
+                    "{} should start with {:?} at capacity 4 so town development can begin",
+                    nation.name, bt
+                );
+            }
 
-            // $10,000 starting cash
             assert_eq!(
                 nation.economy.treasury,
                 Money::dollars(10000),
                 "{} should start with $10,000 on Normal",
                 nation.name
             );
-
-            // 4 untrained + 2 trained + 1 expert workers
             assert_eq!(nation.economy.labor.untrained, 4);
             assert_eq!(nation.economy.labor.trained, 2);
             assert_eq!(nation.economy.labor.expert, 1);
@@ -2292,10 +2308,12 @@ mod tests {
                 );
             }
 
-            // No mills or factories
+            // Hard difficulty still seeds the capital industries (matches
+            // Normal/Easy) — the difficulty curve lives in starting cash and
+            // workforce, not in withholding the bootstrap factories.
             assert!(
-                !nation.has_building(BuildingType::LumberMill),
-                "{} should NOT have a LumberMill on Hard",
+                nation.has_building(BuildingType::LumberMill),
+                "{} should have a LumberMill on Hard (universal seed)",
                 nation.name
             );
 
@@ -2339,9 +2357,10 @@ mod tests {
                 nation.name
             );
 
-            // No mills or factories
-            assert!(!nation.has_building(BuildingType::LumberMill));
-            assert!(!nation.has_building(BuildingType::SteelMill));
+            // Universal seed: capital industries are present on every
+            // difficulty so town development can fire from turn 1.
+            assert!(nation.has_building(BuildingType::LumberMill));
+            assert!(nation.has_building(BuildingType::SteelMill));
         }
     }
 
