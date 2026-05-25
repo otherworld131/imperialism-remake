@@ -2145,9 +2145,10 @@ fn find_port_alternative(
         return None;
     }
 
-    // (3) Find an owned coastal land tile (sea-adjacent, real ocean, no
-    // building yet, no civilian assigned). Prefer the province centroid if
-    // it qualifies, else any qualifying tile in the province.
+    // (3) Find an owned land tile that is a viable port anchor — either it
+    // has a river (card #488) or is adjacent to real ocean (not a lake) —
+    // with no building yet and no civilian assigned. Prefer the province
+    // centroid if it qualifies, else any qualifying tile in the province.
     let mut centroid_first = std::iter::once(province.capital_tile).chain(
         province
             .tiles
@@ -2166,7 +2167,10 @@ fn find_port_alternative(
         if tile.assigned_civilian.is_some() {
             return false;
         }
-        // Must be adjacent to a real ocean tile (not a lake).
+        if tile.has_river() {
+            return true;
+        }
+        // Otherwise the tile must be adjacent to a real ocean tile (not a lake).
         c.neighbors().iter().any(|n| {
             let Some(nt) = game.world.hex_map.get_tile(*n) else {
                 return false;

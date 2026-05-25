@@ -930,7 +930,8 @@ pub(super) fn find_stranded_port_target(game: &GameState, nation_id: NationId) -
             continue;
         }
 
-        // Find a qualifying coastal tile (prefer province capital first).
+        // Find a qualifying port-anchor tile — has a river (card #488) or is
+        // adjacent to real ocean (not a lake). Prefer the province capital.
         let coastal = std::iter::once(province.capital_tile)
             .chain(
                 province
@@ -949,7 +950,9 @@ pub(super) fn find_stranded_port_target(game: &GameState, nation_id: NationId) -
                 if tile.assigned_civilian.is_some() {
                     return false;
                 }
-                // Must be adjacent to real ocean (not a lake).
+                if tile.has_river() {
+                    return true;
+                }
                 c.neighbors().iter().any(|n| {
                     let Some(nt) = game.world.hex_map.get_tile(*n) else {
                         return false;

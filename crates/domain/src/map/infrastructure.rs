@@ -177,13 +177,45 @@ pub fn place_depot_unchecked(hex_map: &mut HexMap, coord: HexCoord) -> Result<()
 }
 
 /// True if `coord` has at least one neighbor that is a sea tile by terrain.
-/// Used by `build_port` to preserve the historical port-placement rule
-/// (lake-coast tiles still allow port construction).
+/// Used by `build_port` (with the river predicate) to preserve the historical
+/// rule that ports may be built on any water-adjacent tile — lake-coast tiles
+/// included. Lake-coast ports are still constructible; they just don't grant
+/// connectivity (see `has_effective_port_filtered`).
 fn coord_is_sea_adjacent(hex_map: &HexMap, coord: HexCoord) -> bool {
     coord
         .neighbors()
         .iter()
         .any(|n| hex_map.get_tile(*n).is_some_and(|t| !t.terrain().is_land()))
+}
+
+/// Placement predicate for `build_port` (Trello #488). A tile is a legal
+/// build site if it has a river OR is adjacent to ANY sea tile (ocean or
+/// lake). This preserves the long-standing rule that lake-coast ports may be
+/// constructed, while letting river tiles join as new candidates. Connectivity
+/// is a separate, stricter question — see `tile_is_effective_port_anchor`.
+fn tile_is_port_buildable(hex_map: &HexMap, coord: HexCoord) -> bool {
+    if hex_map.get_tile(coord).is_some_and(|t| t.has_river()) {
+        return true;
+    }
+    coord_is_sea_adjacent(hex_map, coord)
+}
+
+/// Effective-port predicate for `has_effective_port_filtered`. A tile acts
+/// as a maritime anchor for the port-to-port connectivity BFS if it has a
+/// river OR is adjacent to a non-lake ocean sea zone. Rivers in the generator
+/// always discharge to the ocean (`map/generator.rs::find_river_path`), so an
+/// upstream river port joins the same maritime network as a coastal port.
+/// Lake-coast tiles deliberately do NOT count — they were never sea-trade
+/// hubs (cards #408, #419, #421).
+fn tile_is_effective_port_anchor(
+    hex_map: &HexMap,
+    sea_zones: &[crate::map::sea_zones::SeaZone],
+    coord: HexCoord,
+) -> bool {
+    if hex_map.get_tile(coord).is_some_and(|t| t.has_river()) {
+        return true;
+    }
+    coord_has_ocean_neighbor(hex_map, sea_zones, coord)
 }
 
 /// True if `coord` has at least one neighbor that lies in a non-lake ocean
@@ -207,14 +239,22 @@ pub fn coord_has_ocean_neighbor(
         .any(|n| sea_zones.iter().any(|z| !z.is_lake && z.hexes.contains(n)))
 }
 
-/// True if a tile acts as a port for connectivity purposes — a literal built
-/// port adjacent to ocean, or a country-capital tile adjacent to ocean.
+/// True if a tile acts as an effective port for the internal port-to-port
+/// connectivity BFS.
 ///
-/// Card #419: a country capital adjacent to the ocean is treated as having an
-/// implicit port. F-001 review fix: only ocean-adjacent ports/capitals count
-/// for sea-trade connectivity — lake-side ports do not, even when constructed.
+/// A *built* port (`has_port == true`) is effective if its tile has a river
+/// OR an ocean (non-lake) neighbor — card #488 treats rivers as part of the
+/// same maritime network as the ocean since rivers always discharge to the
+/// sea.
 ///
-/// `sea_zones` empty → terrain-only fallback (test mode).
+/// An *implicit* country-capital port (`is_country_capital && !has_port`)
+/// remains ocean-only — card #419's free implicit port is not extended to
+/// river capitals (the player still has to commit an engineer to build a
+/// river port at the capital if they want connectivity over the river).
+///
+/// Lake-coast ports never count for connectivity even when constructed
+/// (cards #408, #419, #421). `sea_zones` empty → terrain-only fallback for
+/// unit tests.
 pub fn has_effective_port(
     hex_map: &HexMap,
     sea_zones: &[crate::map::sea_zones::SeaZone],
@@ -239,17 +279,31 @@ pub fn has_effective_port_filtered(
     let Some(tile) = hex_map.get_tile(coord) else {
         return false;
     };
-    let ocean_adjacent = coord_has_ocean_neighbor(hex_map, sea_zones, coord);
-    if tile.infrastructure.has_port && ocean_adjacent {
+    // Card #488: a built port acts as an effective port if the tile has a
+    // river OR an ocean neighbor (rivers discharge to the ocean, so an
+    // upstream river port joins the same maritime network).
+    if tile.infrastructure.has_port
+        && tile_is_effective_port_anchor(hex_map, sea_zones, coord)
+    {
         return true;
     }
-    if tile.is_country_capital && ocean_adjacent {
+    // Card #419 — implicit capital ports remain ocean-only on purpose. A
+    // country capital on a river without a built port does NOT grant free
+    // connectivity; the player still has to commit an engineer to building
+    // the river port. This keeps card #488's scope to "ports can be BUILT
+    // on river tiles," not "river capitals are implicit ports."
+    if tile.is_country_capital && coord_has_ocean_neighbor(hex_map, sea_zones, coord) {
         return true;
     }
     false
 }
 
-/// Build a port on a coastal tile. Caller must own the tile's province.
+/// Build a port on a coastal or river tile. Caller must own the tile's province.
+///
+/// Card #488: river tiles are eligible because rivers terminate at the ocean,
+/// so an upstream river-port joins the same port-to-port connectivity network
+/// as a coastal port. Lake-coast tiles remain buildable (historical rule);
+/// they just don't act as connectivity hubs.
 pub fn build_port(
     hex_map: &mut HexMap,
     coord: HexCoord,
@@ -271,8 +325,13 @@ pub fn build_port(
     if tile.infrastructure.has_port {
         return Err(DomainError::illegal("Port already exists"));
     }
-    if !coord_is_sea_adjacent(hex_map, coord) {
-        return Err(DomainError::illegal("Port must be on a coastal tile"));
+    // Placement uses the broader sea-adjacent rule (any sea, including lake
+    // shores) plus rivers. Lake-coast ports stay constructible — they just
+    // won't act as connectivity hubs (see `has_effective_port_filtered`).
+    if !tile_is_port_buildable(hex_map, coord) {
+        return Err(DomainError::illegal(
+            "Port must be on a coastal or river tile",
+        ));
     }
     let tile = hex_map
         .get_tile_mut(coord)
@@ -741,7 +800,7 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
-            "illegal move: Port must be on a coastal tile"
+            "illegal move: Port must be on a coastal or river tile"
         );
     }
 
@@ -779,6 +838,214 @@ mod tests {
             result.unwrap_err().to_string(),
             "illegal move: Port already exists"
         );
+    }
+
+    // ── card #488: river ports ────────────────────────────────
+
+    #[test]
+    fn build_port_succeeds_on_river_tile() {
+        // A grassland tile in the middle of the map with no sea neighbors
+        // but `has_river == true` is a valid port site (Trello #488).
+        let mut map = HexMap::new(10, 10);
+        let coord = HexCoord::new(5, 5);
+        let mut tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        tile.set_river(true);
+        map.set_tile(coord, tile);
+        let provinces = vec![Province::new(
+            ProvinceId(1),
+            "Inland".to_string(),
+            NationId(1),
+            coord,
+            vec![coord],
+            4,
+        )];
+        let result = build_port(&mut map, coord, NationId(1), &provinces, &cfg());
+        assert!(result.is_ok(), "river-port build should succeed");
+        assert!(map.get_tile(coord).unwrap().infrastructure.has_port);
+    }
+
+    #[test]
+    fn build_port_still_rejects_inland_dry_tile() {
+        // Without a river AND without a sea neighbor, the placement rule
+        // still rejects the build.
+        let mut map = HexMap::new(10, 10);
+        let coord = HexCoord::new(5, 5);
+        let provinces = owned_land(&mut map, coord, TerrainType::Grassland);
+        let result = build_port(&mut map, coord, NationId(1), &provinces, &cfg());
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "illegal move: Port must be on a coastal or river tile"
+        );
+    }
+
+    #[test]
+    fn has_effective_port_true_for_river_port() {
+        // A built port on a river tile with no ocean neighbor still acts
+        // as an effective port for connectivity purposes.
+        let mut map = HexMap::new(10, 10);
+        let coord = HexCoord::new(5, 5);
+        let mut tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        tile.set_river(true);
+        tile.infrastructure.has_port = true;
+        map.set_tile(coord, tile);
+        assert!(has_effective_port(&map, &[], coord));
+    }
+
+    #[test]
+    fn build_port_succeeds_on_lake_coast_with_zones() {
+        // F-001 review fix: lake-coast tiles remain legal port build sites
+        // even when sea_zones is populated and the lake is correctly flagged
+        // as `is_lake = true`. The port won't grant connectivity, but it
+        // must still be constructible (historical rule).
+        use crate::map::sea_zones::{SeaZone, SeaZoneId};
+        use std::collections::BTreeSet;
+        let mut map = HexMap::new(10, 10);
+        let land = HexCoord::new(1, 0);
+        let lake_hex = HexCoord::new(2, 0);
+        map.set_tile(
+            land,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
+        );
+        map.set_tile(lake_hex, Tile::new(TerrainType::Sea));
+        let provinces = vec![Province::new(
+            ProvinceId(1),
+            "LakeShore".into(),
+            NationId(1),
+            land,
+            vec![land],
+            4,
+        )];
+        let _zones = vec![SeaZone {
+            id: SeaZoneId(0),
+            name: "Lake".into(),
+            hexes: BTreeSet::from([lake_hex]),
+            is_lake: true,
+            adjacent_zone_ids: Vec::new(),
+            coastal_provinces: Vec::new(),
+        }];
+        // build_port ignores sea_zones at placement (any sea-adjacent OR
+        // river tile qualifies) — this test locks that contract.
+        let result = build_port(&mut map, land, NationId(1), &provinces, &cfg());
+        assert!(result.is_ok(), "lake-coast port must remain buildable");
+        // …but the placed port does NOT grant connectivity (the lake is
+        // not an ocean zone).
+        assert!(
+            !has_effective_port(&map, &_zones, land),
+            "lake-coast port must not act as a sea hub"
+        );
+    }
+
+    #[test]
+    fn build_port_succeeds_on_ocean_coast_with_zones() {
+        // Companion to the lake-coast test: confirm an ocean-zone-adjacent
+        // tile is buildable AND grants connectivity when sea_zones is
+        // populated. This is the production execution path for coastal ports.
+        use crate::map::sea_zones::{SeaZone, SeaZoneId};
+        use std::collections::BTreeSet;
+        let mut map = HexMap::new(10, 10);
+        let land = HexCoord::new(1, 0);
+        let ocean_hex = HexCoord::new(2, 0);
+        map.set_tile(
+            land,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
+        );
+        map.set_tile(ocean_hex, Tile::new(TerrainType::Sea));
+        let provinces = vec![Province::new(
+            ProvinceId(1),
+            "Coast".into(),
+            NationId(1),
+            land,
+            vec![land],
+            4,
+        )];
+        let zones = vec![SeaZone {
+            id: SeaZoneId(0),
+            name: "Ocean".into(),
+            hexes: BTreeSet::from([ocean_hex]),
+            is_lake: false,
+            adjacent_zone_ids: Vec::new(),
+            coastal_provinces: Vec::new(),
+        }];
+        let result = build_port(&mut map, land, NationId(1), &provinces, &cfg());
+        assert!(result.is_ok());
+        assert!(
+            has_effective_port(&map, &zones, land),
+            "ocean-coast port must act as a sea hub"
+        );
+    }
+
+    #[test]
+    fn river_capital_without_built_port_is_not_effective_port() {
+        // F-004 review fix (round 2): the card-#419 implicit-capital-port
+        // rule stays ocean-only. A country capital sitting on a river but
+        // with no built port and no ocean neighbor must NOT count as an
+        // effective port — otherwise we'd grant free connectivity to any
+        // inland nation whose capital happens to touch a river.
+        let mut map = HexMap::new(10, 10);
+        let coord = HexCoord::new(5, 5);
+        let mut tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        tile.is_country_capital = true;
+        tile.set_river(true);
+        // no has_port, no ocean neighbor
+        map.set_tile(coord, tile);
+        assert!(
+            !has_effective_port(&map, &[], coord),
+            "river capital without a built port must not be an effective port"
+        );
+    }
+
+    #[test]
+    fn river_port_connects_remote_province_to_capital() {
+        // A coastal capital province + an inland province whose only "water"
+        // is a river hex. Building ports on both must link them via the
+        // port-to-port BFS — no rail required.
+        let mut map = HexMap::new(20, 20);
+
+        let capital_pid = ProvinceId(1);
+        let target_pid = ProvinceId(2);
+
+        // Capital tile (coastal) + neighboring sea tile.
+        let capital_coord = HexCoord::new(1, 0);
+        let sea_coord = HexCoord::new(2, 0);
+        let mut capital_tile = Tile::with_province(TerrainType::Grassland, capital_pid);
+        capital_tile.is_capital = true;
+        capital_tile.infrastructure.has_port = true;
+        map.set_tile(capital_coord, capital_tile);
+        map.set_tile(sea_coord, Tile::new(TerrainType::Sea));
+
+        // Inland province tile with river + port, far from any sea.
+        let target_coord = HexCoord::new(10, 10);
+        let mut target_tile = Tile::with_province(TerrainType::Grassland, target_pid);
+        target_tile.set_river(true);
+        target_tile.infrastructure.has_port = true;
+        map.set_tile(target_coord, target_tile);
+
+        let provinces = vec![
+            Province::new(
+                capital_pid,
+                "Capital".to_string(),
+                NationId(1),
+                capital_coord,
+                vec![capital_coord],
+                4,
+            ),
+            Province::new(
+                target_pid,
+                "Inland".to_string(),
+                NationId(1),
+                target_coord,
+                vec![target_coord],
+                3,
+            ),
+        ];
+
+        assert!(is_province_connected(
+            &map,
+            capital_coord,
+            target_pid,
+            &provinces
+        ));
     }
 
     // ── is_province_connected ─────────────────────────────────
