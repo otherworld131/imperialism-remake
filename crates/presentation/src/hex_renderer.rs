@@ -11,7 +11,6 @@ use crate::colors;
 /// Size of hex tiles in pixels (outer radius).
 pub const HEX_SIZE: f32 = 24.0;
 const SQRT_3: f32 = 1.732_050_8;
-const HEX_ROTATION: f32 = -std::f32::consts::FRAC_PI_6;
 
 #[derive(Component)]
 pub struct HexTileVisual {
@@ -88,8 +87,9 @@ pub fn render_hex_map(
     game: Res<GameStateResource>,
 ) {
     let fill_mesh = meshes.add(pointy_hex_mesh(HEX_SIZE + 0.45));
-    let hover_mesh = meshes.add(RegularPolygon::new(HEX_SIZE * 1.03, 6).to_ring(3.0));
-    let selection_mesh = meshes.add(RegularPolygon::new(HEX_SIZE * 1.08, 6).to_ring(3.8));
+    let hover_mesh = meshes.add(pointy_hex_ring_mesh(HEX_SIZE * 1.08, HEX_SIZE * 0.96));
+    let selection_mesh = meshes.add(pointy_hex_ring_mesh(HEX_SIZE * 1.13, HEX_SIZE * 0.98));
+    let capital_mesh = meshes.add(pointy_hex_ring_mesh(HEX_SIZE * 0.88, HEX_SIZE * 0.67));
 
     let hover_material = materials.add(Color::srgba(1.0, 0.94, 0.62, 0.85));
     let selection_material = materials.add(Color::srgba(1.0, 1.0, 1.0, 0.95));
@@ -147,10 +147,9 @@ pub fn render_hex_map(
                 Transform::from_xyz(pos.x, pos.y + 1.0, 2.0),
             ));
             commands.spawn((
-                Mesh2d(hover_mesh.clone()),
+                Mesh2d(capital_mesh.clone()),
                 MeshMaterial2d(capital_material.clone()),
-                Transform::from_xyz(pos.x, pos.y, 1.0)
-                    .with_rotation(Quat::from_rotation_z(HEX_ROTATION)),
+                Transform::from_xyz(pos.x, pos.y, 1.0),
             ));
         } else if let Some(label) = resource_label(tile.resource_deposit()) {
             commands.spawn((
@@ -203,8 +202,7 @@ pub fn render_hex_map(
     commands.spawn((
         Mesh2d(hover_mesh),
         MeshMaterial2d(hover_material),
-        Transform::from_xyz(center.x, center.y, 5.0)
-            .with_rotation(Quat::from_rotation_z(HEX_ROTATION)),
+        Transform::from_xyz(center.x, center.y, 5.0),
         Visibility::Hidden,
         HoverMarker,
     ));
@@ -212,8 +210,7 @@ pub fn render_hex_map(
     commands.spawn((
         Mesh2d(selection_mesh),
         MeshMaterial2d(selection_material),
-        Transform::from_xyz(center.x, center.y, 6.0)
-            .with_rotation(Quat::from_rotation_z(HEX_ROTATION)),
+        Transform::from_xyz(center.x, center.y, 6.0),
         Visibility::Hidden,
         SelectionMarker,
     ));
@@ -317,7 +314,7 @@ fn pointy_hex_mesh(radius: f32) -> Mesh {
     let mut uvs = vec![[0.5, 0.5]];
 
     for i in 0..6 {
-        let angle = (60.0 * i as f32 + 30.0).to_radians();
+        let angle = pointy_hex_angle(i);
         let x = radius * angle.cos();
         let y = radius * angle.sin();
         positions.push([x, y, 0.0]);
@@ -339,6 +336,50 @@ fn pointy_hex_mesh(radius: f32) -> Mesh {
     .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
     .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
     .with_inserted_indices(Indices::U32(indices))
+}
+
+fn pointy_hex_ring_mesh(outer_radius: f32, inner_radius: f32) -> Mesh {
+    let mut positions = Vec::with_capacity(12);
+    let mut normals = Vec::with_capacity(12);
+    let mut uvs = Vec::with_capacity(12);
+
+    for radius in [outer_radius, inner_radius] {
+        for i in 0..6 {
+            let angle = pointy_hex_angle(i);
+            let x = radius * angle.cos();
+            let y = radius * angle.sin();
+            positions.push([x, y, 0.0]);
+            normals.push([0.0, 0.0, 1.0]);
+            uvs.push([
+                (x / outer_radius + 1.0) * 0.5,
+                (y / outer_radius + 1.0) * 0.5,
+            ]);
+        }
+    }
+
+    let mut indices = Vec::with_capacity(36);
+    for i in 0..6 {
+        let next = if i == 5 { 0 } else { i + 1 };
+        let outer_a = i as u32;
+        let outer_b = next as u32;
+        let inner_a = (i + 6) as u32;
+        let inner_b = (next + 6) as u32;
+        indices.extend_from_slice(&[outer_a, inner_a, outer_b]);
+        indices.extend_from_slice(&[outer_b, inner_a, inner_b]);
+    }
+
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_indices(Indices::U32(indices))
+}
+
+fn pointy_hex_angle(index: usize) -> f32 {
+    (60.0 * index as f32 + 30.0).to_radians()
 }
 
 fn resource_label(resource: Option<application::ResourceType>) -> Option<String> {
