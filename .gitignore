@@ -23,6 +23,9 @@ test_report.html
 # Screenshots
 *.png
 *.png:Zone.Identifier
+!assets/
+!assets/civilians/
+!assets/civilians/*.png
 
 # Test game output
 test_games/

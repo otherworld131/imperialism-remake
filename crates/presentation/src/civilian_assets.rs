@@ -3,122 +3,95 @@ use bevy::prelude::*;
 
 use crate::hex_renderer::{GameStateResource, hex_to_pixel};
 
-const BADGE_RADIUS: f32 = 10.0;
+const MAP_SPRITE_SIZE: f32 = 30.0;
+const HUD_SPRITE_SIZE: f32 = 34.0;
 
 #[derive(Component)]
-pub struct CivilianBadgeMarker;
+pub struct CivilianSpriteMarker;
 
 #[derive(Clone, Copy)]
 pub struct CivilianVisual {
     name: &'static str,
-    code: &'static str,
-    fill: Color,
-    ink: Color,
+    asset: &'static str,
 }
 
 const CIVILIAN_VISUALS: [CivilianVisual; 7] = [
     CivilianVisual {
         name: "Farmer",
-        code: "FA",
-        fill: Color::srgb(0.54, 0.68, 0.24),
-        ink: Color::srgb(0.08, 0.10, 0.04),
+        asset: "civilians/farmer.png",
     },
     CivilianVisual {
         name: "Rancher",
-        code: "RA",
-        fill: Color::srgb(0.72, 0.48, 0.22),
-        ink: Color::srgb(0.10, 0.06, 0.03),
+        asset: "civilians/rancher.png",
     },
     CivilianVisual {
         name: "Forester",
-        code: "FO",
-        fill: Color::srgb(0.12, 0.48, 0.26),
-        ink: Color::srgb(0.86, 0.96, 0.78),
+        asset: "civilians/forester.png",
     },
     CivilianVisual {
         name: "Miner",
-        code: "MI",
-        fill: Color::srgb(0.44, 0.45, 0.43),
-        ink: Color::srgb(0.96, 0.92, 0.76),
+        asset: "civilians/miner.png",
     },
     CivilianVisual {
         name: "Prospector",
-        code: "PR",
-        fill: Color::srgb(0.76, 0.62, 0.24),
-        ink: Color::srgb(0.12, 0.09, 0.03),
+        asset: "civilians/prospector.png",
     },
     CivilianVisual {
         name: "Engineer",
-        code: "EN",
-        fill: Color::srgb(0.38, 0.48, 0.58),
-        ink: Color::srgb(0.92, 0.96, 1.00),
+        asset: "civilians/engineer.png",
     },
     CivilianVisual {
         name: "Driller",
-        code: "DR",
-        fill: Color::srgb(0.28, 0.24, 0.20),
-        ink: Color::srgb(0.98, 0.80, 0.42),
+        asset: "civilians/driller.png",
     },
 ];
 
-pub fn render_deployed_civilians(
+pub fn render_civilians(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
+    asset_server: Res<AssetServer>,
     game: Res<GameStateResource>,
 ) {
-    let badge_mesh = meshes.add(Circle::new(BADGE_RADIUS));
-    let ring_mesh = meshes.add(Circle::new(BADGE_RADIUS + 2.0).to_ring(2.0));
-    let ring_material = materials.add(Color::srgba(0.04, 0.04, 0.035, 0.95));
-
     for nation in &game.0.world.nations {
-        for civilian in &nation.military.civilians {
-            let Some(coord) = civilian.position else {
+        for (index, civilian) in nation.military.civilians.iter().enumerate() {
+            let Some(base_coord) = civilian.position.or_else(|| {
+                if nation.id == game.0.human_player_nation {
+                    game.0
+                        .get_province(nation.capital_province_id)
+                        .map(|province| province.capital_tile)
+                } else {
+                    None
+                }
+            }) else {
                 continue;
             };
-            let visual = visual_for_type(civilian.civilian_type);
-            let pos = hex_to_pixel(coord.q, coord.r);
-            let fill_material = materials.add(visual.fill);
 
+            let visual = visual_for_type(civilian.civilian_type);
+            let pos = hex_to_pixel(base_coord.q, base_coord.r) + undeployed_offset(index);
             commands.spawn((
-                Mesh2d(ring_mesh.clone()),
-                MeshMaterial2d(ring_material.clone()),
-                Transform::from_xyz(pos.x + 7.0, pos.y + 7.0, 4.0),
-                CivilianBadgeMarker,
-            ));
-            commands.spawn((
-                Mesh2d(badge_mesh.clone()),
-                MeshMaterial2d(fill_material),
-                Transform::from_xyz(pos.x + 7.0, pos.y + 7.0, 4.1),
-                CivilianBadgeMarker,
-            ));
-            commands.spawn((
-                Text2d::new(visual.code),
-                TextFont {
-                    font_size: 8.5,
+                Sprite {
+                    image: asset_server.load(visual.asset),
+                    custom_size: Some(Vec2::splat(MAP_SPRITE_SIZE)),
                     ..default()
                 },
-                TextColor(visual.ink),
-                TextLayout::new_with_justify(Justify::Center),
-                Transform::from_xyz(pos.x + 7.0, pos.y + 6.2, 4.3),
-                CivilianBadgeMarker,
+                Transform::from_xyz(pos.x, pos.y - 2.0, 4.2),
+                CivilianSpriteMarker,
             ));
         }
     }
 }
 
-pub fn spawn_civilian_asset_strip(parent: &mut ChildSpawnerCommands) {
+pub fn spawn_civilian_asset_strip(parent: &mut ChildSpawnerCommands, asset_server: &AssetServer) {
     parent
         .spawn((
             Node {
                 width: Val::Px(330.0),
-                height: Val::Px(48.0),
+                height: Val::Px(58.0),
                 position_type: PositionType::Absolute,
                 left: Val::Px(18.0),
                 top: Val::Px(228.0),
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
-                column_gap: Val::Px(7.0),
+                column_gap: Val::Px(8.0),
                 padding: UiRect::horizontal(Val::Px(10.0)),
                 ..default()
             },
@@ -135,29 +108,14 @@ pub fn spawn_civilian_asset_strip(parent: &mut ChildSpawnerCommands) {
             ));
 
             for visual in CIVILIAN_VISUALS {
-                strip
-                    .spawn((
-                        Node {
-                            width: Val::Px(26.0),
-                            height: Val::Px(26.0),
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            border: UiRect::all(Val::Px(2.0)),
-                            ..default()
-                        },
-                        BorderColor::all(Color::srgba(0.04, 0.04, 0.035, 0.95)),
-                        BackgroundColor(visual.fill),
-                    ))
-                    .with_children(|badge| {
-                        badge.spawn((
-                            Text::new(visual.code),
-                            TextFont {
-                                font_size: 10.0,
-                                ..default()
-                            },
-                            TextColor(visual.ink),
-                        ));
-                    });
+                strip.spawn((
+                    ImageNode::new(asset_server.load(visual.asset)),
+                    Node {
+                        width: Val::Px(HUD_SPRITE_SIZE),
+                        height: Val::Px(HUD_SPRITE_SIZE),
+                        ..default()
+                    },
+                ));
             }
         });
 }
@@ -177,4 +135,17 @@ fn visual_for_type(civilian_type: CivilianType) -> CivilianVisual {
         .copied()
         .find(|visual| visual.name == name)
         .expect("all civilian types have a presentation visual")
+}
+
+fn undeployed_offset(index: usize) -> Vec2 {
+    const OFFSETS: [Vec2; 7] = [
+        Vec2::new(-18.0, -15.0),
+        Vec2::new(0.0, -17.0),
+        Vec2::new(18.0, -15.0),
+        Vec2::new(-10.0, 5.0),
+        Vec2::new(10.0, 5.0),
+        Vec2::new(-23.0, 6.0),
+        Vec2::new(23.0, 6.0),
+    ];
+    OFFSETS[index % OFFSETS.len()]
 }

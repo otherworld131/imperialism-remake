@@ -40,7 +40,7 @@ impl Default for TurnLog {
     }
 }
 
-pub fn setup_hud(mut commands: Commands) {
+pub fn setup_hud(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands
         .spawn((Node {
             width: Val::Percent(100.0),
@@ -104,7 +104,7 @@ pub fn setup_hud(mut commands: Commands) {
                 ));
             });
 
-            civilian_assets::spawn_civilian_asset_strip(root);
+            civilian_assets::spawn_civilian_asset_strip(root, &asset_server);
 
             root.spawn((
                 Node {

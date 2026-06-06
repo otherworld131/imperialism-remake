@@ -37,7 +37,7 @@ pub fn run_game(map_key: &str, difficulty: Difficulty, nation_index: usize) {
             Startup,
             (
                 hex_renderer::render_hex_map,
-                civilian_assets::render_deployed_civilians,
+                civilian_assets::render_civilians,
                 camera::setup_camera,
                 ui::setup_hud,
             )
