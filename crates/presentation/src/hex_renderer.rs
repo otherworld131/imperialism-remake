@@ -1,5 +1,9 @@
 use application::{GameState, HexCoord, ProvinceId, TerrainType};
-use bevy::prelude::*;
+use bevy::{
+    asset::RenderAssetUsages,
+    mesh::{Indices, PrimitiveTopology},
+    prelude::*,
+};
 use std::collections::HashMap;
 
 use crate::colors;
@@ -83,7 +87,7 @@ pub fn render_hex_map(
     mut materials: ResMut<Assets<ColorMaterial>>,
     game: Res<GameStateResource>,
 ) {
-    let fill_mesh = meshes.add(RegularPolygon::new(HEX_SIZE * 0.97, 6));
+    let fill_mesh = meshes.add(pointy_hex_mesh(HEX_SIZE + 0.45));
     let hover_mesh = meshes.add(RegularPolygon::new(HEX_SIZE * 1.03, 6).to_ring(3.0));
     let selection_mesh = meshes.add(RegularPolygon::new(HEX_SIZE * 1.08, 6).to_ring(3.8));
 
@@ -124,8 +128,7 @@ pub fn render_hex_map(
         commands.spawn((
             Mesh2d(fill_mesh.clone()),
             MeshMaterial2d(political_material.clone()),
-            Transform::from_xyz(pos.x, pos.y, 0.0)
-                .with_rotation(Quat::from_rotation_z(HEX_ROTATION)),
+            Transform::from_xyz(pos.x, pos.y, 0.0),
             HexTileVisual {
                 terrain_material,
                 political_material,
@@ -306,6 +309,36 @@ fn province_owner_materials(
         }
     }
     materials_by_province
+}
+
+fn pointy_hex_mesh(radius: f32) -> Mesh {
+    let mut positions = vec![[0.0, 0.0, 0.0]];
+    let mut normals = vec![[0.0, 0.0, 1.0]];
+    let mut uvs = vec![[0.5, 0.5]];
+
+    for i in 0..6 {
+        let angle = (60.0 * i as f32 + 30.0).to_radians();
+        let x = radius * angle.cos();
+        let y = radius * angle.sin();
+        positions.push([x, y, 0.0]);
+        normals.push([0.0, 0.0, 1.0]);
+        uvs.push([(x / radius + 1.0) * 0.5, (y / radius + 1.0) * 0.5]);
+    }
+
+    let mut indices = Vec::with_capacity(18);
+    for i in 1..=6 {
+        let next = if i == 6 { 1 } else { i + 1 };
+        indices.extend_from_slice(&[0, i, next]);
+    }
+
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_indices(Indices::U32(indices))
 }
 
 fn resource_label(resource: Option<application::ResourceType>) -> Option<String> {
