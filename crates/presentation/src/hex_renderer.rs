@@ -7,7 +7,7 @@ use crate::colors;
 /// Size of hex tiles in pixels (outer radius).
 pub const HEX_SIZE: f32 = 24.0;
 const SQRT_3: f32 = 1.732_050_8;
-const HEX_ROTATION: f32 = std::f32::consts::FRAC_PI_6;
+const HEX_ROTATION: f32 = -std::f32::consts::FRAC_PI_6;
 
 #[derive(Component)]
 pub struct HexTileVisual {
