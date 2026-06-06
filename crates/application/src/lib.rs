@@ -3,6 +3,7 @@
 pub mod commands;
 pub mod queries;
 
+pub use domain::economy::CivilianType;
 pub use domain::game_state::{GameState, new_game, new_game_with_data};
 pub use domain::hex::HexCoord;
 pub use domain::nation::NationColor;

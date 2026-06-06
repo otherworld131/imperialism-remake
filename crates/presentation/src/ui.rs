@@ -3,6 +3,7 @@ use bevy::prelude::*;
 
 use crate::{
     camera::GameCamera,
+    civilian_assets,
     hex_renderer::{
         GameStateResource, HEX_SIZE, HoveredTile, MapModeState, SelectedTile, hex_to_pixel,
     },
@@ -102,6 +103,8 @@ pub fn setup_hud(mut commands: Commands) {
                     InspectorDisplay,
                 ));
             });
+
+            civilian_assets::spawn_civilian_asset_strip(root);
 
             root.spawn((
                 Node {

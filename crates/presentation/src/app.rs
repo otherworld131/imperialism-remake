@@ -2,6 +2,7 @@ use application::{Difficulty, new_game};
 use bevy::prelude::*;
 
 use crate::camera;
+use crate::civilian_assets;
 use crate::hex_renderer::{self, GameStateResource};
 use crate::ui;
 
@@ -36,6 +37,7 @@ pub fn run_game(map_key: &str, difficulty: Difficulty, nation_index: usize) {
             Startup,
             (
                 hex_renderer::render_hex_map,
+                civilian_assets::render_deployed_civilians,
                 camera::setup_camera,
                 ui::setup_hud,
             )
