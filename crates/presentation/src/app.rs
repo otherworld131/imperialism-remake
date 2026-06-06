@@ -22,26 +22,36 @@ pub fn run_game(map_key: &str, difficulty: Difficulty, nation_index: usize) {
             primary_window: Some(Window {
                 title,
                 resolution: bevy::window::WindowResolution::new(1280, 720),
+                present_mode: bevy::window::PresentMode::AutoNoVsync,
                 ..default()
             }),
             ..default()
         }))
         .insert_resource(GameStateResource(game))
+        .insert_resource(hex_renderer::SelectedTile::default())
+        .insert_resource(hex_renderer::HoveredTile::default())
+        .insert_resource(hex_renderer::MapModeState::default())
+        .insert_resource(ui::TurnLog::default())
         .add_systems(
             Startup,
             (
-                camera::setup_camera,
                 hex_renderer::render_hex_map,
+                camera::setup_camera,
                 ui::setup_hud,
-            ),
+            )
+                .chain(),
         )
         .add_systems(
             Update,
             (
                 camera::camera_movement,
-                ui::update_hud,
+                hex_renderer::handle_map_mode_input,
+                hex_renderer::update_tile_materials,
+                hex_renderer::update_tile_highlights,
                 ui::handle_tile_hover,
+                ui::handle_tile_selection,
                 ui::handle_input,
+                ui::update_hud,
             ),
         )
         .run();
