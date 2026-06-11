@@ -557,7 +557,10 @@ mod tests {
                 province.tiles.iter().copied().find(|coord| {
                     let tile = baseline.world.hex_map.get_tile(*coord).unwrap();
                     *coord != old_capital
-                        && !matches!(tile.terrain(), crate::types::TerrainType::Sea | crate::types::TerrainType::Mountain)
+                        && !matches!(
+                            tile.terrain(),
+                            crate::types::TerrainType::Sea | crate::types::TerrainType::Mountain
+                        )
                 })
             })
             .expect("expected a valid scenario capital override tile");

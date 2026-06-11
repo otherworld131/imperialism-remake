@@ -313,7 +313,7 @@ fn collect_domain_references(dir: &std::path::Path, results: &mut Vec<(String, S
 fn presentation_does_not_import_domain_directly() {
     let refs = find_domain_references("crates/presentation/src");
 
-    for (file, line) in &refs {
+    if let Some((file, line)) = refs.first() {
         panic!(
             "Presentation crate must not reference domain directly. \
              Use application:: re-exports instead. \
@@ -358,7 +358,7 @@ fn find_unwrap_calls(dir: &str) -> Vec<(String, String)> {
 fn presentation_has_no_production_unwraps() {
     let hits = find_unwrap_calls("crates/presentation/src");
 
-    for (file, line) in &hits {
+    if let Some((file, line)) = hits.first() {
         panic!(
             "Presentation crate must not use .unwrap() in production code. \
              Use typed errors or let-else instead. \

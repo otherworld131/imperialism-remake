@@ -1227,12 +1227,7 @@ mod tests {
         let nid = game.human_player_nation;
         let cost = domain::types::Money::dollars(game.game_data.game_config.freight_car_cost);
         let before_treasury = game.get_nation(nid).unwrap().economy.treasury;
-        let before_cars = game
-            .get_nation(nid)
-            .unwrap()
-            .economy
-            .transport
-            .freight_cars;
+        let before_cars = game.get_nation(nid).unwrap().economy.transport.freight_cars;
 
         let result = apply_command(
             &mut game,
@@ -1251,12 +1246,7 @@ mod tests {
         let nid = game.human_player_nation;
         game.get_nation_mut(nid).unwrap().economy.treasury = domain::types::Money::ZERO;
         let before_treasury = game.get_nation(nid).unwrap().economy.treasury;
-        let before_cars = game
-            .get_nation(nid)
-            .unwrap()
-            .economy
-            .transport
-            .freight_cars;
+        let before_cars = game.get_nation(nid).unwrap().economy.transport.freight_cars;
 
         let result = apply_command(
             &mut game,

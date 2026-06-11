@@ -1556,10 +1556,11 @@ fn new_game_inner(
         targets.extend_from_slice(&cap_tile.neighbors());
         for coord in targets {
             if let Some(tile) = game_state.world.hex_map.get_tile_mut(coord) {
-                if let Some(res) = tile.resource_deposit() {
-                    if res.requires_prospecting() && !tile.is_prospected() {
-                        tile.reveal_deposit(res);
-                    }
+                if let Some(res) = tile.resource_deposit()
+                    && res.requires_prospecting()
+                    && !tile.is_prospected()
+                {
+                    tile.reveal_deposit(res);
                 }
                 if tile.improvement_level() == 0 {
                     tile.improve();
@@ -1677,7 +1678,11 @@ fn apply_generated_capital_override(
     }
 
     setup.capital_province = province_id;
-    if let Some(pos) = setup.province_ids.iter().position(|&pid| pid == province_id) {
+    if let Some(pos) = setup
+        .province_ids
+        .iter()
+        .position(|&pid| pid == province_id)
+    {
         setup.province_ids.swap(0, pos);
     }
 }
@@ -2786,7 +2791,10 @@ mod tests {
             for &coord in &province.tiles {
                 let tile = baseline.world.hex_map.get_tile(coord).unwrap();
                 if coord == old_capital_tile
-                    || matches!(tile.terrain(), crate::types::TerrainType::Sea | crate::types::TerrainType::Mountain)
+                    || matches!(
+                        tile.terrain(),
+                        crate::types::TerrainType::Sea | crate::types::TerrainType::Mountain
+                    )
                 {
                     continue;
                 }
@@ -2797,7 +2805,8 @@ mod tests {
             }
         }
 
-        let override_coord = override_coord.expect("expected a valid non-capital tile for the player");
+        let override_coord =
+            override_coord.expect("expected a valid non-capital tile for the player");
         let previous_province_capital = previous_province_capital.unwrap();
         let override_province_id = override_province_id.unwrap();
 

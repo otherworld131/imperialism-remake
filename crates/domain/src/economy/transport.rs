@@ -336,13 +336,16 @@ pub fn compute_demand_forecast(
     demand.into_iter().collect()
 }
 
+/// A production projection split into (local/free, remote/freight-gated) deliveries.
+pub type SplitDeliveries<T> = (Vec<(T, u32)>, Vec<(T, u32)>);
+
 /// Project village/town auto-production, split into:
 /// - local/free delivery from the capital province
 /// - remote/freight-gated delivery from all other producing provinces
 pub fn project_town_outputs(
     game: &GameState,
     nation_id: NationId,
-) -> (Vec<(FreightTarget, u32)>, Vec<(FreightTarget, u32)>) {
+) -> SplitDeliveries<FreightTarget> {
     let Some(nation) = game.get_nation(nation_id) else {
         return (Vec::new(), Vec::new());
     };
@@ -512,7 +515,7 @@ pub fn allocate_town_output_freight(
 pub fn current_collectable_resources(
     game: &GameState,
     nation_id: NationId,
-) -> (Vec<(ResourceType, u32)>, Vec<(ResourceType, u32)>) {
+) -> SplitDeliveries<ResourceType> {
     let Some(_nation) = game.get_nation(nation_id) else {
         return (Vec::new(), Vec::new());
     };

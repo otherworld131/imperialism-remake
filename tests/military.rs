@@ -865,7 +865,7 @@ fn battle_outcome_siege_artillery_reduces_fort_bonus() {
         0
     };
     assert!(
-        with_siege_win || ws_per_unit <= ns_per_unit || (!no_siege_win && with_siege_win),
+        with_siege_win || ws_per_unit <= ns_per_unit,
         "Siege artillery should improve attacker outcome: no_siege_win={no_siege_win}, with_siege_win={with_siege_win}, ns_per_unit={ns_per_unit}, ws_per_unit={ws_per_unit}"
     );
 }

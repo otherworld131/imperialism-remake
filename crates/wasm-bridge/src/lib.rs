@@ -25,7 +25,9 @@ use domain::military::combat::BattleResult;
 use domain::military::naval::NavalBattleResult;
 use domain::military::ships::{Ship, ShipCategory, ShipType};
 use domain::military::units::{ArmyUnit, ArmyUnitType};
-use domain::scenarios::{list_scenarios, new_scenario_game_with_data, new_scenario_game_with_data_and_capital_override};
+use domain::scenarios::{
+    list_scenarios, new_scenario_game_with_data, new_scenario_game_with_data_and_capital_override,
+};
 use domain::turn::process_turn;
 use domain::types::*;
 use domain_snapshot::game_state::GameState as SnapshotGameState;
@@ -3666,18 +3668,19 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
     // compute_demand_forecast so it disappears cleanly if food_per_worker is
     // disabled in the game config.
     let total_workers = nation.economy.labor.total_workers();
-    let food_requirement_json = if total_workers > 0 && game.game_data.game_config.food_per_worker > 0 {
-        let (grain_need, fruit_need, meat_need) =
-            domain::economy::labor::worker_food_demand(total_workers);
-        serde_json::json!({
-            "workers": total_workers,
-            "grain": grain_need,
-            "fruit": fruit_need,
-            "meat": meat_need,
-        })
-    } else {
-        serde_json::Value::Null
-    };
+    let food_requirement_json =
+        if total_workers > 0 && game.game_data.game_config.food_per_worker > 0 {
+            let (grain_need, fruit_need, meat_need) =
+                domain::economy::labor::worker_food_demand(total_workers);
+            serde_json::json!({
+                "workers": total_workers,
+                "grain": grain_need,
+                "fruit": fruit_need,
+                "meat": meat_need,
+            })
+        } else {
+            serde_json::Value::Null
+        };
 
     serde_json::json!({
         "freight_cars": transport.freight_cars,
@@ -5956,9 +5959,9 @@ pub fn wasm_get_ledger_data(game_json: &str, nation_id: u32) -> String {
         .map(|(gt, qty)| serde_json::json!({"name": format!("{:?}", gt), "quantity": qty}))
         .collect();
 
-    // Military — army by type
-    let mut army_counts: std::collections::HashMap<String, (u32, u32)> =
-        std::collections::HashMap::new();
+    // Military — army by type (BTreeMap: deterministic output order)
+    let mut army_counts: std::collections::BTreeMap<String, (u32, u32)> =
+        std::collections::BTreeMap::new();
     for unit in &nation.military.army {
         let type_name = format!("{:?}", unit.unit_type);
         let fp = unit.unit_type.stats().firepower;
@@ -5974,9 +5977,9 @@ pub fn wasm_get_ledger_data(game_json: &str, nation_id: u32) -> String {
         .collect();
     let total_army_fp: u32 = army_counts.values().map(|(_, fp)| fp).sum();
 
-    // Warships by type
-    let mut warship_counts: std::collections::HashMap<String, u32> =
-        std::collections::HashMap::new();
+    // Warships by type (BTreeMap: deterministic output order)
+    let mut warship_counts: std::collections::BTreeMap<String, u32> =
+        std::collections::BTreeMap::new();
     for ship in &nation.military.warships {
         let type_name = format!("{:?}", ship.ship_type);
         *warship_counts.entry(type_name).or_insert(0) += 1;

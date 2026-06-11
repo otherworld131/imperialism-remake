@@ -282,9 +282,7 @@ pub fn has_effective_port_filtered(
     // Card #488: a built port acts as an effective port if the tile has a
     // river OR an ocean neighbor (rivers discharge to the ocean, so an
     // upstream river port joins the same maritime network).
-    if tile.infrastructure.has_port
-        && tile_is_effective_port_anchor(hex_map, sea_zones, coord)
-    {
+    if tile.infrastructure.has_port && tile_is_effective_port_anchor(hex_map, sea_zones, coord) {
         return true;
     }
     // Card #419 — implicit capital ports remain ocean-only on purpose. A

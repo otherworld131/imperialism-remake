@@ -1423,10 +1423,7 @@ mod tests {
         );
         // Level-1 Coal yield = 2; price at base $75.
         assert_eq!(coal_offer.unwrap().quantity, 2);
-        assert_eq!(
-            coal_offer.unwrap().price_per_unit,
-            r_base()
-        );
+        assert_eq!(coal_offer.unwrap().price_per_unit, r_base());
     }
 
     #[test]
@@ -1492,9 +1489,16 @@ mod tests {
     #[test]
     fn withhold_chance_zero_never_withholds() {
         let (nations, provinces, hex_map) = make_minor_with_resources();
-        let offers_normal = generate_minor_nation_offers(&nations, &provinces, &hex_map, &test_market());
-        let offers_seeded =
-            generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 0, 42, &test_market());
+        let offers_normal =
+            generate_minor_nation_offers(&nations, &provinces, &hex_map, &test_market());
+        let offers_seeded = generate_minor_nation_offers_with_seed(
+            &nations,
+            &provinces,
+            &hex_map,
+            0,
+            42,
+            &test_market(),
+        );
         // withhold_chance=0 must produce identical count as the unseeded version
         assert_eq!(offers_seeded.len(), offers_normal.len());
         assert_eq!(offers_seeded.len(), 2); // Timber + Cotton
@@ -1507,7 +1511,8 @@ mod tests {
         // everything. We assert ≥ 2 distinct counts appear, which is the
         // load-bearing claim (per-roll, not always-on or always-off).
         let (nations, provinces, hex_map) = make_minor_with_resources();
-        let offers_full = generate_minor_nation_offers(&nations, &provinces, &hex_map, &test_market());
+        let offers_full =
+            generate_minor_nation_offers(&nations, &provinces, &hex_map, &test_market());
         assert_eq!(offers_full.len(), 2, "setup: minor must have 2 resources");
         let mut saw = [false; 3]; // counts 0, 1, 2
         for seed in 1..200u64 {
@@ -1562,8 +1567,22 @@ mod tests {
     #[test]
     fn seeded_offers_are_deterministic() {
         let (nations, provinces, hex_map) = make_minor_with_resources();
-        let a = generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 50, 12345, &test_market());
-        let b = generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 50, 12345, &test_market());
+        let a = generate_minor_nation_offers_with_seed(
+            &nations,
+            &provinces,
+            &hex_map,
+            50,
+            12345,
+            &test_market(),
+        );
+        let b = generate_minor_nation_offers_with_seed(
+            &nations,
+            &provinces,
+            &hex_map,
+            50,
+            12345,
+            &test_market(),
+        );
         assert_eq!(a.len(), b.len());
         for (x, y) in a.iter().zip(b.iter()) {
             assert_eq!(x.seller, y.seller);

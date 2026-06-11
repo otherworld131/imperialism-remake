@@ -52,7 +52,6 @@ const ALL_GOODS: [GoodsType; 4] = [
     GoodsType::Arms,
 ];
 
-
 /// A single turn's market observation for one commodity.
 #[derive(Debug, Clone)]
 pub struct MarketTick {
@@ -411,9 +410,18 @@ mod tests {
         let r_base = Money::dollars(cfg().market_resource_base_price);
         let m_base = Money::dollars(cfg().market_material_base_price);
         let g_base = Money::dollars(cfg().market_goods_base_price);
-        assert_eq!(ms.current_price(Commodity::Resource(ResourceType::Coal)), r_base);
-        assert_eq!(ms.current_price(Commodity::Resource(ResourceType::Gems)), r_base);
-        assert_eq!(ms.current_price(Commodity::Material(MaterialType::Steel)), m_base);
+        assert_eq!(
+            ms.current_price(Commodity::Resource(ResourceType::Coal)),
+            r_base
+        );
+        assert_eq!(
+            ms.current_price(Commodity::Resource(ResourceType::Gems)),
+            r_base
+        );
+        assert_eq!(
+            ms.current_price(Commodity::Material(MaterialType::Steel)),
+            m_base
+        );
         assert_eq!(ms.current_price(Commodity::Goods(GoodsType::Arms)), g_base);
     }
 

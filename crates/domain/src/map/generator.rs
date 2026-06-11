@@ -309,7 +309,13 @@ pub fn generate_map_with_config(map_key: &str, cfg: &MapGenConfig) -> GeneratedM
 
     // Step 3b: Add rivers after terrain is stable but before nations/provinces exist.
     let ocean_sea_tiles = ocean_sea_tiles(&hex_map);
-    generate_rivers(&mut hex_map, &land_mask, &ocean_sea_tiles, &mut rng, &cfg.terrain);
+    generate_rivers(
+        &mut hex_map,
+        &land_mask,
+        &ocean_sea_tiles,
+        &mut rng,
+        &cfg.terrain,
+    );
 
     // Step 4: Place nation centers (terrain-aware — prefers food-rich, coastal tiles)
     let total_nations = num_gp + num_mn;
@@ -713,7 +719,10 @@ fn find_river_path(
             if visited.contains(&neighbor) || used_river_tiles.contains(&neighbor) {
                 continue;
             }
-            if used_river_tiles.iter().any(|used| used.distance(neighbor) == 1) {
+            if used_river_tiles
+                .iter()
+                .any(|used| used.distance(neighbor) == 1)
+            {
                 continue;
             }
             let Some(next_tile) = hex_map.get_tile(neighbor) else {
@@ -722,7 +731,10 @@ fn find_river_path(
             if !river_neighbor_allowed(current_tile.terrain(), next_tile.terrain()) {
                 continue;
             }
-            if path.iter().any(|coord| *coord != current && coord.distance(neighbor) == 1) {
+            if path
+                .iter()
+                .any(|coord| *coord != current && coord.distance(neighbor) == 1)
+            {
                 continue;
             }
 
@@ -746,8 +758,11 @@ fn find_river_path(
         false
     }
 
-    let touches_used_river =
-        |coord: HexCoord| used_river_tiles.iter().any(|used| used.distance(coord) == 1);
+    let touches_used_river = |coord: HexCoord| {
+        used_river_tiles
+            .iter()
+            .any(|used| used.distance(coord) == 1)
+    };
     let source_tile = hex_map.get_tile(source)?;
     if source_tile.terrain() != TerrainType::Mountain
         || used_river_tiles.contains(&source)
@@ -816,8 +831,7 @@ fn generate_rivers(
         return;
     }
 
-    let target_rivers =
-        ((eligible_sources.len() * mix.river_source_percent as usize) + 50) / 100;
+    let target_rivers = ((eligible_sources.len() * mix.river_source_percent as usize) + 50) / 100;
     if target_rivers == 0 {
         return;
     }
@@ -2101,7 +2115,10 @@ mod tests {
                 }
             }
 
-            assert!(component.len() >= 3, "river component should span multiple hexes");
+            assert!(
+                component.len() >= 3,
+                "river component should span multiple hexes"
+            );
 
             let mut endpoints = Vec::new();
             for &coord in &component {
@@ -2120,7 +2137,10 @@ mod tests {
                     .iter()
                     .filter(|neighbor| component.contains(neighbor))
                     .count();
-                assert!(degree <= 2, "river tile {coord} branched with degree {degree}");
+                assert!(
+                    degree <= 2,
+                    "river tile {coord} branched with degree {degree}"
+                );
                 if degree <= 1 {
                     endpoints.push(coord);
                 }
@@ -2159,7 +2179,10 @@ mod tests {
                 endpoints.iter().any(|coord| {
                     result.hex_map.get_tile(*coord).is_some_and(|tile| {
                         tile.terrain() == TerrainType::Grassland
-                            && coord.neighbors().iter().any(|neighbor| ocean.contains(neighbor))
+                            && coord
+                                .neighbors()
+                                .iter()
+                                .any(|neighbor| ocean.contains(neighbor))
                     })
                 }),
                 "river component should end on a coastal grassland hex"

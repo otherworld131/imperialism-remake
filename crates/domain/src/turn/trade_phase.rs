@@ -254,9 +254,9 @@ pub(super) fn resolve_trade_session(
             let cfg_immig = &game.game_data.game_config;
             let pending_immig = nation.economy.pending_immigration;
             let immig_canned_food_reserve =
-                pending_immig.saturating_mul(cfg_immig.immigration_canned_food.max(0) as u32);
+                pending_immig.saturating_mul(cfg_immig.immigration_canned_food);
             let immig_clothing_reserve =
-                pending_immig.saturating_mul(cfg_immig.immigration_clothing.max(0) as u32);
+                pending_immig.saturating_mul(cfg_immig.immigration_clothing);
             let immig_furniture_reserve =
                 pending_immig.saturating_mul(cfg_immig.immigration_furniture);
 
@@ -1036,7 +1036,10 @@ mod tests {
                 _ => {}
             }
         }
-        assert!(saw_steel && saw_arms, "both commodities should be picked across seeds");
+        assert!(
+            saw_steel && saw_arms,
+            "both commodities should be picked across seeds"
+        );
     }
 
     #[test]
@@ -1122,10 +1125,16 @@ mod tests {
         ];
         let bids = material_buy_bids(NationId(1), &materials, 999, 1_000_000, &test_market());
         assert_eq!(bids.len(), 2);
-        assert_eq!(bids[0].commodity, trade::Commodity::Material(MaterialType::Steel));
+        assert_eq!(
+            bids[0].commodity,
+            trade::Commodity::Material(MaterialType::Steel)
+        );
         assert_eq!(bids[0].quantity, 15);
         assert_eq!(bids[0].buyer, NationId(1));
-        assert_eq!(bids[1].commodity, trade::Commodity::Material(MaterialType::Fabric));
+        assert_eq!(
+            bids[1].commodity,
+            trade::Commodity::Material(MaterialType::Fabric)
+        );
         assert_eq!(bids[1].quantity, 3);
     }
 
@@ -1133,10 +1142,7 @@ mod tests {
     fn material_buy_bids_capped_by_remaining_cargo() {
         // First material's gap (15) exceeds the 10 units of cargo left, so it
         // takes all of it and nothing remains for the second.
-        let materials = vec![
-            (MaterialType::Steel, 20, 5),
-            (MaterialType::Fabric, 12, 0),
-        ];
+        let materials = vec![(MaterialType::Steel, 20, 5), (MaterialType::Fabric, 12, 0)];
         let bids = material_buy_bids(NationId(1), &materials, 10, 1_000_000, &test_market());
         assert_eq!(bids.len(), 1);
         assert_eq!(bids[0].quantity, 10);

@@ -14,11 +14,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use super::common::{AiPersonality, PersonalityConfig, get_personality};
 
 fn worker_food_support(grain: u32, fruit: u32, livestock: u32, fish: u32) -> u32 {
-    crate::economy::labor::max_workers_supportable(
-        grain,
-        fruit,
-        livestock.saturating_add(fish),
-    )
+    crate::economy::labor::max_workers_supportable(grain, fruit, livestock.saturating_add(fish))
 }
 
 /// Build mills and factories when the nation has the required materials.
@@ -258,8 +254,7 @@ pub(super) fn importable_via_trade(
         for pid in &other.province_ids {
             if let Some(p) = game.get_province(*pid) {
                 for &coord in &p.tiles {
-                    if let Some(tile) = game.world.hex_map.get_tile(coord)
-                    {
+                    if let Some(tile) = game.world.hex_map.get_tile(coord) {
                         for y in tile.calculate_yields() {
                             if y.resource.is_tradeable() {
                                 *potential.entry(y.resource).or_default() += y.quantity as f64;
@@ -717,7 +712,11 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
     let other: HashSet<HexCoord> = game
         .get_nation(nation_id)
         .map(|n| {
-            let primary = n.diplomacy.ai_priority_state.committed_infra_target.as_ref();
+            let primary = n
+                .diplomacy
+                .ai_priority_state
+                .committed_infra_target
+                .as_ref();
             let primary_hex = commitment.map(|c| c.candidate);
             let extras = n
                 .diplomacy
@@ -731,9 +730,7 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
                 Some(h) => extras
                     .chain(primary.iter().map(|c| c.candidate).filter(|c| *c != h))
                     .collect(),
-                None => extras
-                    .chain(primary.iter().map(|c| c.candidate))
-                    .collect(),
+                None => extras.chain(primary.iter().map(|c| c.candidate)).collect(),
             }
         })
         .unwrap_or_default();
@@ -777,12 +774,7 @@ pub(super) fn provinces_with_port_under_construction(
         .iter()
         .filter(|c| c.build_task == Some(BuildTask::Port))
         .filter_map(|c| c.position)
-        .filter_map(|pos| {
-            game.world
-                .hex_map
-                .get_tile(pos)
-                .and_then(|t| t.province_id)
-        })
+        .filter_map(|pos| game.world.hex_map.get_tile(pos).and_then(|t| t.province_id))
         .collect()
 }
 
@@ -3977,13 +3969,8 @@ mod tests {
         let _ = shared1; // silence unused — a IS shared1
 
         // First, with no other planned depots, `b` should be plannable.
-        let outcome_no_hint = plan_next_depot_excluding(
-            &game,
-            NationId(1),
-            None,
-            &HashSet::new(),
-            &HashSet::new(),
-        );
+        let outcome_no_hint =
+            plan_next_depot_excluding(&game, NationId(1), None, &HashSet::new(), &HashSet::new());
         let plan_no_hint = outcome_no_hint
             .as_plan()
             .cloned()

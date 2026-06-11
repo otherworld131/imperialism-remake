@@ -578,7 +578,7 @@ fn pick_concentrate_fire_target(
 /// spills to the next priority target until the pool empties or every
 /// target is dead.
 fn apply_concentrate_fire_stream(
-    targets: &mut Vec<ArmyUnit>,
+    targets: &mut [ArmyUnit],
     total_fp: f64,
     prefer_artillery: bool,
     targeting: TargetingPriority,

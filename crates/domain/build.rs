@@ -117,7 +117,7 @@ fn lua_table_to_json(table: &Table) -> serde_json::Value {
     }
 
     if is_array {
-        let mut out = Vec::with_capacity(len as usize);
+        let mut out = Vec::with_capacity(len);
         for i in 1..=len {
             let v: Value = table.raw_get(i).unwrap_or(Value::Nil);
             out.push(lua_value_to_json(v));
