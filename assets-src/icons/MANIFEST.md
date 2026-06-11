@@ -16,6 +16,20 @@ parchment-era palette (parchment `#f2ead6`, wood `#8a5a2b`, brass/gold
 `#d9a441`/`#e3b341`, navy `#2c4a66`, steel `#9aa0a6`, coal `#3a3530`,
 brick `#a33b2e`).
 
+## Replacing an icon
+
+Icons are loose files loaded from disk at startup — **no recompile needed**:
+
+1. **Quick swap**: overwrite `crates/presentation/assets/icons/<group>/<Name>.png`
+   with any 64x64 transparent PNG and restart the game.
+2. **Source-of-truth swap**: replace `assets-src/icons/<group>/<Name>.svg` and run
+   `cargo run -p gen_assets` (rasterizes every SVG; idempotent).
+3. **New icon**: add the SVG, run the tool — the loader auto-discovers any
+   `icons/<group>/<Name>.png`; code looks icons up by `(group, Name)` only.
+
+Keep the canonical names from this manifest; they match the domain type names
+the view models emit.
+
 ## commodities/ (22)
 
 | Name | Output | Pictogram |
