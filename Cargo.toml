@@ -5,6 +5,7 @@ members = [
     "crates/domain-snapshot",
     "crates/application",
     "crates/flavor",
+    "crates/frontend-api",
     "crates/infrastructure",
     "crates/presentation",
     "crates/wasm-bridge",
@@ -42,6 +43,7 @@ gui = ["presentation"]
 
 [dependencies]
 application = { path = "crates/application" }
+frontend-api = { path = "crates/frontend-api" }
 clap = { version = "4", features = ["derive"] }
 domain = { path = "crates/domain" }
 flavor = { path = "crates/flavor" }

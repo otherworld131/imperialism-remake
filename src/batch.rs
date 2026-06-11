@@ -433,7 +433,7 @@ pub(crate) fn run_batch(n: u32, verbose_cashflow: bool, max_turns: Option<u32>) 
                 load_embedded_game_data(),
             )
         };
-        crate::flavor_bridge::apply_flavor(&mut game, "");
+        frontend_api::flavor::apply_flavor(&mut game, "");
         // Batch mode: promote the human slot to fully AI-managed so every GP
         // develops. Without this the slot-0 nation has no personality and is
         // skipped by `run_ai_turns`, so it never grows its army/infra.

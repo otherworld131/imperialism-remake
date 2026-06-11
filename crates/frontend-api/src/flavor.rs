@@ -1,20 +1,13 @@
-//! Glue between `crates/domain::GameState` and `crates/flavor`.
-//!
-//! Kept out of the domain crate on purpose: domain has no dependency on
-//! `flavor`. Call this once right after constructing a `GameState`. It
-//! populates the display-only strings (`adjective`, `demonym_plural`,
-//! `government_title`, `flag_svg`, …) on every `Nation` and overwrites
-//! `name` with the flavor-generated short form. Nothing in the
-//! turn-resolution pipeline reads these fields — they're strictly UI.
+//! Glue between domain `GameState` and the flavor crate.
+//! This is the single shared implementation used by every frontend; the
+//! former duplicates in the wasm-bridge crate and the top-level binary
+//! import from here instead.
 
 use domain::game_state::GameState;
 use domain::types::{NationId, NationType};
 use flavor::{FlagRules, Rng, generate_city_names, generate_for_seed, load_default_mixes};
 use std::collections::HashMap;
 
-/// DJB2-style hash of a string — matches the seed derivation used by
-/// `crates/domain/src/map/generator.rs`, so flavor seeding stays consistent
-/// with other map-key-derived randomness.
 fn djb2(s: &str) -> u64 {
     let mut h: u64 = 5381;
     for b in s.bytes() {
@@ -23,10 +16,7 @@ fn djb2(s: &str) -> u64 {
     h
 }
 
-/// Derive a per-nation seed so regenerating flavor for a single nation is
-/// deterministic and independent of the iteration order.
 fn nation_seed(base_seed: u64, nation_index: u32) -> u64 {
-    // Splitmix64 step on `base_seed ^ index` — cheap and spreads the bits.
     let mut z = base_seed.wrapping_add((nation_index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
@@ -51,8 +41,6 @@ pub fn apply_flavor(game: &mut GameState, flavor_key: &str) {
     let (gp_mix, mn_mix) = load_default_mixes();
 
     for nation in game.world.nations.iter_mut() {
-        // Skip rehydration: if flavor fields were already populated (e.g.
-        // loaded from a save), leave them alone.
         if !nation.archives.flag_svg.is_empty() {
             continue;
         }
@@ -72,14 +60,17 @@ pub fn apply_flavor(game: &mut GameState, flavor_key: &str) {
 }
 
 /// Procedurally name every province. Each owner gets its own seeded RNG so
-/// the names are deterministic per (flavor_key, owner) and unique within
-/// an owner's own provinces.
+/// the names are deterministic per (flavor_key, owner) and the same flavor
+/// seed always produces the same set. Names are deduplicated within an
+/// owner's own provinces.
 fn apply_province_names(game: &mut GameState, base_seed: u64) {
     let mut by_owner: HashMap<NationId, Vec<usize>> = HashMap::new();
     for (i, prov) in game.world.provinces.iter().enumerate() {
         by_owner.entry(prov.owner).or_default().push(i);
     }
     for (owner_id, mut indices) in by_owner {
+        // Sort by province id so the name assignment is stable across
+        // HashMap iteration orders.
         indices.sort_by_key(|i| game.world.provinces[*i].id.0);
         let owner_seed = nation_seed(base_seed, owner_id.0);
         let mut rng = Rng::from_seed(owner_seed);
@@ -90,4 +81,24 @@ fn apply_province_names(game: &mut GameState, base_seed: u64) {
             }
         }
     }
+}
+
+/// Wipe the flavor fields on every nation so a subsequent `apply_flavor`
+/// regenerates them. Used by the "re-roll names" preview path.
+pub fn clear_flavor(game: &mut GameState) {
+    for nation in game.world.nations.iter_mut() {
+        nation.archives.adjective.clear();
+        nation.archives.demonym_singular.clear();
+        nation.archives.demonym_plural.clear();
+        nation.archives.government_title.clear();
+        nation.archives.flag_svg.clear();
+    }
+}
+
+/// Re-roll the flavor (names, flags, government titles) on an existing game
+/// state, leaving everything else untouched. Used by GameSetup's
+/// "Re-roll Names" button.
+pub fn reroll_flavor(game: &mut GameState, flavor_key: &str) {
+    clear_flavor(game);
+    apply_flavor(game, flavor_key);
 }

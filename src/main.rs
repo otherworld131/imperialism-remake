@@ -4,7 +4,6 @@ mod batch;
 mod cli;
 mod commands;
 mod display;
-mod flavor_bridge;
 mod saves;
 
 use clap::Parser;
@@ -13,7 +12,7 @@ use application::scenarios as app_scenarios;
 use application::{Difficulty, calculate_score, process_turn};
 use infrastructure::data_loader::load_embedded_game_data;
 
-use crate::flavor_bridge::apply_flavor;
+use frontend_api::flavor::apply_flavor;
 
 fn main() {
     let args = cli::CliArgs::parse();
