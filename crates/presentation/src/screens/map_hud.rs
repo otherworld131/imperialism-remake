@@ -9,7 +9,7 @@ use crate::game::resources::TurnInfo;
 use crate::map::layers::MapMode;
 use crate::map::picking::PickingBlocker;
 use crate::theme::{self, Theme};
-use crate::widgets::{self, ButtonActivated, ButtonProps, ModalStack};
+use crate::widgets::{self, ButtonActivated, ButtonProps};
 
 #[derive(Component)]
 pub struct TurnDisplay;
@@ -126,17 +126,13 @@ pub fn end_turn_button(
 
 pub fn keyboard_commands(
     keys: Res<ButtonInput<KeyCode>>,
-    modals: Res<ModalStack>,
     focus: Res<InputFocus>,
     mut commands_out: MessageWriter<GameCommand>,
-    mut exit: MessageWriter<AppExit>,
 ) {
-    // A focused text input owns the keyboard; modals own Esc.
+    // A focused text input owns the keyboard. Esc is handled by the
+    // cascading cancel in `game::selection::esc_cascade` (modals first).
     if focus.0.is_none() && keys.just_pressed(KeyCode::Space) {
         commands_out.write(GameCommand::EndTurn);
-    }
-    if modals.is_empty() && keys.just_pressed(KeyCode::Escape) {
-        exit.write(AppExit::Success);
     }
 }
 

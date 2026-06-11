@@ -4,7 +4,8 @@
 use bevy::prelude::*;
 
 use crate::game::resources::{
-    DataVersion, PerspectiveNation, RenderSettings, SessionRes, TileIndex, ViewModels,
+    DataVersion, PendingMoveList, PerspectiveNation, RenderSettings, SessionRes, TileIndex,
+    ViewModels,
 };
 use crate::game::vm;
 
@@ -15,6 +16,7 @@ pub fn refresh_view_models(
     perspective: Res<PerspectiveNation>,
     mut vms: ResMut<ViewModels>,
     mut index: ResMut<TileIndex>,
+    mut pending_moves: ResMut<PendingMoveList>,
 ) {
     if vms.version == data_version.0 && vms.fetched_fog_disabled == settings.disable_fog {
         return;
@@ -110,6 +112,35 @@ pub fn refresh_view_models(
                 None
             }
         };
+
+    vms.ships = match frontend_api::units::get_ships(game, perspective.0).map(vm::parse_ships) {
+        Ok(Ok(ships)) => Some(ships),
+        Ok(Err(err)) => {
+            warn!("ships decode failed: {err}");
+            None
+        }
+        Err(err) => {
+            warn!("get_ships failed: {}", err.message());
+            None
+        }
+    };
+
+    let pending = match frontend_api::units::get_pending_unit_moves(game, perspective.0)
+        .map(vm::parse_pending_moves)
+    {
+        Ok(Ok(moves)) => moves,
+        Ok(Err(err)) => {
+            warn!("pending-move decode failed: {err}");
+            Vec::new()
+        }
+        Err(err) => {
+            warn!("get_pending_unit_moves failed: {}", err.message());
+            Vec::new()
+        }
+    };
+    if pending_moves.0 != pending {
+        pending_moves.0 = pending;
+    }
 
     vms.version = data_version.0;
     vms.fetched_fog_disabled = disable_fog;

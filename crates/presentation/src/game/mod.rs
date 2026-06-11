@@ -3,5 +3,6 @@
 pub mod commands;
 pub mod refresh;
 pub mod resources;
+pub mod selection;
 pub mod turn_runner;
 pub mod vm;

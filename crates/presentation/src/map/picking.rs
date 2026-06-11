@@ -5,7 +5,7 @@
 
 use bevy::prelude::*;
 
-use crate::game::resources::{SelectedNavy, ViewModels};
+use crate::game::resources::ViewModels;
 use crate::game::vm::NavyMarker;
 use crate::map::camera::GameCamera;
 use crate::map::geometry;
@@ -34,6 +34,12 @@ pub enum HoverTarget {
 /// them. Must be paired with an `Interaction` component.
 #[derive(Component)]
 pub struct PickingBlocker;
+
+/// A left-click on the map, in hit order. Consumed by
+/// `game::selection::handle_map_click`, which owns the web frontend's
+/// click-priority logic (fleet move → unit move → deploy → selection).
+#[derive(Message, Debug, Clone, PartialEq, Eq)]
+pub struct MapClick(pub HoverTarget);
 
 fn cursor_over_ui(blockers: &Query<&Interaction, With<PickingBlocker>>) -> bool {
     blockers
@@ -121,26 +127,10 @@ pub fn pick_select(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     blockers: Query<&Interaction, With<PickingBlocker>>,
     target: Res<HoverTarget>,
-    hovered: Res<HoveredHex>,
-    mut selected: ResMut<SelectedHex>,
-    mut selected_navy: ResMut<SelectedNavy>,
+    mut clicks: MessageWriter<MapClick>,
 ) {
     if !mouse_buttons.just_pressed(MouseButton::Left) || cursor_over_ui(&blockers) {
         return;
     }
-    match &*target {
-        HoverTarget::Navy(key) => {
-            if selected_navy.0.as_deref() != Some(key.as_str()) {
-                selected_navy.0 = Some(key.clone());
-            }
-        }
-        _ => {
-            if selected_navy.0.is_some() {
-                selected_navy.0 = None;
-            }
-            if selected.0 != hovered.0 {
-                selected.0 = hovered.0;
-            }
-        }
-    }
+    clicks.write(MapClick(target.clone()));
 }

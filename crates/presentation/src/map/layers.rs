@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
-use crate::game::resources::{FleetTargets, MoveTargets, RenderSettings, ViewModels};
+use crate::game::resources::{DeployMode, FleetTargets, MoveTargets, RenderSettings, ViewModels};
 use crate::game::vm::MapTile;
 use crate::map::borders::{self, MapBorders};
 use crate::map::camera::GameCamera;
@@ -748,21 +748,25 @@ pub fn rebuild_layers(
     }
 }
 
-/// Move-target / fleet-target hex tints, rebuilt whenever the highlight
-/// resources change (plumbing for the movement UI).
+/// Move-target / fleet-target / deploy-target hex tints (plus the
+/// prospector's red ✗ on already-searched tiles), rebuilt whenever the
+/// highlight resources change.
 pub fn rebuild_highlight_layers(
     mut commands: Commands,
     vms: Res<ViewModels>,
     move_targets: Res<MoveTargets>,
     fleet_targets: Res<FleetTargets>,
+    deploy: Res<DeployMode>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     wrap_roots: Query<Entity, With<WrapRoot>>,
     layers: Query<Entity, With<HighlightLayer>>,
     mut built_version: Local<u64>,
 ) {
-    let dirty =
-        move_targets.is_changed() || fleet_targets.is_changed() || *built_version != vms.version;
+    let dirty = move_targets.is_changed()
+        || fleet_targets.is_changed()
+        || deploy.is_changed()
+        || *built_version != vms.version;
     if !dirty {
         return;
     }
@@ -779,6 +783,11 @@ pub fn rebuild_highlight_layers(
 
     let friendly: std::collections::HashSet<u64> = move_targets.friendly.iter().copied().collect();
     let hostile: std::collections::HashSet<u64> = move_targets.hostile.iter().copied().collect();
+    let empty = std::collections::HashSet::new();
+    let (deployable, prospected) = match deploy.0.as_ref() {
+        Some(state) => (&state.deployable, &state.prospected),
+        None => (&empty, &empty),
+    };
     let mut groups: Vec<(Color, Vec<Vec2>)> = vec![
         (
             Color::srgba(46.0 / 255.0, 204.0 / 255.0, 64.0 / 255.0, 0.25),
@@ -792,7 +801,13 @@ pub fn rebuild_highlight_layers(
             Color::srgba(64.0 / 255.0, 156.0 / 255.0, 1.0, 0.28),
             Vec::new(),
         ),
+        // Deployable tiles (civilian deploy mode), green like the web.
+        (
+            Color::srgba(46.0 / 255.0, 204.0 / 255.0, 64.0 / 255.0, 0.30),
+            Vec::new(),
+        ),
     ];
+    let mut cross_builder = MeshBuilder2d::default();
     for tile in tiles {
         if let Some(pid) = tile.province_id {
             if friendly.contains(&pid) {
@@ -803,6 +818,17 @@ pub fn rebuild_highlight_layers(
         }
         if tile.is_sea() && fleet_targets.0.contains(&(tile.q, tile.r)) {
             groups[2].1.push(geometry::hex_to_world(tile.q, tile.r));
+        }
+        if deployable.contains(&(tile.q, tile.r)) {
+            groups[3].1.push(geometry::hex_to_world(tile.q, tile.r));
+        }
+        if prospected.contains(&(tile.q, tile.r)) {
+            // Red ✗: this tile was already prospected.
+            let p = geometry::hex_to_world(tile.q, tile.r);
+            let arm = HEX_SIZE * 0.32;
+            let width = 1.6 * REACT_SCALE;
+            cross_builder.add_segment(p + Vec2::new(-arm, -arm), p + Vec2::new(arm, arm), width);
+            cross_builder.add_segment(p + Vec2::new(-arm, arm), p + Vec2::new(arm, -arm), width);
         }
     }
     for (color, centers) in groups {
@@ -816,6 +842,19 @@ pub fn rebuild_highlight_layers(
                 Mesh2d(mesh.clone()),
                 MeshMaterial2d(material.clone()),
                 Transform::from_xyz(0.0, 0.0, 1.3),
+                HighlightLayer,
+                ChildOf(root),
+            ));
+        }
+    }
+    if !cross_builder.is_empty() {
+        let mesh = meshes.add(cross_builder.build());
+        let material = materials.add(Color::srgba(0.95, 0.25, 0.2, 0.85));
+        for root in &wrap_roots {
+            commands.spawn((
+                Mesh2d(mesh.clone()),
+                MeshMaterial2d(material.clone()),
+                Transform::from_xyz(0.0, 0.0, 1.35),
                 HighlightLayer,
                 ChildOf(root),
             ));

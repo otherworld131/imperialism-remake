@@ -91,6 +91,45 @@ pub fn get_units_in_province(
     }))
 }
 
+// ── Query: Pending Unit Moves ────────────────────────────────────────
+
+/// Queued (not yet resolved) army moves for one nation. The web frontend
+/// digs these out of the serialized game state; native frontends get them
+/// as a view model: `[{unit_id, source_province_id, dest_province_id,
+/// dest_name}]`. Nothing here resolves before end turn.
+pub fn get_pending_unit_moves(
+    game: &GameState,
+    nation_id: u32,
+) -> Result<serde_json::Value, ApiError> {
+    let nid = NationId(nation_id);
+    let nation = match game.get_nation(nid) {
+        Some(n) => n,
+        None => return Err(ApiError::raw("{\"error\":\"nation not found\"}")),
+    };
+    let moves: Vec<serde_json::Value> = game
+        .transient
+        .pending_moves
+        .iter()
+        .filter(|(n, _, _)| *n == nid)
+        .filter_map(|(_, uid, dest)| {
+            // Skip moves whose unit vanished rather than reporting a
+            // misleading arrow (mirrors the web's pendingMoveArrows).
+            let unit = nation.military.army.iter().find(|u| u.id == *uid)?;
+            let dest_name = game
+                .get_province(*dest)
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| "?".to_string());
+            Some(serde_json::json!({
+                "unit_id": uid.0,
+                "source_province_id": unit.position.0,
+                "dest_province_id": dest.0,
+                "dest_name": dest_name,
+            }))
+        })
+        .collect();
+    Ok(serde_json::Value::Array(moves))
+}
+
 // ── Query: Civilians ─────────────────────────────────────────────────
 
 /// Get all civilians for a nation. Returns deployed/undeployed groups.

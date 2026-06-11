@@ -192,6 +192,92 @@ pub struct CivilianEntry {
     pub turns_remaining: u32,
     #[serde(default)]
     pub build_task: Option<String>,
+    /// Terrain under a deployed civilian (deployed entries only).
+    #[serde(default)]
+    pub tile_terrain: Option<String>,
+    /// Visible resource under a deployed civilian (deployed entries only).
+    #[serde(default)]
+    pub tile_resource: Option<String>,
+}
+
+/// `frontend_api::units::get_units_in_province` — the unit panel VM.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ProvinceUnitsVm {
+    pub army_units: Vec<ArmyUnitVm>,
+    pub garrison_count: u32,
+    pub province_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[allow(dead_code)]
+pub struct ArmyUnitVm {
+    pub id: u32,
+    pub unit_type: String,
+    pub category: String,
+    pub owner_id: u32,
+    pub owner_name: String,
+    pub health: u32,
+    pub medals: u32,
+    pub firepower: f64,
+    pub effective_firepower: f64,
+    pub movement: u32,
+    pub movement_remaining: u32,
+    pub upgrade_to: Option<String>,
+    pub upgrade_cost: Option<i64>,
+    pub upgrade_arms_delta: Option<u32>,
+    pub heal_blocked_reason: Option<String>,
+}
+
+/// `frontend_api::units::get_ships` for one nation.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[allow(dead_code)]
+pub struct ShipsVm {
+    pub merchants: Vec<ShipVm>,
+    pub warships: Vec<ShipVm>,
+    pub total_cargo: u32,
+    pub total_naval_fp: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[allow(dead_code)]
+pub struct ShipVm {
+    pub id: u32,
+    #[serde(rename = "type")]
+    pub ship_type: String,
+    pub hull: i64,
+    pub hull_max: i64,
+    /// Merchants only.
+    #[serde(default)]
+    pub cargo: Option<u32>,
+    /// Warships only.
+    #[serde(default)]
+    pub firepower: Option<i64>,
+    pub sea_zone: Option<u32>,
+}
+
+/// `frontend_api::units::get_valid_move_targets` for one unit.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct MoveTargetsVm {
+    pub friendly: Vec<MoveTargetVm>,
+    pub hostile: Vec<MoveTargetVm>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[allow(dead_code)]
+pub struct MoveTargetVm {
+    pub province_id: u64,
+    pub name: String,
+    #[serde(default)]
+    pub owner: Option<String>,
+}
+
+/// One entry from `frontend_api::units::get_pending_unit_moves`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct PendingMoveVm {
+    pub unit_id: u32,
+    pub source_province_id: u64,
+    pub dest_province_id: u64,
+    pub dest_name: String,
 }
 
 pub fn parse_map_tiles(value: serde_json::Value) -> Result<Vec<MapTile>, serde_json::Error> {
@@ -219,5 +305,25 @@ pub fn parse_military_overlay(
 }
 
 pub fn parse_civilians(value: serde_json::Value) -> Result<CiviliansVm, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
+pub fn parse_province_units(
+    value: serde_json::Value,
+) -> Result<ProvinceUnitsVm, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
+pub fn parse_ships(value: serde_json::Value) -> Result<ShipsVm, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
+pub fn parse_move_targets(value: serde_json::Value) -> Result<MoveTargetsVm, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
+pub fn parse_pending_moves(
+    value: serde_json::Value,
+) -> Result<Vec<PendingMoveVm>, serde_json::Error> {
     serde_json::from_value(value)
 }

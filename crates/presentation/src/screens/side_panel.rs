@@ -10,6 +10,7 @@ use crate::map::icons::IconAssets;
 use crate::map::layers::MapMode;
 use crate::map::navy;
 use crate::map::picking::{PickingBlocker, SelectedHex};
+use crate::screens::panels;
 use crate::theme::{self, Theme};
 use crate::widgets::{
     self, CheckboxProps, CheckboxToggled, DropdownChanged, DropdownOpenUp, DropdownProps,
@@ -89,6 +90,12 @@ pub fn setup_side_panel(mut commands: Commands, theme: Res<Theme>, settings: Res
                     },
                     LegendSection,
                 ));
+
+                // M6 player-flow sections (banners, units, civilians, navy).
+                content.spawn((panel_section(), panels::BannerSection));
+                content.spawn((panel_section(), panels::UnitPanelSection));
+                content.spawn((panel_section(), panels::CivilianPanelSection));
+                content.spawn((panel_section(), panels::NavalPanelSection));
 
                 section_title(content, &theme, "UI");
                 let ui_toggles = [
@@ -175,6 +182,16 @@ pub fn setup_side_panel(mut commands: Commands, theme: Res<Theme>, settings: Res
                 .entity(dropdown)
                 .insert((MapModeDropdown, DropdownOpenUp));
         });
+}
+
+/// Layout shared by the M6 panel-section anchors.
+fn panel_section() -> Node {
+    Node {
+        flex_direction: FlexDirection::Column,
+        row_gap: Val::Px(2.0),
+        margin: UiRect::top(Val::Px(8.0)),
+        ..default()
+    }
 }
 
 fn section_title(parent: &mut ChildSpawnerCommands, theme: &Theme, title: &str) {

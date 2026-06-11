@@ -2,4 +2,5 @@
 
 pub mod gallery;
 pub mod map_hud;
+pub mod panels;
 pub mod side_panel;

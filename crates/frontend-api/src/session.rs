@@ -40,6 +40,17 @@ impl Session {
         &self.game
     }
 
+    /// Whether this session is an observer game (all nations AI-driven;
+    /// player commands are rejected by the API).
+    pub fn observer_mode(&self) -> bool {
+        self.game.observer_mode
+    }
+
+    /// Nation id of the human seat (the viewpoint nation in observer mode).
+    pub fn human_nation(&self) -> u32 {
+        self.game.human_player_nation.0
+    }
+
     pub fn game_mut(&mut self) -> &mut GameState {
         &mut self.game
     }
