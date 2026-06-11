@@ -1,7 +1,9 @@
-/// Builder helpers for creating test GameStates with sensible defaults.
-///
-/// These reduce boilerplate in integration and simulation tests by
-/// providing pre-configured game states at common configurations.
+//! Builder helpers for creating test GameStates with sensible defaults.
+//!
+//! These reduce boilerplate in integration and simulation tests by
+//! providing pre-configured game states at common configurations.
+//! Shared by several test binaries; not every binary uses every helper.
+#![allow(dead_code)]
 use domain::game_state::{GameState, new_game, new_game_with_data};
 use domain::turn::process_turn;
 use domain::types::Difficulty;

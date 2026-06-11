@@ -541,16 +541,15 @@ fn each_great_power_has_food_tiles() {
             for pid in &gp.province_ids {
                 let province = map.provinces.iter().find(|p| p.id == *pid).unwrap();
                 for &tile_coord in &province.tiles {
-                    if let Some(tile) = map.hex_map.get_tile(tile_coord) {
-                        if let Some(resource) = tile.resource_deposit() {
-                            if matches!(
-                                resource,
-                                ResourceType::Grain | ResourceType::Fruit | ResourceType::Livestock
-                            ) {
-                                has_food = true;
-                                break;
-                            }
-                        }
+                    if let Some(tile) = map.hex_map.get_tile(tile_coord)
+                        && let Some(resource) = tile.resource_deposit()
+                        && matches!(
+                            resource,
+                            ResourceType::Grain | ResourceType::Fruit | ResourceType::Livestock
+                        )
+                    {
+                        has_food = true;
+                        break;
                     }
                 }
                 if has_food {
@@ -577,11 +576,11 @@ fn each_great_power_has_timber_tiles() {
             for pid in &gp.province_ids {
                 let province = map.provinces.iter().find(|p| p.id == *pid).unwrap();
                 for &tile_coord in &province.tiles {
-                    if let Some(tile) = map.hex_map.get_tile(tile_coord) {
-                        if tile.resource_deposit() == Some(ResourceType::Timber) {
-                            has_timber = true;
-                            break;
-                        }
+                    if let Some(tile) = map.hex_map.get_tile(tile_coord)
+                        && tile.resource_deposit() == Some(ResourceType::Timber)
+                    {
+                        has_timber = true;
+                        break;
                     }
                 }
                 if has_timber {
