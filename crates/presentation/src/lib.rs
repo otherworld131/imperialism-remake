@@ -10,5 +10,6 @@ pub mod map;
 pub mod screens;
 pub mod state;
 pub mod theme;
+pub mod widgets;
 
 pub use app::run_game;

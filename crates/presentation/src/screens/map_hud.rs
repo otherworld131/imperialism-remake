@@ -1,6 +1,7 @@
 //! Map-screen HUD: top bar (turn, map mode, End Turn), tile inspector,
 //! and the busy overlay shown while a turn resolves.
 
+use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
 
 use crate::game::commands::GameCommand;
@@ -8,7 +9,8 @@ use crate::game::resources::{TileIndex, TurnInfo, ViewModels};
 use crate::game::vm::MapTile;
 use crate::map::layers::MapMode;
 use crate::map::picking::{PickingBlocker, SelectedHex};
-use crate::theme;
+use crate::theme::{self, Theme};
+use crate::widgets::{self, ButtonActivated, ButtonProps, ModalStack};
 
 #[derive(Component)]
 pub struct TurnDisplay;
@@ -25,7 +27,7 @@ pub struct EndTurnButton;
 #[derive(Component)]
 pub struct BusyOverlay;
 
-pub fn setup_hud(mut commands: Commands) {
+pub fn setup_hud(mut commands: Commands, theme: Res<Theme>) {
     // Top bar.
     commands
         .spawn((
@@ -55,56 +57,36 @@ pub fn setup_hud(mut commands: Commands) {
                 .with_children(|left| {
                     left.spawn((
                         Text::new("Imperialism Remake"),
-                        TextFont {
-                            font_size: 17.0,
-                            ..default()
-                        },
+                        theme.font_bold(17.0),
                         TextColor(theme::GOLD),
                     ));
                     left.spawn((
                         Text::new("1815 Q1"),
-                        TextFont {
-                            font_size: 15.0,
-                            ..default()
-                        },
+                        theme.font(15.0),
                         TextColor(theme::TEXT),
                         TurnDisplay,
                     ));
                     left.spawn((
                         Text::new("Political map (M/Tab)"),
-                        TextFont {
-                            font_size: 13.0,
-                            ..default()
-                        },
+                        theme.font(13.0),
                         TextColor(Color::srgb(0.74, 0.77, 0.70)),
                         ModeDisplay,
                     ));
                 });
 
-            bar.spawn((
-                Button,
-                Node {
-                    width: Val::Px(110.0),
-                    height: Val::Px(30.0),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    border: UiRect::all(Val::Px(1.0)),
+            let end_turn = widgets::spawn_button(
+                bar,
+                &theme,
+                ButtonProps {
+                    label: "End Turn".into(),
+                    width: Some(Val::Px(110.0)),
                     ..default()
                 },
-                BorderColor::all(theme::GOLD),
-                BackgroundColor(theme::BUTTON_BG),
+            );
+            bar.commands().entity(end_turn).insert((
                 EndTurnButton,
-            ))
-            .with_children(|button| {
-                button.spawn((
-                    Text::new("End Turn"),
-                    TextFont {
-                        font_size: 13.0,
-                        ..default()
-                    },
-                    TextColor(theme::TEXT),
-                ));
-            });
+                widgets::TooltipText("Resolve the turn (Space)".into()),
+            ));
         });
 
     // Tile inspector.
@@ -125,10 +107,7 @@ pub fn setup_hud(mut commands: Commands) {
         .with_children(|panel| {
             panel.spawn((
                 Text::new("Click a tile to inspect it"),
-                TextFont {
-                    font_size: 13.0,
-                    ..default()
-                },
+                theme.font(13.0),
                 TextColor(theme::TEXT),
                 InspectorDisplay,
             ));
@@ -153,45 +132,53 @@ pub fn setup_hud(mut commands: Commands) {
         .with_children(|overlay| {
             overlay.spawn((
                 Text::new("Processing turn…"),
-                TextFont {
-                    font_size: 26.0,
-                    ..default()
-                },
+                theme.font_bold(26.0),
                 TextColor(theme::GOLD),
             ));
         });
 }
 
-/// End-turn button: hover/pressed tints, sends [`GameCommand::EndTurn`].
+/// End-turn button (kit widget): sends [`GameCommand::EndTurn`] on
+/// activation. Visual feedback comes from the widget kit.
 pub fn end_turn_button(
-    mut interactions: Query<
-        (&Interaction, &mut BackgroundColor),
-        (Changed<Interaction>, With<EndTurnButton>),
-    >,
+    mut activations: MessageReader<ButtonActivated>,
+    buttons: Query<(), With<EndTurnButton>>,
     mut commands_out: MessageWriter<GameCommand>,
 ) {
-    for (interaction, mut color) in &mut interactions {
-        match *interaction {
-            Interaction::Pressed => {
-                *color = BackgroundColor(theme::BUTTON_BG_PRESSED);
-                commands_out.write(GameCommand::EndTurn);
-            }
-            Interaction::Hovered => *color = BackgroundColor(theme::BUTTON_BG_HOVER),
-            Interaction::None => *color = BackgroundColor(theme::BUTTON_BG),
+    for ButtonActivated(entity) in activations.read() {
+        if buttons.contains(*entity) {
+            commands_out.write(GameCommand::EndTurn);
         }
     }
 }
 
 pub fn keyboard_commands(
     keys: Res<ButtonInput<KeyCode>>,
+    modals: Res<ModalStack>,
+    focus: Res<InputFocus>,
     mut commands_out: MessageWriter<GameCommand>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    if keys.just_pressed(KeyCode::Space) {
+    // A focused text input owns the keyboard; modals own Esc.
+    if focus.0.is_none() && keys.just_pressed(KeyCode::Space) {
         commands_out.write(GameCommand::EndTurn);
     }
-    if keys.just_pressed(KeyCode::Escape) {
+    if modals.is_empty() && keys.just_pressed(KeyCode::Escape) {
         exit.write(AppExit::Success);
+    }
+}
+
+/// While a turn resolves the End Turn button is disabled (and re-enabled on
+/// exit); the busy overlay communicates why.
+pub fn disable_end_turn(mut commands: Commands, buttons: Query<Entity, With<EndTurnButton>>) {
+    for button in &buttons {
+        widgets::set_enabled(&mut commands, button, false);
+    }
+}
+
+pub fn enable_end_turn(mut commands: Commands, buttons: Query<Entity, With<EndTurnButton>>) {
+    for button in &buttons {
+        widgets::set_enabled(&mut commands, button, true);
     }
 }
 

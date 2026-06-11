@@ -21,4 +21,8 @@ bevy = { version = "=0.18.1", default-features = false, features = [
     "2d_bevy_render",
     "ui_bevy_render",
     "png",
+    # Widget kit: headless interaction cores + pointer events on UI nodes.
+    # `bevy_input_focus` (keyboard focus) already rides in via `default_app`.
+    "experimental_bevy_ui_widgets",
+    "ui_picking",
 ] }
