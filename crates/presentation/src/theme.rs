@@ -187,3 +187,76 @@ pub fn political_tint(color: Color) -> Color {
         c.blue + (1.0 - c.blue) * 0.45,
     )
 }
+
+/// Incorporated-minor fill: nation color blended 65% toward white, matching
+/// the web frontend's `incorporatedFill`.
+pub fn incorporated_tint(color: Color) -> Color {
+    let c = color.to_srgba();
+    Color::srgb(
+        c.red + (1.0 - c.red) * 0.65,
+        c.green + (1.0 - c.green) * 0.65,
+        c.blue + (1.0 - c.blue) * 0.65,
+    )
+}
+
+/// Terrain-map fill: terrain color blended toward the nation color by
+/// `amount` (0.15 normal, 0.10 incorporated minors), matching `tintColor`.
+pub fn terrain_nation_tint(terrain: Color, nation: Color, amount: f32) -> Color {
+    let t = terrain.to_srgba();
+    let n = nation.to_srgba();
+    Color::srgb(
+        t.red * (1.0 - amount) + n.red * amount,
+        t.green * (1.0 - amount) + n.green * amount,
+        t.blue * (1.0 - amount) + n.blue * amount,
+    )
+}
+
+/// Diplomatic-overlay status color (`DIPLO_STATUS_COLORS` in HexMap.tsx).
+pub fn diplo_status_color(status: &str) -> Color {
+    match status {
+        "Alliance" => Color::srgb_u8(0x2e, 0xcc, 0x40),
+        "NAP" => Color::srgb_u8(0x7f, 0xdb, 0xff),
+        "At War" => Color::srgb_u8(0xff, 0x41, 0x36),
+        "Neutral" => Color::srgb_u8(0xaa, 0xaa, 0xaa),
+        _ => Color::srgb_u8(0x66, 0x66, 0x66),
+    }
+}
+
+/// The gold used for the perspective nation in overlay modes.
+pub const OVERLAY_SELF: Color = Color::srgb_u8(0xff, 0xd9, 0x00);
+
+/// Relationship score (-100..+100) → red → gray → green, matching
+/// `scoreToColor` in HexMap.tsx.
+pub fn score_color(score: f32) -> Color {
+    let t = ((score + 100.0) / 200.0).clamp(0.0, 1.0);
+    let (r, g, b) = if t < 0.5 {
+        let s = t / 0.5;
+        (
+            220.0 + (160.0 - 220.0) * s,
+            40.0 + (160.0 - 40.0) * s,
+            40.0 + (160.0 - 40.0) * s,
+        )
+    } else {
+        let s = (t - 0.5) / 0.5;
+        (
+            160.0 + (40.0 - 160.0) * s,
+            160.0 + (200.0 - 160.0) * s,
+            160.0 + (40.0 - 160.0) * s,
+        )
+    };
+    Color::srgb(r / 255.0, g / 255.0, b / 255.0)
+}
+
+/// Strength score (-100..+100) → red → yellow → green, matching
+/// `strengthToColor` in HexMap.tsx.
+pub fn strength_color(score: f32) -> Color {
+    let t = ((score + 100.0) / 200.0).clamp(0.0, 1.0);
+    let (r, g, b) = if t < 0.5 {
+        let s = t / 0.5;
+        (220.0 + (200.0 - 220.0) * s, 40.0 + (200.0 - 40.0) * s, 40.0)
+    } else {
+        let s = (t - 0.5) / 0.5;
+        (200.0 + (40.0 - 200.0) * s, 200.0, 40.0)
+    };
+    Color::srgb(r / 255.0, g / 255.0, b / 255.0)
+}

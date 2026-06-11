@@ -22,6 +22,11 @@ pub struct UiDropdown {
     pub open: bool,
 }
 
+/// Add to a dropdown root to open its popup above the header (a "dropup",
+/// for controls anchored at the bottom of the screen).
+#[derive(Component)]
+pub struct DropdownOpenUp;
+
 #[derive(Component)]
 struct DropdownHeader(Entity);
 
@@ -279,13 +284,13 @@ fn handle_multi_checkboxes(
 fn sync_dropdowns(
     theme: Res<Theme>,
     mut commands: Commands,
-    dropdowns: Query<(Entity, &UiDropdown, &Children), Changed<UiDropdown>>,
+    dropdowns: Query<(Entity, &UiDropdown, &Children, Has<DropdownOpenUp>), Changed<UiDropdown>>,
     popups: Query<(Entity, &DropdownPopup)>,
     headers: Query<(), With<DropdownHeader>>,
     buttons: Query<&Children, With<UiButton>>,
     mut labels: Query<&mut Text>,
 ) {
-    for (root, dropdown, children) in &dropdowns {
+    for (root, dropdown, children, open_up) in &dropdowns {
         // Header label.
         for child in children {
             if headers.contains(*child)
@@ -294,11 +299,12 @@ fn sync_dropdowns(
                 for label in button_children {
                     if let Ok(mut text) = labels.get_mut(*label) {
                         **text = format!(
-                            "{}  ▾",
+                            "{}  {}",
                             dropdown
                                 .options
                                 .get(dropdown.selected)
-                                .map_or("", String::as_str)
+                                .map_or("", String::as_str),
+                            if open_up { "▴" } else { "▾" }
                         );
                     }
                 }
@@ -309,7 +315,7 @@ fn sync_dropdowns(
             (false, Some(popup)) => commands.entity(popup).despawn(),
             (true, None) => {
                 commands.entity(root).with_children(|parent| {
-                    spawn_popup_frame(parent, root, |popup| {
+                    spawn_popup_frame_oriented(parent, root, open_up, |popup| {
                         for (index, option) in dropdown.options.iter().enumerate() {
                             let row = spawn_button(
                                 popup,
@@ -437,12 +443,30 @@ fn spawn_popup_frame(
     root: Entity,
     fill: impl FnOnce(&mut ChildSpawnerCommands),
 ) {
+    spawn_popup_frame_oriented(parent, root, false, fill);
+}
+
+fn spawn_popup_frame_oriented(
+    parent: &mut ChildSpawnerCommands,
+    root: Entity,
+    open_up: bool,
+    fill: impl FnOnce(&mut ChildSpawnerCommands),
+) {
     parent
         .spawn((
             DropdownPopup(root),
             Node {
                 position_type: PositionType::Absolute,
-                top: Val::Percent(100.0),
+                top: if open_up {
+                    Val::Auto
+                } else {
+                    Val::Percent(100.0)
+                },
+                bottom: if open_up {
+                    Val::Percent(100.0)
+                } else {
+                    Val::Auto
+                },
                 left: Val::Px(0.0),
                 min_width: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,

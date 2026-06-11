@@ -27,8 +27,8 @@ pub use checkbox::{
     spawn_radio_group,
 };
 pub use dropdown::{
-    DropdownChanged, DropdownProps, MultiDropdownChanged, MultiDropdownProps, UiDropdown,
-    UiMultiDropdown, spawn_dropdown, spawn_multi_dropdown,
+    DropdownChanged, DropdownOpenUp, DropdownProps, MultiDropdownChanged, MultiDropdownProps,
+    UiDropdown, UiMultiDropdown, spawn_dropdown, spawn_multi_dropdown,
 };
 pub use modal::{ModalHandles, ModalProps, ModalStack, close_top_modal, open_modal};
 pub use progress::{ProgressProps, UiProgress, spawn_progress};

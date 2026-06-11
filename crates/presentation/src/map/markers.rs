@@ -1,0 +1,955 @@
+//! Sprite / text marker layers: resource icons with improvement badges,
+//! infrastructure, capitals, troop indicators, civilians, navy markers,
+//! pending-move arrows, and nation / province / sea-zone labels.
+//!
+//! Sizing follows HexMap.tsx: every constant is authored in React units
+//! (hex 18) and scaled by [`REACT_SCALE`]. All layers live under the wrap
+//! roots; LOD-gated groups get a parent entity carrying [`LodGate`].
+
+use bevy::prelude::*;
+use bevy::sprite::Anchor;
+use std::collections::HashMap;
+
+use crate::game::resources::{
+    Blink, PendingMoves, PerspectiveNation, RenderSettings, SelectedCivilian, SelectedNavy,
+    ViewModels,
+};
+use crate::game::vm::MapTile;
+use crate::map::geometry::{self, HEX_SIZE};
+use crate::map::icons::IconAssets;
+use crate::map::labels::{self, LabelTile};
+use crate::map::layers::{MapMode, REACT_SCALE, WrapRoot, react_to_world};
+use crate::map::lod::LodGate;
+use crate::map::navy;
+use crate::map::picking::SelectedHex;
+use crate::map::polyline::MeshBuilder2d;
+use crate::theme::{self, Theme};
+
+/// React hex size — marker formulas below are written in these units.
+const RH: f32 = 18.0;
+
+/// Everything (re)built by [`rebuild_marker_layers`].
+#[derive(Component)]
+pub struct MarkerLayer;
+
+/// Troop indicator at a capital tile; blinks while its tile is selected.
+#[derive(Component)]
+pub struct TroopMarker(pub (i32, i32));
+
+/// Steady halo behind a selected troop indicator.
+#[derive(Component)]
+pub struct TroopHalo(pub (i32, i32));
+
+/// Civilian marker; blinks while its civilian is selected.
+#[derive(Component)]
+pub struct CivMarker(pub i64);
+
+#[derive(Clone, PartialEq)]
+pub struct MarkerKey {
+    version: u64,
+    mode: MapMode,
+    settings: RenderSettings,
+    selected_navy: Option<String>,
+    pending_moves: usize,
+}
+
+fn rs(v: f32) -> f32 {
+    v * REACT_SCALE
+}
+
+/// React-space (y down) point at React units → world Vec2 anchored on a
+/// tile center already in world space.
+fn world_at(tile_world: Vec2, dx_react: f32, dy_react: f32) -> Vec2 {
+    tile_world + Vec2::new(rs(dx_react), -rs(dy_react))
+}
+
+struct TextStyle2d {
+    font: Handle<Font>,
+    size: f32,
+    color: Color,
+    shadow: Color,
+}
+
+fn spawn_outlined_text(
+    commands: &mut Commands,
+    parent: Entity,
+    pos: Vec2,
+    z: f32,
+    text: &str,
+    style: TextStyle2d,
+) {
+    let offset = rs(0.9);
+    commands.spawn((
+        Text2d::new(text.to_string()),
+        TextFont {
+            font: style.font.clone(),
+            font_size: style.size,
+            ..default()
+        },
+        TextColor(style.shadow),
+        Transform::from_xyz(pos.x + offset, pos.y - offset, z - 0.005),
+        ChildOf(parent),
+    ));
+    commands.spawn((
+        Text2d::new(text.to_string()),
+        TextFont {
+            font: style.font,
+            font_size: style.size,
+            ..default()
+        },
+        TextColor(style.color),
+        Transform::from_xyz(pos.x, pos.y, z),
+        ChildOf(parent),
+    ));
+}
+
+fn spawn_sprite(
+    commands: &mut Commands,
+    parent: Entity,
+    image: Handle<Image>,
+    pos: Vec2,
+    z: f32,
+    size: f32,
+    color: Color,
+) -> Entity {
+    commands
+        .spawn((
+            Sprite {
+                image,
+                custom_size: Some(Vec2::splat(size)),
+                color,
+                ..default()
+            },
+            Transform::from_xyz(pos.x, pos.y, z),
+            ChildOf(parent),
+        ))
+        .id()
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn rebuild_marker_layers(
+    mut commands: Commands,
+    vms: Res<ViewModels>,
+    mode: Res<MapMode>,
+    settings: Res<RenderSettings>,
+    selected_navy: Res<SelectedNavy>,
+    pending_moves: Res<PendingMoves>,
+    perspective: Res<PerspectiveNation>,
+    theme: Res<Theme>,
+    icons: Option<Res<IconAssets>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    wrap_roots: Query<Entity, With<WrapRoot>>,
+    existing: Query<Entity, With<MarkerLayer>>,
+    mut built: Local<Option<MarkerKey>>,
+) {
+    let Some(tiles) = vms.map.as_ref() else {
+        return;
+    };
+    if tiles.is_empty() || wrap_roots.is_empty() {
+        return;
+    }
+    let Some(icons) = icons else {
+        return;
+    };
+    let key = MarkerKey {
+        version: vms.version,
+        mode: *mode,
+        settings: *settings,
+        selected_navy: selected_navy.0.clone(),
+        pending_moves: pending_moves.0.len(),
+    };
+    if built.as_ref() == Some(&key) && !pending_moves.is_changed() {
+        return;
+    }
+    *built = Some(key);
+
+    for entity in &existing {
+        commands.entity(entity).despawn();
+    }
+
+    let anchor_indices = navy::anchor_index_map(&vms.navy_markers);
+
+    for root in &wrap_roots {
+        let group = |commands: &mut Commands, z: f32, gate: Option<LodGate>| -> Entity {
+            let mut entity = commands.spawn((
+                MarkerLayer,
+                Transform::from_xyz(0.0, 0.0, z),
+                Visibility::default(),
+                ChildOf(root),
+            ));
+            if let Some(gate) = gate {
+                entity.insert(gate);
+            }
+            entity.id()
+        };
+
+        // ── Capitals (gold star icon at country capitals) ───────────────
+        {
+            let parent = group(&mut commands, 2.0, None);
+            if let Some(star) = icons.get("infrastructure", "Capital") {
+                for tile in tiles.iter().filter(|t| t.is_country_capital && !t.is_sea()) {
+                    let p = geometry::hex_to_world(tile.q, tile.r);
+                    spawn_sprite(
+                        &mut commands,
+                        parent,
+                        star.clone(),
+                        p,
+                        0.0,
+                        rs(16.2),
+                        Color::WHITE,
+                    );
+                }
+            }
+        }
+
+        // ── Resource icons + improvement badges (terrain mode) ──────────
+        if settings.show_resources && *mode == MapMode::Terrain {
+            let parent = group(&mut commands, 2.1, Some(LodGate::Resources));
+            for tile in tiles {
+                if tile.is_sea() || tile.owner.is_empty() {
+                    continue;
+                }
+                if tile.is_capital || tile.is_country_capital {
+                    continue;
+                }
+                if tile.resource_hidden && !settings.show_hidden_resources {
+                    continue;
+                }
+                let Some(resource) = tile.resource.as_deref() else {
+                    continue;
+                };
+                let Some(image) = icons.get("commodities", resource) else {
+                    continue;
+                };
+                let p = geometry::hex_to_world(tile.q, tile.r);
+                let alpha = if tile.resource_hidden { 0.85 } else { 0.75 };
+                spawn_sprite(
+                    &mut commands,
+                    parent,
+                    image,
+                    p,
+                    0.0,
+                    rs(12.6),
+                    Color::WHITE.with_alpha(alpha),
+                );
+                if tile.improvement_level > 0 && tile.max_improvement_level > 0 {
+                    let fully = tile.improvement_level >= tile.max_improvement_level;
+                    let text = format!("{}/{}", tile.improvement_level, tile.max_improvement_level);
+                    spawn_outlined_text(
+                        &mut commands,
+                        parent,
+                        world_at(p, RH * 0.5, RH * 0.55),
+                        0.05,
+                        &text,
+                        TextStyle2d {
+                            font: theme.fonts.semibold.clone(),
+                            size: rs(7.0),
+                            color: if fully {
+                                Color::srgb_u8(0xff, 0xd7, 0x00)
+                            } else {
+                                Color::WHITE
+                            },
+                            shadow: Color::srgba(0.0, 0.0, 0.0, 0.85),
+                        },
+                    );
+                }
+            }
+        }
+
+        // ── Infrastructure icons ─────────────────────────────────────────
+        {
+            let parent = group(&mut commands, 2.2, Some(LodGate::Infra));
+            let icon_size = rs(9.0);
+            for tile in tiles {
+                if tile.is_sea() {
+                    continue;
+                }
+                if !tile.has_depot && !tile.has_port && !tile.has_fort {
+                    continue;
+                }
+                let p = geometry::hex_to_world(tile.q, tile.r);
+                if settings.show_transport_network
+                    && tile.has_depot
+                    && *mode == MapMode::Terrain
+                    && let Some(image) = icons.get("infrastructure", "Depot")
+                {
+                    spawn_sprite(
+                        &mut commands,
+                        parent,
+                        image,
+                        world_at(p, RH * 0.3, 0.0),
+                        0.0,
+                        rs(7.2),
+                        Color::WHITE,
+                    );
+                }
+                if settings.show_transport_network
+                    && tile.has_port
+                    && let Some(image) = icons.get("infrastructure", "Port")
+                {
+                    let tint = if tile.port_blockaded {
+                        Color::srgba(200.0 / 255.0, 40.0 / 255.0, 40.0 / 255.0, 0.95)
+                    } else {
+                        Color::WHITE
+                    };
+                    spawn_sprite(
+                        &mut commands,
+                        parent,
+                        image,
+                        world_at(p, -RH * 0.3, 0.0),
+                        0.01,
+                        icon_size,
+                        tint,
+                    );
+                }
+                if tile.has_fort
+                    && let Some(image) = icons.get("infrastructure", "Fort")
+                {
+                    let level = tile.fort_level.max(1) as f32;
+                    let size = icon_size * (0.8 + level * 0.2);
+                    spawn_sprite(
+                        &mut commands,
+                        parent,
+                        image,
+                        world_at(p, 0.0, -RH * 0.3),
+                        0.02,
+                        size,
+                        Color::WHITE,
+                    );
+                }
+            }
+        }
+
+        // ── Troop indicators at capitals ─────────────────────────────────
+        if settings.show_armies && *mode != MapMode::Diplomatic {
+            let parent = group(&mut commands, 3.0, Some(LodGate::Troops));
+            let swords = icons.get("ui", "Swords");
+            for tile in tiles {
+                if tile.is_sea() || !tile.is_capital || tile.army_unit_count == 0 {
+                    continue;
+                }
+                let n = tile.army_unit_count as f32;
+                let size_scale = (0.55 + n * 0.08).min(1.1);
+                let emoji_size = rs((RH * size_scale).max(7.0));
+                let p = geometry::hex_to_world(tile.q, tile.r);
+                let pos = world_at(p, RH * 0.6, -RH * 0.55);
+
+                // Steady selection halo behind the blinking icon.
+                commands.spawn((
+                    Mesh2d(meshes.add(Circle::new(emoji_size * 0.65))),
+                    MeshMaterial2d(materials.add(Color::srgba(1.0, 220.0 / 255.0, 0.0, 0.35))),
+                    Transform::from_xyz(pos.x, pos.y, -0.02),
+                    Visibility::Hidden,
+                    TroopHalo((tile.q, tile.r)),
+                    ChildOf(parent),
+                ));
+
+                let marker = commands
+                    .spawn((
+                        Transform::from_xyz(pos.x, pos.y, 0.0),
+                        Visibility::default(),
+                        TroopMarker((tile.q, tile.r)),
+                        ChildOf(parent),
+                    ))
+                    .id();
+                if let Some(image) = swords.clone() {
+                    spawn_sprite(
+                        &mut commands,
+                        marker,
+                        image,
+                        Vec2::ZERO,
+                        0.0,
+                        emoji_size,
+                        Color::WHITE.with_alpha(0.85),
+                    );
+                }
+                let count_size = (emoji_size * 0.65).max(rs(6.0));
+                spawn_outlined_text(
+                    &mut commands,
+                    marker,
+                    Vec2::new(0.0, -(emoji_size * 0.4 + count_size * 0.55)),
+                    0.05,
+                    &tile.army_unit_count.to_string(),
+                    TextStyle2d {
+                        font: theme.fonts.semibold.clone(),
+                        size: count_size,
+                        color: Color::WHITE,
+                        shadow: Color::srgba(0.0, 0.0, 0.0, 0.8),
+                    },
+                );
+            }
+        }
+
+        // ── Civilians on tiles ───────────────────────────────────────────
+        {
+            let parent = group(&mut commands, 3.2, Some(LodGate::Civilians));
+            let civ_size = rs((RH * 0.55).max(6.0));
+            for tile in tiles {
+                let Some(civ) = tile.civilian_on_tile.as_ref() else {
+                    continue;
+                };
+                if !civ.is_human && !settings.show_ai_civilians {
+                    continue;
+                }
+                let p = geometry::hex_to_world(tile.q, tile.r);
+                let pos = world_at(p, -RH * 0.3, RH * 0.35);
+                let marker = commands
+                    .spawn((
+                        Transform::from_xyz(pos.x, pos.y, 0.0),
+                        Visibility::default(),
+                        CivMarker(civ.id),
+                        ChildOf(parent),
+                    ))
+                    .id();
+                // Nation-colored disc behind the icon.
+                if !civ.owner_color.is_empty() {
+                    commands.spawn((
+                        Mesh2d(meshes.add(Circle::new(civ_size * 0.45))),
+                        MeshMaterial2d(
+                            materials.add(theme::nation_color(&civ.owner_color).with_alpha(0.5)),
+                        ),
+                        Transform::from_xyz(0.0, 0.0, -0.01),
+                        ChildOf(marker),
+                    ));
+                }
+                if let Some(image) = icons.get("civilians", &civ.civ_type) {
+                    spawn_sprite(
+                        &mut commands,
+                        marker,
+                        image,
+                        Vec2::ZERO,
+                        0.0,
+                        civ_size,
+                        Color::WHITE,
+                    );
+                }
+                if civ.working && civ.turns_remaining > 0 {
+                    // Engineer build tasks show the target infrastructure
+                    // icon to the left (the web uses construction emoji).
+                    if let Some(task) = civ.build_task.as_deref()
+                        && let Some(image) = icons.get("infrastructure", task)
+                    {
+                        spawn_sprite(
+                            &mut commands,
+                            marker,
+                            image,
+                            Vec2::new(-civ_size * 0.7, 0.0),
+                            0.01,
+                            civ_size * 0.85,
+                            Color::WHITE,
+                        );
+                    }
+                    // Turns-remaining badge, upper right.
+                    let badge_pos = Vec2::new(civ_size * 0.5, civ_size * 0.4);
+                    commands.spawn((
+                        Mesh2d(meshes.add(Circle::new(rs(4.0)))),
+                        MeshMaterial2d(materials.add(Color::srgba(0.0, 0.0, 0.0, 0.7))),
+                        Transform::from_xyz(badge_pos.x, badge_pos.y, 0.02),
+                        ChildOf(marker),
+                    ));
+                    commands.spawn((
+                        Text2d::new(civ.turns_remaining.to_string()),
+                        TextFont {
+                            font: theme.fonts.semibold.clone(),
+                            font_size: rs(5.0),
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                        Transform::from_xyz(badge_pos.x, badge_pos.y, 0.03),
+                        ChildOf(marker),
+                    ));
+                }
+            }
+
+            // Undeployed civilians fan out around the perspective nation's
+            // country capital on a golden-angle spiral.
+            if let Some(civs) = vms.civilians.as_ref()
+                && !civs.undeployed.is_empty()
+                && let Some(capital) = tiles
+                    .iter()
+                    .find(|t| t.is_country_capital && t.nation_id == i64::from(perspective.0))
+            {
+                let p = geometry::hex_to_world(capital.q, capital.r);
+                for (i, civ) in civs.undeployed.iter().enumerate() {
+                    let (dx, dy) = navy::marker_offset(i + 1);
+                    let pos = p + Vec2::new(dx * 1.2, -dy * 1.2);
+                    if let Some(image) = icons.get("civilians", &civ.civ_type) {
+                        let sprite = spawn_sprite(
+                            &mut commands,
+                            parent,
+                            image,
+                            pos,
+                            0.05,
+                            civ_size * 0.9,
+                            Color::WHITE.with_alpha(0.95),
+                        );
+                        commands.entity(sprite).insert(CivMarker(civ.id));
+                    }
+                }
+            }
+        }
+
+        // ── Navy markers + beachhead lines + fleet arrows ────────────────
+        {
+            let parent = group(&mut commands, 3.5, None);
+            let radius = navy::NAVY_MARKER_RADIUS;
+            let anchor_icon = icons.get("ui", "Anchor");
+            let zone_centroids: HashMap<u32, Vec2> = vms
+                .sea_zones
+                .iter()
+                .map(|z| (z.id, geometry::hex_to_world(z.center_q, z.center_r)))
+                .collect();
+            for marker in &vms.navy_markers {
+                let key = navy::marker_key(marker);
+                let index = anchor_indices.get(&key).copied().unwrap_or(0);
+                let (dx, dy) = navy::marker_offset(index);
+                let base = geometry::hex_to_world(marker.q, marker.r);
+                let pos = base + Vec2::new(dx, -dy);
+                let is_selected = selected_navy.0.as_deref() == Some(key.as_str());
+
+                // Beachhead: thin dashed line toward the coast tile.
+                if marker.kind == "beachhead"
+                    && let Some(target) = marker.target_hex
+                {
+                    let mut dash = MeshBuilder2d::default();
+                    dash.add_dashed_line(
+                        pos,
+                        geometry::hex_to_world(target.q, target.r),
+                        rs(1.4),
+                        rs(2.0),
+                        rs(2.0),
+                    );
+                    commands.spawn((
+                        Mesh2d(meshes.add(dash.build())),
+                        MeshMaterial2d(materials.add(Color::srgba(
+                            230.0 / 255.0,
+                            38.0 / 255.0,
+                            38.0 / 255.0,
+                            0.85,
+                        ))),
+                        Transform::from_xyz(0.0, 0.0, -0.02),
+                        ChildOf(parent),
+                    ));
+                }
+
+                // Pending fleet move: dashed blue arrow to the target zone.
+                if marker.kind == "fleet"
+                    && let Some(dest_zone) = marker.pending_move_to_zone_id
+                    && let Some(&dest) = zone_centroids.get(&dest_zone)
+                {
+                    spawn_arrow(
+                        &mut commands,
+                        &mut meshes,
+                        &mut materials,
+                        parent,
+                        pos,
+                        dest,
+                        ArrowStyle {
+                            outline: Color::srgba(0.0, 20.0 / 255.0, 60.0 / 255.0, 0.85),
+                            fill: Color::srgba(96.0 / 255.0, 168.0 / 255.0, 1.0, 0.95),
+                            outline_width: rs(6.0),
+                            width: rs(3.0),
+                            head_len: rs(16.0),
+                            dash: Some((rs(6.0), rs(4.0))),
+                        },
+                    );
+                }
+
+                // Owner-colored disc.
+                commands.spawn((
+                    Mesh2d(meshes.add(Circle::new(radius))),
+                    MeshMaterial2d(materials.add(theme::nation_color(&marker.owner_color))),
+                    Transform::from_xyz(pos.x, pos.y, 0.0),
+                    ChildOf(parent),
+                ));
+                // Border ring: red beachhead, gold selected, white otherwise.
+                let (ring_color, ring_width) = if marker.kind == "beachhead" {
+                    (Color::srgb_u8(0xe6, 0x26, 0x26), rs(1.5))
+                } else if is_selected {
+                    (Color::srgb_u8(0xff, 0xd9, 0x00), rs(2.5))
+                } else {
+                    (Color::srgba(1.0, 1.0, 1.0, 0.9), rs(1.5))
+                };
+                let mut ring = MeshBuilder2d::default();
+                ring.add_ring(
+                    pos,
+                    radius - ring_width / 2.0,
+                    radius + ring_width / 2.0,
+                    24,
+                );
+                commands.spawn((
+                    Mesh2d(meshes.add(ring.build())),
+                    MeshMaterial2d(materials.add(ring_color)),
+                    Transform::from_xyz(0.0, 0.0, 0.01),
+                    ChildOf(parent),
+                ));
+                // Anchor glyph.
+                if let Some(image) = anchor_icon.clone() {
+                    spawn_sprite(
+                        &mut commands,
+                        parent,
+                        image,
+                        pos,
+                        0.02,
+                        rs(12.0),
+                        Color::WHITE,
+                    );
+                }
+                // Ship-count badge, top right.
+                let badge = pos + Vec2::new(radius - rs(2.0), radius - rs(2.0));
+                commands.spawn((
+                    Mesh2d(meshes.add(Circle::new(rs(7.0)))),
+                    MeshMaterial2d(materials.add(Color::srgb_u8(0x11, 0x11, 0x11))),
+                    Transform::from_xyz(badge.x, badge.y, 0.03),
+                    ChildOf(parent),
+                ));
+                commands.spawn((
+                    Text2d::new(marker.ship_count.to_string()),
+                    TextFont {
+                        font: theme.fonts.semibold.clone(),
+                        font_size: rs(10.0),
+                        ..default()
+                    },
+                    TextColor(Color::srgb_u8(0xff, 0xd9, 0x00)),
+                    Transform::from_xyz(badge.x, badge.y, 0.04),
+                    ChildOf(parent),
+                ));
+            }
+        }
+
+        // ── Pending army move arrows (green, solid) ──────────────────────
+        if !pending_moves.0.is_empty() {
+            let parent = group(&mut commands, 3.8, None);
+            let capitals: HashMap<u64, Vec2> = tiles
+                .iter()
+                .filter(|t| t.is_capital)
+                .filter_map(|t| {
+                    t.province_id
+                        .map(|pid| (pid, geometry::hex_to_world(t.q, t.r)))
+                })
+                .collect();
+            for arrow in &pending_moves.0 {
+                let (Some(&from), Some(&to)) = (
+                    capitals.get(&arrow.source_province_id),
+                    capitals.get(&arrow.dest_province_id),
+                ) else {
+                    continue;
+                };
+                spawn_arrow(
+                    &mut commands,
+                    &mut meshes,
+                    &mut materials,
+                    parent,
+                    from,
+                    to,
+                    ArrowStyle {
+                        outline: Color::srgba(0.0, 40.0 / 255.0, 0.0, 0.9),
+                        fill: Color::srgba(72.0 / 255.0, 220.0 / 255.0, 90.0 / 255.0, 0.95),
+                        outline_width: rs(8.0),
+                        width: rs(5.0),
+                        head_len: rs(18.0),
+                        dash: None,
+                    },
+                );
+            }
+        }
+
+        // ── Labels ───────────────────────────────────────────────────────
+        spawn_labels(
+            &mut commands,
+            &theme,
+            &vms,
+            *mode,
+            root,
+            &mut |c, z, gate| {
+                let mut entity = c.spawn((
+                    MarkerLayer,
+                    Transform::from_xyz(0.0, 0.0, z),
+                    Visibility::default(),
+                    ChildOf(root),
+                ));
+                if let Some(gate) = gate {
+                    entity.insert(gate);
+                }
+                entity.id()
+            },
+        );
+    }
+}
+
+struct ArrowStyle {
+    outline: Color,
+    fill: Color,
+    outline_width: f32,
+    width: f32,
+    head_len: f32,
+    dash: Option<(f32, f32)>,
+}
+
+fn spawn_arrow(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<ColorMaterial>,
+    parent: Entity,
+    from: Vec2,
+    to: Vec2,
+    style: ArrowStyle,
+) {
+    let dir = (to - from).normalize_or_zero();
+    if dir == Vec2::ZERO {
+        return;
+    }
+    let shaft_end = to - dir * style.head_len * 0.55;
+    let mut outline = MeshBuilder2d::default();
+    let mut fill = MeshBuilder2d::default();
+    match style.dash {
+        Some((dash, gap)) => {
+            outline.add_dashed_line(from, shaft_end, style.outline_width, dash, gap);
+            fill.add_dashed_line(from, shaft_end, style.width, dash, gap);
+        }
+        None => {
+            outline.add_segment(from, shaft_end, style.outline_width);
+            fill.add_segment(from, shaft_end, style.width);
+        }
+    }
+    // Arrowhead: solid in both colors, the fill on top.
+    outline.add_arrowhead(to, dir, style.head_len * 1.06, 0.48);
+    fill.add_arrowhead(to, dir, style.head_len, 0.45);
+    commands.spawn((
+        Mesh2d(meshes.add(outline.build())),
+        MeshMaterial2d(materials.add(style.outline)),
+        Transform::from_xyz(0.0, 0.0, 0.0),
+        ChildOf(parent),
+    ));
+    commands.spawn((
+        Mesh2d(meshes.add(fill.build())),
+        MeshMaterial2d(materials.add(style.fill)),
+        Transform::from_xyz(0.0, 0.0, 0.01),
+        ChildOf(parent),
+    ));
+}
+
+fn spawn_labels(
+    commands: &mut Commands,
+    theme: &Theme,
+    vms: &ViewModels,
+    mode: MapMode,
+    _root: Entity,
+    group: &mut dyn FnMut(&mut Commands, f32, Option<LodGate>) -> Entity,
+) {
+    let Some(tiles) = vms.map.as_ref() else {
+        return;
+    };
+
+    // Sea zone labels: italic, uppercase, always on (subtle alpha).
+    if !vms.sea_zones.is_empty() {
+        let parent = group(commands, 2.5, Some(LodGate::Grid));
+        for zone in &vms.sea_zones {
+            if zone.hexes.is_empty() {
+                continue;
+            }
+            let pos = geometry::hex_to_world(zone.center_q, zone.center_r);
+            spawn_label_text(
+                commands,
+                parent,
+                pos,
+                &zone.name.to_uppercase(),
+                TextStyle2d {
+                    font: theme.fonts.italic.clone(),
+                    size: rs(14.0),
+                    color: Color::srgba(200.0 / 255.0, 230.0 / 255.0, 1.0, 0.6),
+                    shadow: Color::srgba(0.0, 0.0, 0.0, 0.3),
+                },
+            );
+        }
+    }
+
+    // Nation + province labels only exist outside terrain mode
+    // (`showPoliticalColors` in the web frontend).
+    if mode == MapMode::Terrain {
+        return;
+    }
+
+    let label_tiles: Vec<LabelTile> = tiles
+        .iter()
+        .map(|t| LabelTile {
+            q: t.q,
+            r: t.r,
+            is_sea: t.is_sea(),
+            owner: t.owner.clone(),
+            visual_group: t.visual_group.clone().unwrap_or_default(),
+            is_anarchic: t.is_anarchic,
+        })
+        .collect();
+    let nation_labels = labels::compute_nation_labels(&label_tiles, 3, f64::from(HEX_SIZE));
+    let parent = group(commands, 2.6, Some(LodGate::NotPastLabels));
+    for label in &nation_labels {
+        let size = ((label.size as f32).sqrt() * 3.0).clamp(12.0, 28.0);
+        let pos = react_to_world([label.cx, label.cy]);
+        let (color, shadow) = if label.is_anarchic {
+            (
+                Color::srgba(0.0, 0.0, 0.0, 0.95),
+                Color::srgba(1.0, 1.0, 1.0, 0.55),
+            )
+        } else {
+            (
+                Color::srgba(1.0, 1.0, 1.0, 0.9),
+                Color::srgba(0.0, 0.0, 0.0, 0.5),
+            )
+        };
+        spawn_label_text(
+            commands,
+            parent,
+            pos,
+            &label.name.to_uppercase(),
+            TextStyle2d {
+                font: theme.fonts.semibold.clone(),
+                size: rs(size),
+                color,
+                shadow,
+            },
+        );
+    }
+
+    // Province labels (mean centroid per province), zoomed-in only.
+    let mut centroids: HashMap<&str, (f64, f64, usize)> = HashMap::new();
+    let mut order: Vec<&str> = Vec::new();
+    for tile in tiles {
+        if tile.is_sea() || tile.province.is_empty() {
+            continue;
+        }
+        let [px, py] = crate::map::borders::hex_to_pixel(tile.q, tile.r, f64::from(HEX_SIZE));
+        let entry = centroids.entry(tile.province.as_str()).or_insert_with(|| {
+            order.push(tile.province.as_str());
+            (0.0, 0.0, 0)
+        });
+        entry.0 += px;
+        entry.1 += py;
+        entry.2 += 1;
+    }
+    let parent = group(commands, 2.6, Some(LodGate::PastLabels));
+    for name in order {
+        let (sx, sy, count) = centroids[name];
+        let size = ((count as f32).sqrt() * 2.5).clamp(7.0, 14.0);
+        let pos = react_to_world([sx / count as f64, sy / count as f64]);
+        spawn_label_text(
+            commands,
+            parent,
+            pos,
+            name,
+            TextStyle2d {
+                font: theme.fonts.regular.clone(),
+                size: rs(size),
+                color: Color::srgba(230.0 / 255.0, 220.0 / 255.0, 190.0 / 255.0, 0.9),
+                shadow: Color::srgba(0.0, 0.0, 0.0, 0.55),
+            },
+        );
+    }
+}
+
+fn spawn_label_text(
+    commands: &mut Commands,
+    parent: Entity,
+    pos: Vec2,
+    text: &str,
+    style: TextStyle2d,
+) {
+    let offset = (style.size * 0.06).max(0.8);
+    commands.spawn((
+        Text2d::new(text.to_string()),
+        TextFont {
+            font: style.font.clone(),
+            font_size: style.size,
+            ..default()
+        },
+        TextColor(style.shadow),
+        Anchor::CENTER,
+        Transform::from_xyz(pos.x + offset, pos.y - offset, -0.005),
+        ChildOf(parent),
+    ));
+    commands.spawn((
+        Text2d::new(text.to_string()),
+        TextFont {
+            font: style.font,
+            font_size: style.size,
+            ..default()
+        },
+        TextColor(style.color),
+        Anchor::CENTER,
+        Transform::from_xyz(pos.x, pos.y, 0.0),
+        ChildOf(parent),
+    ));
+}
+
+/// Blink the selected troop indicator / civilian, and show the halo behind
+/// a selected capital's troop icon — mirrors the 500 ms web blink.
+pub fn blink_selected_markers(
+    blink: Res<Blink>,
+    selected_hex: Res<SelectedHex>,
+    selected_civ: Res<SelectedCivilian>,
+    vms: Res<ViewModels>,
+    mut sets: ParamSet<(
+        Query<(&TroopMarker, &mut Visibility)>,
+        Query<(&TroopHalo, &mut Visibility)>,
+        Query<(&CivMarker, &mut Visibility)>,
+    )>,
+) {
+    // Selected capital-with-troops, like React's blink trigger.
+    let selected_troop_coord = selected_hex.0.filter(|coord| {
+        vms.map.as_ref().is_some_and(|tiles| {
+            tiles
+                .iter()
+                .any(|t| (t.q, t.r) == *coord && t.is_capital && t.army_unit_count > 0)
+        })
+    });
+    for (marker, mut visibility) in &mut sets.p0() {
+        let selected = selected_troop_coord == Some(marker.0);
+        let target = if selected && !blink.on {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
+        if *visibility != target {
+            *visibility = target;
+        }
+    }
+    for (halo, mut visibility) in &mut sets.p1() {
+        let target = if selected_troop_coord == Some(halo.0) {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if *visibility != target {
+            *visibility = target;
+        }
+    }
+    for (marker, mut visibility) in &mut sets.p2() {
+        let selected = selected_civ.0 == Some(marker.0);
+        let target = if selected && !blink.on {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
+        if *visibility != target {
+            *visibility = target;
+        }
+    }
+}
+
+/// Tile helper shared by picking + tooltip: troop-indicator hit test in
+/// world space (React: within `HEX_SIZE * 0.7` of the indicator anchor).
+pub fn troop_indicator_hit(tiles: &[MapTile], world: Vec2) -> Option<(i32, i32)> {
+    let hit_radius = rs(RH * 0.7);
+    for tile in tiles {
+        if !tile.is_capital || tile.army_unit_count == 0 || tile.is_sea() {
+            continue;
+        }
+        let p = geometry::hex_to_world(tile.q, tile.r);
+        let anchor = world_at(p, RH * 0.6, -RH * 0.55);
+        if anchor.distance_squared(world) <= hit_radius * hit_radius {
+            return Some((tile.q, tile.r));
+        }
+    }
+    None
+}
