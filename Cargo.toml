@@ -9,6 +9,7 @@ members = [
     "crates/infrastructure",
     "crates/presentation",
     "crates/wasm-bridge",
+    "tools/gen_assets",
 ]
 
 [workspace.package]

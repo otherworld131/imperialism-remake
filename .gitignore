@@ -23,6 +23,10 @@ test_report.html
 # Screenshots
 *.png
 *.png:Zone.Identifier
+# Generated icon assets are committed (sources live in assets-src/icons/)
+!crates/presentation/assets/
+!crates/presentation/assets/icons/
+!crates/presentation/assets/icons/**/*.png
 
 # Test game output
 test_games/
