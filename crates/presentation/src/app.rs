@@ -1545,5 +1545,9 @@ pub fn run_game() {
             OnExit(TurnPhase::Processing),
             (map_hud::hide_busy_overlay, map_hud::enable_end_turn),
         )
+        .add_systems(
+            Update,
+            map_hud::sync_restart_enabled.run_if(in_state(AppState::InGame)),
+        )
         .run();
 }

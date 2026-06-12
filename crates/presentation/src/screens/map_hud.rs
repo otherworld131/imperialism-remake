@@ -651,6 +651,23 @@ pub fn enable_end_turn(mut commands: Commands, buttons: Query<Entity, With<EndTu
     }
 }
 
+/// Restart needs the original generation parameters; loaded saves don't
+/// carry them, so ↻ is disabled rather than silently regenerating a
+/// different world (review finding F-004).
+pub fn sync_restart_enabled(
+    mut commands: Commands,
+    active_config: Res<crate::setup::ActiveGameConfig>,
+    buttons: Query<Entity, With<RestartBtn>>,
+) {
+    if !active_config.is_changed() {
+        return;
+    }
+    let enabled = active_config.0.is_some();
+    for button in &buttons {
+        widgets::set_enabled(&mut commands, button, enabled);
+    }
+}
+
 pub fn update_turn_display(
     turn_info: Res<TurnInfo>,
     mut texts: Query<&mut Text, With<TurnDisplay>>,

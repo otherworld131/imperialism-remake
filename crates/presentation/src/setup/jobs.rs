@@ -388,21 +388,10 @@ pub fn apply_pending_session(
     centered.0 = false;
     commands.remove_resource::<MapBounds>();
 
-    if let Some(config) = install.config {
-        active_config.0 = Some(config);
-    } else {
-        // Loaded save: synthesize restart params from the save itself so ↻
-        // regenerates the same world (default size/terrain — the original
-        // generation knobs aren't stored in the save).
-        active_config.0 = Some(SetupConfig {
-            map_key: session.map_key().to_string(),
-            difficulty: session.difficulty_u8(),
-            observer: session.observer_mode(),
-            organic_borders: install.organic_borders,
-            hide_hex_grid: install.hide_hex_grid,
-            ..default()
-        });
-    }
+    // Loaded saves carry no generation knobs (size, terrain mix, scenario),
+    // so a synthesized config would silently regenerate a DIFFERENT world.
+    // Restart is only offered when the full start parameters are known.
+    active_config.0 = install.config;
 
     // Clear interaction and archive state from any previous game.
     selections.pending_moves.0.clear();
