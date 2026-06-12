@@ -35,3 +35,4 @@ test_games/
 # skills are shared with everyone working on the repo).
 .claude/*
 !.claude/skills/
+dist/
