@@ -229,6 +229,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // executable-bit semantics are Unix-only
     fn build_scripts_exist_and_are_executable() {
         use std::fs;
         use std::os::unix::fs::PermissionsExt;

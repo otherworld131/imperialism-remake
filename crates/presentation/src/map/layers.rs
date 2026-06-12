@@ -143,7 +143,16 @@ pub fn setup_rings(
     ));
 }
 
-pub fn handle_map_mode_input(keys: Res<ButtonInput<KeyCode>>, mut mode: ResMut<MapMode>) {
+pub fn handle_map_mode_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    focus: Res<bevy::input_focus::InputFocus>,
+    mut mode: ResMut<MapMode>,
+) {
+    // A focused text input owns the keyboard ('m' typed into the skip-until
+    // box must not cycle the map mode).
+    if focus.0.is_some() {
+        return;
+    }
     if keys.just_pressed(KeyCode::KeyM) || keys.just_pressed(KeyCode::Tab) {
         *mode = mode.cycled();
     }
@@ -267,6 +276,7 @@ pub fn rebuild_layers(
     wrap_roots: Query<Entity, With<WrapRoot>>,
     layers: Query<Entity, With<StaticLayer>>,
     mut built: Local<Option<StaticKey>>,
+    mut rebuild_count: Local<u32>,
 ) {
     let Some(tiles) = vms.map.as_ref() else {
         return;
@@ -283,6 +293,10 @@ pub fn rebuild_layers(
         return;
     }
     *built = Some(key);
+    // Rebuilds are rare (data version bump / mode switch / toggle) — the
+    // counter in this log doubles as the per-frame-rebuild canary.
+    let build_started = std::time::Instant::now();
+    *rebuild_count += 1;
 
     for entity in &layers {
         commands.entity(entity).despawn();
@@ -323,9 +337,12 @@ pub fn rebuild_layers(
         wrap_roots.iter().collect()
     };
 
+    let mut classify_elapsed = None;
     if cache.version != vms.version || cache.data.is_none() {
+        let classify_started = std::time::Instant::now();
         cache.data = Some(borders::classify(tiles, f64::from(HEX_SIZE)));
         cache.version = vms.version;
+        classify_elapsed = Some(classify_started.elapsed());
     }
     let Some(map_borders) = cache.data.as_ref() else {
         return;
@@ -745,6 +762,24 @@ pub fn rebuild_layers(
                 None,
             );
         }
+    }
+
+    match classify_elapsed {
+        Some(classify) => info!(
+            "map layers rebuild #{} (version {}, {} tiles): borders classify {:.1?}, total {:.1?}",
+            *rebuild_count,
+            vms.version,
+            tiles.len(),
+            classify,
+            build_started.elapsed(),
+        ),
+        None => info!(
+            "map layers rebuild #{} (version {}, {} tiles): borders cached, total {:.1?}",
+            *rebuild_count,
+            vms.version,
+            tiles.len(),
+            build_started.elapsed(),
+        ),
     }
 }
 

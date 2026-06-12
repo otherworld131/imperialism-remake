@@ -3,6 +3,13 @@ name = "presentation"
 version.workspace = true
 edition.workspace = true
 
+[features]
+# Opt-in Linux/Wayland windowing backend. NOT in any default set: compiling
+# it needs pkg-config + libwayland-dev, which this dev box (WSL2) lacks;
+# X11 covers WSLg via XWayland. Wayland users build with
+# `cargo build --features gui,wayland`.
+wayland = ["bevy/wayland"]
+
 [dependencies]
 frontend-api = { path = "../frontend-api" }
 serde = { version = "1", features = ["derive"] }

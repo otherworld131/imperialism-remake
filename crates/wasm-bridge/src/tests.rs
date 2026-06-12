@@ -2054,7 +2054,7 @@ fn political_snapshot_returns_tiles_for_archived_turn() {
     assert!(
         tiles
             .iter()
-            .any(|t| t["owner"].as_str().unwrap_or("") != ""),
+            .any(|t| !t["owner"].as_str().unwrap_or("").is_empty()),
         "at least one tile should have an owner"
     );
     // At least one country capital should be flagged.
@@ -2326,7 +2326,7 @@ fn wasm_reject_pact_defense_with_stale_minor_does_not_panic() {
     // Strip the minor of all provinces (simulating it was conquered).
     let minor_provinces: Vec<ProvinceId> = game
         .get_nation(minor_id)
-        .map(|n| n.province_ids.iter().copied().collect())
+        .map(|n| n.province_ids.to_vec())
         .unwrap_or_default();
     if let Some(n) = game.get_nation_mut(minor_id) {
         n.province_ids.clear();

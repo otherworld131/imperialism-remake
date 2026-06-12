@@ -93,7 +93,7 @@ the view models emit.
 | ShipOfTheLine | `crates/presentation/assets/icons/ships/ShipOfTheLine.png` | Tall hull, two gunport rows, full sails |
 | Raider | `crates/presentation/assets/icons/ships/Raider.png` | Low steam hull with ram bow and gun |
 | Ironclad | `crates/presentation/assets/icons/ships/Ironclad.png` | Low armored casemate with gun stub |
-| AdvancedIronclad | `crates/presentation/assets/icons/ships/AdvancedIronclad.png` | Ironclad with turret and two funnels |
+| AdvancedIronclad | `crates/presentation/assets/icons/ships/AdvancedIronclad.png` | Two gold-banded funnels, long deckhouse, stern turret, gold hull stripe |
 | ArmouredCruiser | `crates/presentation/assets/icons/ships/ArmouredCruiser.png` | Long hull, two funnels, two masts |
 | Dreadnought | `crates/presentation/assets/icons/ships/Dreadnought.png` | Battleship, fore and aft turrets, tripod mast |
 | Battlecruiser | `crates/presentation/assets/icons/ships/Battlecruiser.png` | Sleek battleship with three funnels |
@@ -115,7 +115,7 @@ the view models emit.
 |------|--------|-----------|
 | Consulate | `crates/presentation/assets/icons/diplomacy/Consulate.png` | Small house with red pennant |
 | Embassy | `crates/presentation/assets/icons/diplomacy/Embassy.png` | Columned building with national flag |
-| NonAggressionPact | `crates/presentation/assets/icons/diplomacy/NonAggressionPact.png` | Handshake between two sleeved arms |
+| NonAggressionPact | `crates/presentation/assets/icons/diplomacy/NonAggressionPact.png` | Diagonal clasped handshake between two sleeved arms |
 | Alliance | `crates/presentation/assets/icons/diplomacy/Alliance.png` | Two crossed flags |
 | War | `crates/presentation/assets/icons/diplomacy/War.png` | Burning torch |
 | Peace | `crates/presentation/assets/icons/diplomacy/Peace.png` | White dove with olive sprig |

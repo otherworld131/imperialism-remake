@@ -1046,24 +1046,120 @@ fn m10_debug_driver(
     }
 }
 
+/// Frame-pacing measurement driver, active under `PERF_STATS=1`. Waits for
+/// the map to settle, runs one End Turn (the rebuild logs time the post-turn
+/// map rebuild), then zooms all the way out and pans for 300 frames before
+/// logging a frame-time summary and exiting.
+#[allow(clippy::too_many_arguments)]
+fn perf_driver(
+    mut frames: Local<u32>,
+    mut samples: Local<Vec<f32>>,
+    mut start: Local<Option<std::time::Instant>>,
+    mut announced_first_map: Local<bool>,
+    time: Res<Time>,
+    phase: Res<State<TurnPhase>>,
+    bounds: Option<Res<layers::MapBounds>>,
+    diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
+    mut game_commands: MessageWriter<GameCommand>,
+    mut camera: Query<(&mut Transform, &mut Projection), With<camera::GameCamera>>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    let start = start.get_or_insert_with(std::time::Instant::now);
+    if bounds.is_none() {
+        return;
+    }
+    if !*announced_first_map {
+        *announced_first_map = true;
+        info!(
+            "PERF first map build ready {:.2?} after app start",
+            start.elapsed()
+        );
+    }
+    // Only count settled frames so async turn resolution never eats the
+    // measurement window.
+    if *phase.get() != TurnPhase::Idle {
+        return;
+    }
+    *frames += 1;
+    match *frames {
+        60 => {
+            info!("PERF ending turn (post-turn rebuild timed by the rebuild logs)");
+            game_commands.write(GameCommand::EndTurn);
+        }
+        120 => {
+            if let Ok((_, mut projection)) = camera.single_mut()
+                && let Projection::Orthographic(ref mut ortho) = *projection
+            {
+                ortho.scale = 2.8;
+            }
+            info!("PERF pan start (zoomed out, 300 frames)");
+        }
+        121..=420 => {
+            if let Ok((mut transform, projection)) = camera.single_mut() {
+                let scale = match &*projection {
+                    Projection::Orthographic(ortho) => ortho.scale,
+                    _ => 1.0,
+                };
+                transform.translation.x += 420.0 * scale * time.delta_secs();
+            }
+            samples.push(time.delta_secs() * 1000.0);
+            if *frames == 420 {
+                let mut sorted = samples.clone();
+                sorted.sort_by(|a, b| a.total_cmp(b));
+                let avg = sorted.iter().sum::<f32>() / sorted.len() as f32;
+                let p95 = sorted[sorted.len() * 95 / 100 - 1];
+                let max = *sorted.last().unwrap_or(&0.0);
+                let fps = diagnostics
+                    .get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FPS)
+                    .and_then(|d| d.average())
+                    .unwrap_or(0.0);
+                info!(
+                    "PERF pan frame pacing over {} frames: avg {avg:.1} ms ({:.0} FPS), p95 {p95:.1} ms, max {max:.1} ms, diagnostic FPS {fps:.0}",
+                    sorted.len(),
+                    1000.0 / avg,
+                );
+                exit.write(AppExit::Success);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Run the Bevy game. The app boots into the setup flow (config → preview →
 /// capital placement → campaign). Debug shortcuts skip setup and start a
 /// game directly: `HUMAN_GAME=1` (human in seat 0), `OBSERVER_GAME=1`, or
 /// any `MAP_SCREENSHOT` capture without an `M10_DEBUG` script (the M6–M9
-/// drivers rely on booting straight into a game).
+/// drivers rely on booting straight into a game). `MAP_W`/`MAP_H` override
+/// the 80×50 default for those shortcut games; `PERF_STATS=1` adds the FPS
+/// diagnostic and the [`perf_driver`] measurement run.
 pub fn run_game() {
     let human = std::env::var("HUMAN_GAME").as_deref() == Ok("1");
     let observer_shortcut = std::env::var("OBSERVER_GAME").as_deref() == Ok("1");
     let m10 = std::env::var("M10_DEBUG").is_ok();
     let screenshot = std::env::var("MAP_SCREENSHOT").is_ok();
+    let perf_stats = std::env::var("PERF_STATS").as_deref() == Ok("1");
     let skip_setup = human || observer_shortcut || (screenshot && !m10);
 
     let (initial_state, session) = if skip_setup {
-        let game = if human {
-            frontend_api::setup::new_game("imperialism", 2, 0, 80, 50, 7, 16, "", "", None)
-        } else {
-            frontend_api::setup::new_observer_game("imperialism", 2, 80, 50, 7, 16, "", "")
+        let env_dim = |key: &str, default: i32| -> i32 {
+            std::env::var(key)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(default)
         };
+        let (w, h) = (env_dim("MAP_W", 80), env_dim("MAP_H", 50));
+        let generation_started = std::time::Instant::now();
+        let game = if human {
+            frontend_api::setup::new_game("imperialism", 2, 0, w, h, 7, 16, "", "", None)
+        } else {
+            frontend_api::setup::new_observer_game("imperialism", 2, w, h, 7, 16, "", "")
+        };
+        if perf_stats {
+            eprintln!(
+                "PERF {w}x{h} map generated in {:.2?}",
+                generation_started.elapsed()
+            );
+        }
         (AppState::InGame, Some(Session::from_game(game)))
     } else {
         (AppState::Setup, None)
@@ -1098,6 +1194,10 @@ pub fn run_game() {
             }),
     )
     .add_plugins(WidgetsPlugin);
+    if perf_stats {
+        app.add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
+            .add_systems(Update, perf_driver.run_if(in_state(AppState::InGame)));
+    }
     if widget_gallery {
         app.add_systems(Startup, gallery::setup_gallery)
             .add_systems(Update, gallery::gallery_interactions);

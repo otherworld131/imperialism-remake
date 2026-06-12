@@ -182,6 +182,11 @@ cargo run --release --bin imperialism -- --batch N > report.json
 # Single interactive game
 cargo run --release --bin imperialism -- [map_key] [nation_index]
 
+# Native GUI (Bevy) — boots into the setup flow (config → preview →
+# capital placement → campaign). Saves go to ./saves/ in the CLI-compatible
+# formats, so GUI and CLI saves interchange freely.
+cargo run --release --features gui --bin imperialism-gui
+
 # Web frontend — rebuild WASM and (re)start the dev server.
 # Default to --opt: optimized WASM is the right build for gameplay,
 # runtime performance, and any user-facing testing.
@@ -190,6 +195,27 @@ cargo run --release --bin imperialism -- [map_key] [nation_index]
 ./web/restart-web-server.sh
 # Then open http://localhost:43173
 ```
+
+### Native GUI env flags
+
+| Flag | Effect |
+|------|--------|
+| `HUMAN_GAME=1` | Skip setup, start a human game (seat 0) on the default 80×50 map |
+| `OBSERVER_GAME=1` | Skip setup, start an observer (AI-only) game |
+| `MAP_W=…` / `MAP_H=…` | Map size for the skip-setup shortcuts above |
+| `WIDGET_GALLERY=1` | Overlay the debug widget gallery |
+| `PERF_STATS=1` | FPS diagnostics + automated perf run (end turn, zoom-out pan, frame-pacing summary, exit) |
+| `MAP_SCREENSHOT=<path>` | Capture the window after settling, then exit (`MAP_DEBUG_MODE`, `MAP_DEBUG_ZOOM`, `MAP_DEBUG_FOG`, `MAP_DEBUG_STRAIGHT`, `MAP_SCREENSHOT_FRAME` tweak the shot) |
+| `M6_DEBUG`…`M10_DEBUG` | Scripted interaction drivers (units/trade/diplomacy/battles/setup flows) for screenshot verification — see `crates/presentation/src/app.rs` |
+
+Linux/Wayland users can opt into the native Wayland backend with
+`--features gui,wayland` (off by default; needs libwayland dev packages).
+Windows needs no extra windowing feature.
+
+GUI icons are loose 64×64 PNGs under `crates/presentation/assets/icons/`,
+generated from handcrafted SVGs in `assets-src/icons/` via
+`cargo run -p gen_assets` — see `assets-src/icons/MANIFEST.md` for the
+icon-replacement workflow (quick PNG swap needs no recompile).
 
 After implementing any plan that touches game logic, **run a short headless smoke test** to verify the full game loop works end-to-end, not just unit tests. Default to **`--batch 1 --batch-max-turns 20`** — one game, capped at 20 turns, finishes in well under a minute. A full 1-game run goes to 1915 (~70 turns) and 3 games take 3–6 minutes; only run that long form when you specifically need late-game state.
 

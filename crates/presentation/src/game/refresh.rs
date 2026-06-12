@@ -26,6 +26,7 @@ pub fn refresh_view_models(
     let Some(session) = session.0.as_ref() else {
         return;
     };
+    let refresh_started = std::time::Instant::now();
     let game = session.game();
     let disable_fog = settings.disable_fog;
 
@@ -300,4 +301,9 @@ pub fn refresh_view_models(
 
     vms.version = data_version.0;
     vms.fetched_fog_disabled = disable_fog;
+    info!(
+        "view models refreshed (version {}): {:.1?}",
+        data_version.0,
+        refresh_started.elapsed(),
+    );
 }

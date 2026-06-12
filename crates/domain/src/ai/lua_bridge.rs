@@ -2189,8 +2189,10 @@ mod tests {
         // The Lua scripts now use "cheapest" for every personality, so we
         // inject a config with research_strategy = "military" directly to
         // verify lua_pick_tech's military-priority dispatch.
-        let mut cfg = LuaAiConfig::default();
-        cfg.research_strategy = "military".to_string();
+        let cfg = LuaAiConfig {
+            research_strategy: "military".to_string(),
+            ..Default::default()
+        };
         let game = game_with_personality_config(AiPersonality::Aggressive, cfg);
         let avail: Vec<(TechId, Money, String, Vec<TechEffect>)> = vec![
             (
@@ -2218,8 +2220,10 @@ mod tests {
     fn economic_pick_tech_prefers_expensive() {
         // Same as above: inject the strategy we want to test rather than
         // reading from Lua (which now hardcodes "cheapest" everywhere).
-        let mut cfg = LuaAiConfig::default();
-        cfg.research_strategy = "expensive".to_string();
+        let cfg = LuaAiConfig {
+            research_strategy: "expensive".to_string(),
+            ..Default::default()
+        };
         let game = game_with_personality_config(AiPersonality::Economic, cfg);
         let avail: Vec<(TechId, Money, String, Vec<TechEffect>)> = vec![
             (TechId(1), Money::dollars(500), "Cheap".into(), vec![]),

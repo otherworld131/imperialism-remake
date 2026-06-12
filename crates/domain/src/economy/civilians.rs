@@ -437,8 +437,10 @@ mod tests {
     #[test]
     fn required_tech_nil_means_ungated() {
         // Modders can ungate by setting the tech name to None in config.
-        let mut cfg = crate::data::GameConfig::default();
-        cfg.civilian_rancher_tech = None;
+        let cfg = crate::data::GameConfig {
+            civilian_rancher_tech: None,
+            ..Default::default()
+        };
         assert_eq!(CivilianType::Rancher.required_tech(&cfg), None);
     }
 

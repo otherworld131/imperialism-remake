@@ -46,6 +46,9 @@ required-features = ["gui"]
 
 [features]
 gui = ["presentation"]
+# Opt-in native Wayland backend for the GUI (Linux). Off by default — see
+# crates/presentation/Cargo.toml. Use: `--features gui,wayland`.
+wayland = ["presentation?/wayland"]
 
 [dependencies]
 application = { path = "crates/application" }

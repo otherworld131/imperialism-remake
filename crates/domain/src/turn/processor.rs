@@ -12860,8 +12860,7 @@ mod tests {
         // Militia must have participated (as casualty or survivor).
         let militia_in_battle = battle
             .defender_casualties
-            .iter()
-            .any(|t| *t == ArmyUnitType::Minutemen)
+            .contains(&ArmyUnitType::Minutemen)
             || battle
                 .defender_survivors
                 .iter()
@@ -13267,12 +13266,8 @@ mod tests {
 
         // Advance enough turns for P2 (minor nation default = 3) to refill.
         for _ in 0..10 {
-            // Ensure regen fires at even turns.
-            if game.turn.0 % 2 == 0 {
-                process_turn(&mut game);
-            } else {
-                process_turn(&mut game);
-            }
+            // Regen fires on its cadence as turns advance.
+            process_turn(&mut game);
         }
         let final_count = game
             .get_nation(NationId(2))
@@ -13378,9 +13373,7 @@ mod tests {
         // attackers. Either way, militia must not have joined the attack.
         for b in &report.battles {
             assert!(
-                !b.attacker_casualties
-                    .iter()
-                    .any(|t| *t == ArmyUnitType::Minutemen),
+                !b.attacker_casualties.contains(&ArmyUnitType::Minutemen),
                 "no Militia should appear in attacker_casualties"
             );
         }

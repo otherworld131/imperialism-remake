@@ -183,7 +183,7 @@ fn run_cities(n: usize, seed: u64) {
 }
 
 fn run_governments() {
-    println!("{:<26} {}", "FORM", "DESCRIPTION");
+    println!("{:<26} DESCRIPTION", "FORM");
     for form in GovernmentForm::ALL {
         println!("{:<26} {}", form.short_label(), form.description());
     }

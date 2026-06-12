@@ -1,8 +1,9 @@
-//! 2D map camera: WASD/arrow pan, right/middle-drag pan, wheel zoom, Home
-//! reset, plus the horizontal-wrap teleport that keeps the camera within
-//! half a world width of the center copy.
+//! 2D map camera: WASD/arrow pan, right/middle-drag pan, wheel and +/- key
+//! zoom, Home reset, plus the horizontal-wrap teleport that keeps the camera
+//! within half a world width of the center copy.
 
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
+use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
 
 use crate::game::resources::CameraCentered;
@@ -55,6 +56,7 @@ pub fn center_camera_when_map_ready(
 pub fn camera_movement(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
+    focus: Res<InputFocus>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mouse_motion: Res<AccumulatedMouseMotion>,
     mouse_scroll: Res<AccumulatedMouseScroll>,
@@ -67,19 +69,24 @@ pub fn camera_movement(
     let Projection::Orthographic(ref mut orthographic) = *projection else {
         return;
     };
+    // A focused text input owns the keyboard (web parity: HexMap ignores
+    // keys typed into inputs); mouse pan/zoom stays live.
+    let keyboard_free = focus.0.is_none();
 
     let mut direction = Vec2::ZERO;
-    if keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::ArrowUp) {
-        direction.y += 1.0;
-    }
-    if keys.pressed(KeyCode::KeyS) || keys.pressed(KeyCode::ArrowDown) {
-        direction.y -= 1.0;
-    }
-    if keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::ArrowLeft) {
-        direction.x -= 1.0;
-    }
-    if keys.pressed(KeyCode::KeyD) || keys.pressed(KeyCode::ArrowRight) {
-        direction.x += 1.0;
+    if keyboard_free {
+        if keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::ArrowUp) {
+            direction.y += 1.0;
+        }
+        if keys.pressed(KeyCode::KeyS) || keys.pressed(KeyCode::ArrowDown) {
+            direction.y -= 1.0;
+        }
+        if keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::ArrowLeft) {
+            direction.x -= 1.0;
+        }
+        if keys.pressed(KeyCode::KeyD) || keys.pressed(KeyCode::ArrowRight) {
+            direction.x += 1.0;
+        }
     }
     if direction != Vec2::ZERO {
         let delta = direction.normalize() * CAMERA_SPEED * orthographic.scale * time.delta_secs();
@@ -98,7 +105,22 @@ pub fn camera_movement(
         orthographic.scale = (orthographic.scale * zoom_factor).clamp(MIN_ZOOM, MAX_ZOOM);
     }
 
-    if keys.just_pressed(KeyCode::Home) {
+    // +/- step zoom (web parity: HexMap binds '+', '=' and '-').
+    if keyboard_free {
+        let mut step = 0i32;
+        if keys.just_pressed(KeyCode::Equal) || keys.just_pressed(KeyCode::NumpadAdd) {
+            step += 1;
+        }
+        if keys.just_pressed(KeyCode::Minus) || keys.just_pressed(KeyCode::NumpadSubtract) {
+            step -= 1;
+        }
+        if step != 0 {
+            let factor = if step > 0 { 0.85 } else { 1.0 / 0.85 };
+            orthographic.scale = (orthographic.scale * factor).clamp(MIN_ZOOM, MAX_ZOOM);
+        }
+    }
+
+    if keyboard_free && keys.just_pressed(KeyCode::Home) {
         if let Some(bounds) = bounds.as_deref() {
             transform.translation.x = bounds.center.x;
             transform.translation.y = bounds.center.y;

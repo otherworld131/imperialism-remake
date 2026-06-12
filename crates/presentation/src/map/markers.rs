@@ -164,6 +164,7 @@ pub fn rebuild_marker_layers(
         return;
     }
     *built = Some(key);
+    let build_started = std::time::Instant::now();
 
     for entity in &existing {
         commands.entity(entity).despawn();
@@ -680,6 +681,11 @@ pub fn rebuild_marker_layers(
             },
         );
     }
+    info!(
+        "map markers rebuild (version {}): {:.1?}",
+        vms.version,
+        build_started.elapsed(),
+    );
 }
 
 /// Diplomacy icon sprites for one relation, in render order (web
