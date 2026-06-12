@@ -69,13 +69,27 @@ pub fn setup_map_tooltip(mut commands: Commands) {
 
 fn hover_key(target: &HoverTarget) -> Option<String> {
     match target {
-        HoverTarget::None => None,
+        HoverTarget::None | HoverTarget::Treaty { .. } => None,
         HoverTarget::Hex(q, r) => Some(format!("t:{q},{r}")),
         HoverTarget::Navy(key) => Some(format!("m:{key}")),
     }
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Hide the tooltip immediately (used when a full-screen overlay opens and
+/// the hover/update systems stop running).
+pub fn hide_map_tooltip(
+    mut node: Query<&mut Visibility, With<MapTooltipNode>>,
+    mut state: ResMut<MapTooltipState>,
+) {
+    *state = MapTooltipState::default();
+    for mut visibility in &mut node {
+        if *visibility != Visibility::Hidden {
+            *visibility = Visibility::Hidden;
+        }
+    }
+}
+
 pub fn update_map_tooltip(
     time: Res<Time>,
     target: Res<HoverTarget>,
@@ -207,7 +221,7 @@ pub fn update_map_tooltip(
                 spawn_marker_content(&mut commands, content_entity, marker, &theme);
             }
         }
-        HoverTarget::None => {}
+        HoverTarget::None | HoverTarget::Treaty { .. } => {}
     }
     if open.sticky {
         line(
@@ -324,7 +338,7 @@ fn spawn_tile_content(
         );
     }
     if tile.is_capital {
-        line(commands, parent, "★ Capital", theme.font(12.0), theme::TEXT);
+        line(commands, parent, "• Capital", theme.font(12.0), theme::TEXT);
     }
     if tile.has_railroad {
         line(commands, parent, "Railroad", theme.font(12.0), theme::TEXT);

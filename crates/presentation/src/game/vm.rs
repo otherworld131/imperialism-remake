@@ -280,6 +280,647 @@ pub struct PendingMoveVm {
     pub dest_name: String,
 }
 
+// ── Industry (`frontend_api::industry::get_industry_data`) ──────────────
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct IndustryVm {
+    pub buildings: Vec<BuildingVm>,
+    pub warehouse: WarehouseVm,
+    #[serde(default)]
+    pub warehouse_targets: WarehouseVm,
+    pub labor: LaborVm,
+    pub production_forecast: ProductionForecastVm,
+    pub chain_targets: BTreeMap<String, u32>,
+    pub can_expand: BTreeMap<String, bool>,
+    pub pending_civilian_hires: BTreeMap<String, u32>,
+    pub pending_immigration: u32,
+    pub max_pending_immigration: u32,
+    pub pending_training: PendingTrainingVm,
+    pub immigration_costs: ImmigrationCostsVm,
+    pub training_costs: TrainingCostsVm,
+    pub pending_freight_cars: u32,
+    pub max_freight_cars: u32,
+    #[serde(default)]
+    pub pending_ships: Vec<String>,
+    #[serde(default)]
+    pub pending_army_recruits: Vec<String>,
+    #[serde(default)]
+    pub army_committed_arms: u32,
+    #[serde(default)]
+    pub army_committed_horses: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct BuildingVm {
+    #[serde(rename = "type")]
+    pub building_type: String,
+    pub display_name: String,
+    pub capacity: u32,
+    pub next_capacity: u32,
+    pub is_expanding: bool,
+    pub turns_remaining: u32,
+    pub pending_capacity: u32,
+    pub expansion_cost: ExpansionCostVm,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct ExpansionCostVm {
+    pub lumber: u32,
+    pub steel: u32,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WarehouseVm {
+    #[serde(default)]
+    pub resources: BTreeMap<String, u32>,
+    #[serde(default)]
+    pub materials: BTreeMap<String, u32>,
+    #[serde(default)]
+    pub goods: BTreeMap<String, u32>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+#[allow(dead_code)]
+pub struct LaborVm {
+    pub untrained: u32,
+    pub trained: u32,
+    pub expert: u32,
+    pub committed_untrained: u32,
+    pub committed_trained: u32,
+    pub committed_expert: u32,
+    pub total_labor_units: u32,
+    pub committed_labor_units: u32,
+    pub total_workers: u32,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ProductionForecastVm {
+    pub timber_chain: ChainForecastVm,
+    pub metal_chain: ChainForecastVm,
+    pub textile_chain: ChainForecastVm,
+    #[serde(default)]
+    pub arms_chain: ArmsChainVm,
+    #[serde(default)]
+    pub paper_chain: PaperChainVm,
+    #[serde(default)]
+    pub food_chain: FoodChainVm,
+}
+
+/// Mill + factory forecast shared by the timber/metal/textile chains; the
+/// per-chain committed-input fields default to zero where absent.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+#[allow(dead_code)]
+pub struct ChainForecastVm {
+    pub mill_cap: u32,
+    pub mill_max_output: u32,
+    pub mill_output: u32,
+    pub mill_labor: u32,
+    pub mill_target: u32,
+    pub mill_committed_timber: u32,
+    pub mill_committed_coal: u32,
+    pub mill_committed_iron: u32,
+    pub mill_committed_cotton: u32,
+    pub mill_committed_wool: u32,
+    pub factory_cap: u32,
+    pub factory_max_output: u32,
+    pub factory_output: u32,
+    pub factory_labor: u32,
+    pub factory_target: u32,
+    pub factory_committed_lumber: u32,
+    pub factory_committed_steel: u32,
+    pub factory_committed_fabric: u32,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+#[allow(dead_code)]
+pub struct ArmsChainVm {
+    pub armory_cap: u32,
+    pub armory_max_output: u32,
+    pub armory_output: u32,
+    pub armory_labor: u32,
+    pub armory_target: u32,
+    pub armory_committed_steel: u32,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+#[allow(dead_code)]
+pub struct PaperChainVm {
+    pub factory_cap: u32,
+    pub factory_max_output: u32,
+    pub factory_output: u32,
+    pub factory_labor: u32,
+    pub factory_target: u32,
+    pub factory_committed_lumber: u32,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+#[allow(dead_code)]
+pub struct FoodChainVm {
+    pub factory_cap: u32,
+    pub factory_max_output: u32,
+    pub factory_output: u32,
+    pub factory_labor: u32,
+    pub factory_target: u32,
+    pub factory_committed_grain: u32,
+    pub factory_committed_fruit: u32,
+    pub factory_committed_fish: u32,
+    pub factory_committed_livestock: u32,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+pub struct PendingTrainingVm {
+    pub to_trained: u32,
+    pub to_expert: u32,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct ImmigrationCostsVm {
+    pub canned_food: u32,
+    pub clothing: u32,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct TrainingCostsVm {
+    pub to_trained_paper: u32,
+    pub to_trained_labor: u32,
+    pub to_expert_paper: u32,
+    pub to_expert_labor: u32,
+}
+
+// ── Buildable units (`frontend_api::units::get_buildable_units`) ────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BuildableUnitsVm {
+    pub treasury: i64,
+    pub arms: u32,
+    pub army: Vec<BuildableEntryVm>,
+    pub ships: Vec<BuildableEntryVm>,
+    pub civilians: Vec<BuildableEntryVm>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct BuildableEntryVm {
+    #[serde(rename = "type")]
+    pub unit_type: String,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub cost: Option<i64>,
+    #[serde(default)]
+    pub arms_required: Option<u32>,
+    #[serde(default)]
+    pub resources_needed: Option<BTreeMap<String, u32>>,
+    #[serde(default)]
+    pub expert_required: Option<bool>,
+    pub tech_met: bool,
+    #[serde(default)]
+    pub max_count: u32,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+// ── Transport (`frontend_api::transport::get_transport_data`) ───────────
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct TransportVm {
+    pub total_capacity: u32,
+    #[serde(default)]
+    pub remote_delivery_capacity: Option<u32>,
+    pub military_transport_capacity: u32,
+    pub allocations: Vec<TransportAllocationVm>,
+    pub deliveries: Vec<TransportDeliveryVm>,
+    #[serde(default)]
+    pub demand: Vec<TransportDemandVm>,
+    #[serde(default)]
+    pub food_requirement: Option<FoodRequirementVm>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TransportAllocationVm {
+    pub resource: String,
+    pub units: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct TransportDeliveryVm {
+    pub resource: String,
+    pub available: u32,
+    pub delivered: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TransportDemandVm {
+    pub resource: String,
+    pub demand: u32,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct FoodRequirementVm {
+    pub workers: u32,
+    pub grain: u32,
+    pub fruit: u32,
+    pub meat: u32,
+}
+
+// ── Trade (`frontend_api::trade::get_trade_data`) ───────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct TradeVm {
+    #[serde(default = "default_true")]
+    pub auto_trade_with_minors: bool,
+    pub available_offers: Vec<TradeOfferVm>,
+    #[serde(default)]
+    pub market_archive: Vec<MarketTurnVm>,
+    pub minor_nations: Vec<MinorNationVm>,
+    pub sellable_resources: Vec<SellableVm>,
+    #[serde(default)]
+    pub player_sell_orders: Vec<PlayerSellOrderVm>,
+    #[serde(default)]
+    pub player_buy_orders: Vec<PlayerBuyOrderVm>,
+    pub remaining_cargo: u32,
+    pub total_cargo: u32,
+    #[serde(default)]
+    pub subsidies: Vec<SubsidyVm>,
+    pub trade_balance: TradeBalanceVm,
+    pub trade_history: Vec<TradeHistoryVm>,
+    pub treasury: i64,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TradeOfferVm {
+    pub resource: String,
+    pub seller_id: u32,
+    pub seller_name: String,
+    pub quantity: u32,
+    pub price: i64,
+    pub is_great_power: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MarketTurnVm {
+    pub turn: u32,
+    pub offers: Vec<MarketOfferVm>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MarketOfferVm {
+    pub resource: String,
+    pub seller_id: u32,
+    pub seller_name: String,
+    pub seller_is_great_power: bool,
+    pub offered: u32,
+    pub sold: u32,
+    pub price_per_unit: i64,
+    #[serde(default)]
+    pub fills: Vec<MarketFillVm>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct MarketFillVm {
+    pub buyer_id: u32,
+    pub buyer_name: String,
+    pub buyer_is_great_power: bool,
+    pub quantity: u32,
+    pub price_per_unit: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct MinorNationVm {
+    pub nation_id: u32,
+    pub name: String,
+    pub has_consulate: bool,
+    pub has_embassy: bool,
+    #[serde(default)]
+    pub resources: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SellableVm {
+    pub name: String,
+    pub stock: u32,
+    pub price: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct PlayerSellOrderVm {
+    pub commodity_name: String,
+    pub quantity: u32,
+    #[serde(default)]
+    pub price: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct PlayerBuyOrderVm {
+    pub commodity_name: String,
+    pub quantity: u32,
+    #[serde(default)]
+    pub max_price: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct SubsidyVm {
+    pub nation_id: u32,
+    pub amount: i64,
+    #[serde(default)]
+    pub nation_name: String,
+    #[serde(default)]
+    pub has_consulate: bool,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct TradeBalanceVm {
+    pub total_bought: i64,
+    pub total_sold: i64,
+    pub net: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TradeHistoryVm {
+    pub turn: u32,
+    pub resource: String,
+    pub bought: bool,
+    pub quantity: u32,
+    pub total_cost: i64,
+    pub partner_id: u32,
+    pub partner_name: String,
+    pub partner_is_great_power: bool,
+}
+
+// ── Diplomacy screen (`frontend_api::diplomacy::get_diplomacy_screen_data`) ─
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct DiplomacyScreenVm {
+    pub player_standing: i64,
+    pub treasury: i64,
+    pub player_already_at_war: bool,
+    pub relations: Vec<DiploScreenRelationVm>,
+}
+
+impl DiplomacyScreenVm {
+    pub fn relation(&self, nation_id: u32) -> Option<&DiploScreenRelationVm> {
+        self.relations.iter().find(|r| r.nation_id == nation_id)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct DiploScreenRelationVm {
+    pub nation_id: u32,
+    pub nation_name: String,
+    pub nation_color: String,
+    pub nation_type: String,
+    pub score: i64,
+    pub at_war: bool,
+    pub status: String,
+    pub treaties: Vec<String>,
+    pub has_consulate: bool,
+    pub has_embassy: bool,
+    pub has_pending_consulate: bool,
+    pub has_pending_embassy: bool,
+    pub has_pending_war: bool,
+    pub pending_grant_amount_dollars: Option<i64>,
+    pub pending_break_treaties: Vec<String>,
+    pub has_pending_nap: bool,
+    pub has_pending_alliance: bool,
+    pub has_pending_peace: bool,
+    pub is_in_anarchy: bool,
+    pub actions: DiploActionsVm,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct DiploActionsVm {
+    pub can_build_consulate: bool,
+    pub consulate_cost: i64,
+    pub can_build_embassy: bool,
+    pub embassy_cost: i64,
+    pub can_propose_nap: bool,
+    pub can_propose_alliance: bool,
+    pub can_declare_war: bool,
+    pub can_send_grant: bool,
+    pub can_break_treaty: bool,
+    pub breakable_treaties: Vec<String>,
+    pub can_propose_peace: bool,
+}
+
+// ── Proposals (`frontend_api::diplomacy::get_pending_proposals`) ────────
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ProposalsVm {
+    pub proposals: Vec<ProposalVm>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[allow(dead_code)]
+pub struct ProposalVm {
+    pub index: u32,
+    pub from_nation_id: u32,
+    pub from_nation_name: String,
+    pub from_nation_color: String,
+    /// `"NonAggressionPact" | "Alliance" | "PeaceTreaty" |
+    /// "RequestToJoinEmpire" | "WarDeclaration" | "PactDefenseRequest"`.
+    pub proposal_type: String,
+    pub display_text: String,
+    pub turn_proposed: u32,
+    pub turns_until_expiry: u32,
+}
+
+// ── Tech screen (`frontend_api::tech::get_tech_screen_data`) ────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TechScreenVm {
+    pub available: Vec<TechAvailableVm>,
+    pub researched: Vec<TechResearchedVm>,
+    pub pending: Option<TechPendingVm>,
+    pub treasury: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TechAvailableVm {
+    pub id: u32,
+    pub name: String,
+    pub cost: i64,
+    pub earliest_year: i32,
+    pub latest_year: i32,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TechResearchedVm {
+    pub id: u32,
+    pub name: String,
+    pub year: i32,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TechPendingVm {
+    pub id: u32,
+    pub name: String,
+    pub cost: i64,
+    pub description: String,
+}
+
+// ── Ledger (`frontend_api::ledger::get_all_gp_ledger_data`) ─────────────
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct GpLedgerEntryVm {
+    pub nation_id: u32,
+    pub nation_name: String,
+    pub nation_color: String,
+    pub is_human: bool,
+    pub economy: GpEconomyVm,
+    pub cash_flow: Option<CashFlowVm>,
+    pub resource_flow: Option<ResourceFlowVm>,
+    pub cumulative: CumulativeTotalsVm,
+    pub labor: GpLaborVm,
+    pub military: GpMilitaryVm,
+    pub diplomacy: GpDiplomacyVm,
+    #[serde(default)]
+    pub resources_detail: BTreeMap<String, i64>,
+    #[serde(default)]
+    pub materials_detail: BTreeMap<String, i64>,
+    #[serde(default)]
+    pub goods_detail: BTreeMap<String, i64>,
+    pub technology: GpTechnologyVm,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GpEconomyVm {
+    pub treasury: i64,
+    pub provinces: i64,
+    pub buildings: i64,
+    pub goods_revenue: i64,
+    pub total_resources: i64,
+    pub total_materials: i64,
+    pub total_goods: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct CashFlowVm {
+    pub opening_treasury: i64,
+    pub closing_treasury: i64,
+    pub total_income: i64,
+    pub total_expense: i64,
+    pub observed_delta: i64,
+    pub accounted_delta: i64,
+    pub reconciliation_mismatch: i64,
+    pub reconciles: bool,
+    #[serde(default)]
+    pub income_totals: BTreeMap<String, i64>,
+    #[serde(default)]
+    pub expense_totals: BTreeMap<String, i64>,
+    #[serde(default)]
+    pub income_by_category: BTreeMap<String, i64>,
+    #[serde(default)]
+    pub expense_by_category: BTreeMap<String, i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct ResourceFlowVm {
+    #[serde(default)]
+    pub inflow: Vec<FlowEntryVm>,
+    #[serde(default)]
+    pub outflow: Vec<FlowEntryVm>,
+    #[serde(default)]
+    pub inflow_by_stockpile_category: BTreeMap<String, BTreeMap<String, i64>>,
+    #[serde(default)]
+    pub outflow_by_stockpile_category: BTreeMap<String, BTreeMap<String, i64>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct FlowEntryVm {
+    pub stockpile: String,
+    /// Inflow entries carry `source`; outflow entries carry `sink`.
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub sink: Option<String>,
+    pub category: String,
+    pub amount: i64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct CumulativeTotalsVm {
+    #[serde(default)]
+    pub income_totals: BTreeMap<String, i64>,
+    #[serde(default)]
+    pub expense_totals: BTreeMap<String, i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GpLaborVm {
+    pub untrained: i64,
+    pub trained: i64,
+    pub expert: i64,
+    pub total: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct GpMilitaryVm {
+    pub total_army_count: i64,
+    pub total_army_fp: i64,
+    pub field_army_count: i64,
+    pub militia_count: i64,
+    pub total_warship_count: i64,
+    pub merchant_ships: i64,
+    pub generals_earned: i64,
+    pub total_arms_built: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GpDiplomacyVm {
+    pub standing: i64,
+    pub consulates: i64,
+    pub embassies: i64,
+    pub alliances: i64,
+    #[serde(default)]
+    pub alliance_names: Vec<String>,
+    pub wars: i64,
+    #[serde(default)]
+    pub war_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GpTechnologyVm {
+    pub researched_count: i64,
+    #[serde(default)]
+    pub researched_names: Vec<String>,
+}
+
+/// One entry from `frontend_api::flavor::get_nation_flags`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NationFlagVm {
+    pub nation_id: u32,
+    pub flag_svg: String,
+}
+
 pub fn parse_map_tiles(value: serde_json::Value) -> Result<Vec<MapTile>, serde_json::Error> {
     serde_json::from_value(value)
 }
@@ -325,5 +966,49 @@ pub fn parse_move_targets(value: serde_json::Value) -> Result<MoveTargetsVm, ser
 pub fn parse_pending_moves(
     value: serde_json::Value,
 ) -> Result<Vec<PendingMoveVm>, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
+pub fn parse_industry(value: serde_json::Value) -> Result<IndustryVm, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
+pub fn parse_buildable_units(
+    value: serde_json::Value,
+) -> Result<BuildableUnitsVm, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
+pub fn parse_transport(value: serde_json::Value) -> Result<TransportVm, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
+pub fn parse_trade(value: serde_json::Value) -> Result<TradeVm, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
+pub fn parse_diplomacy_screen(
+    value: serde_json::Value,
+) -> Result<DiplomacyScreenVm, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
+pub fn parse_proposals(value: serde_json::Value) -> Result<ProposalsVm, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
+pub fn parse_tech_screen(value: serde_json::Value) -> Result<TechScreenVm, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
+pub fn parse_gp_ledger(
+    value: serde_json::Value,
+) -> Result<Vec<GpLedgerEntryVm>, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
+pub fn parse_nation_flags(
+    value: serde_json::Value,
+) -> Result<Vec<NationFlagVm>, serde_json::Error> {
     serde_json::from_value(value)
 }

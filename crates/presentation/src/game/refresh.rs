@@ -4,8 +4,8 @@
 use bevy::prelude::*;
 
 use crate::game::resources::{
-    DataVersion, PendingMoveList, PerspectiveNation, RenderSettings, SessionRes, TileIndex,
-    ViewModels,
+    DataVersion, PendingMoveList, PerspectiveNation, PrevLedger, RenderSettings, SessionRes,
+    TileIndex, TurnInfo, ViewModels,
 };
 use crate::game::vm;
 
@@ -14,9 +14,11 @@ pub fn refresh_view_models(
     data_version: Res<DataVersion>,
     settings: Res<RenderSettings>,
     perspective: Res<PerspectiveNation>,
+    turn_info: Res<TurnInfo>,
     mut vms: ResMut<ViewModels>,
     mut index: ResMut<TileIndex>,
     mut pending_moves: ResMut<PendingMoveList>,
+    mut prev_ledger: ResMut<PrevLedger>,
 ) {
     if vms.version == data_version.0 && vms.fetched_fog_disabled == settings.disable_fog {
         return;
@@ -124,6 +126,125 @@ pub fn refresh_view_models(
             None
         }
     };
+
+    vms.industry = match frontend_api::industry::get_industry_data(game, perspective.0)
+        .map(vm::parse_industry)
+    {
+        Ok(Ok(industry)) => Some(industry),
+        Ok(Err(err)) => {
+            warn!("industry decode failed: {err}");
+            None
+        }
+        Err(err) => {
+            warn!("get_industry_data failed: {}", err.message());
+            None
+        }
+    };
+
+    vms.buildable = match frontend_api::units::get_buildable_units(game, perspective.0)
+        .map(vm::parse_buildable_units)
+    {
+        Ok(Ok(buildable)) => Some(buildable),
+        Ok(Err(err)) => {
+            warn!("buildable-units decode failed: {err}");
+            None
+        }
+        Err(err) => {
+            warn!("get_buildable_units failed: {}", err.message());
+            None
+        }
+    };
+
+    vms.transport = match frontend_api::transport::get_transport_data(game, perspective.0)
+        .map(vm::parse_transport)
+    {
+        Ok(Ok(transport)) => Some(transport),
+        Ok(Err(err)) => {
+            warn!("transport decode failed: {err}");
+            None
+        }
+        Err(err) => {
+            warn!("get_transport_data failed: {}", err.message());
+            None
+        }
+    };
+
+    vms.trade = match frontend_api::trade::get_trade_data(game, perspective.0).map(vm::parse_trade)
+    {
+        Ok(Ok(trade)) => Some(trade),
+        Ok(Err(err)) => {
+            warn!("trade decode failed: {err}");
+            None
+        }
+        Err(err) => {
+            warn!("get_trade_data failed: {}", err.message());
+            None
+        }
+    };
+
+    vms.diplomacy_screen =
+        match frontend_api::diplomacy::get_diplomacy_screen_data(game, perspective.0)
+            .map(vm::parse_diplomacy_screen)
+        {
+            Ok(Ok(screen)) => Some(screen),
+            Ok(Err(err)) => {
+                warn!("diplomacy-screen decode failed: {err}");
+                None
+            }
+            Err(err) => {
+                warn!("get_diplomacy_screen_data failed: {}", err.message());
+                None
+            }
+        };
+
+    vms.proposals = match frontend_api::diplomacy::get_pending_proposals(game, perspective.0)
+        .map(vm::parse_proposals)
+    {
+        Ok(Ok(proposals)) => Some(proposals),
+        Ok(Err(err)) => {
+            warn!("proposals decode failed: {err}");
+            None
+        }
+        Err(err) => {
+            warn!("get_pending_proposals failed: {}", err.message());
+            None
+        }
+    };
+
+    vms.tech = match frontend_api::tech::get_tech_screen_data(game).map(vm::parse_tech_screen) {
+        Ok(Ok(tech)) => Some(tech),
+        Ok(Err(err)) => {
+            warn!("tech-screen decode failed: {err}");
+            None
+        }
+        Err(err) => {
+            warn!("get_tech_screen_data failed: {}", err.message());
+            None
+        }
+    };
+
+    // Great-Power ledger. The previous-turn snapshot rotates only when the
+    // turn label moved since the current entries were fetched (web
+    // `prevLedgerTurnRef` parity) so mid-turn command refreshes keep the
+    // same delta baseline.
+    let ledger = match frontend_api::ledger::get_all_gp_ledger_data(game).map(vm::parse_gp_ledger) {
+        Ok(Ok(entries)) => entries,
+        Ok(Err(err)) => {
+            warn!("gp-ledger decode failed: {err}");
+            Vec::new()
+        }
+        Err(err) => {
+            warn!("get_all_gp_ledger_data failed: {}", err.message());
+            Vec::new()
+        }
+    };
+    if let Some(fetched_turn) = prev_ledger.fetched_turn.as_ref()
+        && *fetched_turn != turn_info.label
+    {
+        prev_ledger.entries = std::mem::take(&mut vms.ledger);
+    }
+    prev_ledger.fetched_turn = Some(turn_info.label.clone());
+    vms.ledger = ledger;
 
     let pending = match frontend_api::units::get_pending_unit_moves(game, perspective.0)
         .map(vm::parse_pending_moves)

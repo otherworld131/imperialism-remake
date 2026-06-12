@@ -69,7 +69,7 @@ pub fn spawn_dropdown(
 ) -> Entity {
     let selected = props.selected.min(props.options.len().saturating_sub(1));
     let header_label = format!(
-        "{}  ▾",
+        "{}  ▼",
         props.options.get(selected).map_or("", String::as_str)
     );
     let root = parent
@@ -199,7 +199,7 @@ pub fn spawn_multi_dropdown(
 
 fn multi_header_label(label: &str, selected: &[bool]) -> String {
     let count = selected.iter().filter(|s| **s).count();
-    format!("{label}: {count}/{}  ▾", selected.len())
+    format!("{label}: {count}/{}  ▼", selected.len())
 }
 
 // ── Behavior ────────────────────────────────────────────────────────
@@ -304,7 +304,7 @@ fn sync_dropdowns(
                                 .options
                                 .get(dropdown.selected)
                                 .map_or("", String::as_str),
-                            if open_up { "▴" } else { "▾" }
+                            if open_up { "▲" } else { "▼" }
                         );
                     }
                 }

@@ -33,8 +33,8 @@ pub use dropdown::{
 pub use modal::{ModalHandles, ModalProps, ModalStack, close_top_modal, open_modal};
 pub use progress::{ProgressProps, UiProgress, spawn_progress};
 pub use scroll::{ScrollHandles, ScrollProps, UiScrollArea, spawn_scroll_area};
-pub use slider::{SliderCommitted, SliderProps, UNLIMITED, UiSlider, spawn_slider};
-pub use table::{ColumnSpec, TableProps, UiTable, spawn_table};
+pub use slider::{SliderCommitted, SliderProps, UNLIMITED, UiSlider, UiSliderDrag, spawn_slider};
+pub use table::{CellBuilder, ColumnSpec, TableProps, UiTable, spawn_table};
 pub use tabs::{TabChanged, TabGroup, TabsHandles, spawn_tabs};
 pub use text_input::{TextInputChanged, TextInputProps, UiTextInput, spawn_text_input};
 pub use toast::{Toast, ToastKind};

@@ -6,10 +6,10 @@ use frontend_api::Session;
 use crate::game::commands::{self, GameCommand};
 use crate::game::refresh;
 use crate::game::resources::{
-    Blink, DataVersion, DeployMode, EngineerPrompt, FleetTargets, GameMeta, MoveTargets,
-    PendingMoveList, PendingMoves, PerspectiveNation, ProvinceUnits, RenderSettings,
-    SelectedCivilian, SelectedNavy, SelectedShips, SelectedUnits, SessionRes, TileIndex, TurnInfo,
-    ViewModels, tick_blink,
+    Blink, DataVersion, DeployMode, DiploUi, EngineerPrompt, FleetTargets, GameMeta, MoveTargets,
+    PendingMoveList, PendingMoves, PerspectiveNation, PrevLedger, ProposalPrompt, ProvinceUnits,
+    QueuedDiplomacyAction, RenderSettings, SelectedCivilian, SelectedNavy, SelectedShips,
+    SelectedUnits, SessionRes, TileIndex, TreatyMarkerIndex, TurnInfo, ViewModels, tick_blink,
 };
 use crate::game::selection;
 use crate::game::turn_runner::{self, ActiveTurn};
@@ -20,9 +20,12 @@ use crate::map::lod::{self, ZoomLod};
 use crate::map::markers;
 use crate::map::picking::{self, HoverTarget, HoveredHex, MapClick, SelectedHex};
 use crate::map::tooltip::{self, MapTooltipState};
-use crate::screens::{gallery, map_hud, panels, side_panel};
-use crate::state::TurnPhase;
-use crate::widgets::{self, WidgetsPlugin};
+use crate::screens::{
+    diplomacy, gallery, industry, ledger, map_hud, panels, proposals, side_panel, tech, trade,
+    transport,
+};
+use crate::state::{Screen, TurnPhase, map_interactive};
+use crate::widgets::{self, ButtonActivated, TabGroup, WidgetsPlugin};
 
 /// Debug hook: when `MAP_SCREENSHOT=<path>` is set, capture the primary
 /// window after the map settles, then exit. `MAP_DEBUG_MODE` (a map-mode
@@ -190,6 +193,235 @@ fn m6_debug_driver(
     }
 }
 
+/// Debug driver for the M7 screens: `M7_DEBUG=<script>` switches screens and
+/// replays interactions so `MAP_SCREENSHOT` captures live state.
+/// Scripts: `industry`, `industrydrag`, `transport`, `trade`, `tradebuy`,
+/// `tradehist`, `trademarket`, `queue`, `queuetrade`, `queueendturn`.
+fn m7_debug_driver(
+    mut frames: Local<u32>,
+    phase: Res<State<TurnPhase>>,
+    mut next_screen: ResMut<NextState<Screen>>,
+    mut game_commands: MessageWriter<GameCommand>,
+    mut activations: MessageWriter<ButtonActivated>,
+    buy_buttons: Query<Entity, With<trade::TradeBuyButton>>,
+    mut tab_groups: Query<&mut TabGroup>,
+    mut chain_sliders: Query<(
+        &widgets::UiSlider,
+        &mut widgets::UiSliderDrag,
+        &industry::IndustryAction,
+    )>,
+) {
+    let Ok(script) = std::env::var("M7_DEBUG") else {
+        return;
+    };
+    if *phase.get() != TurnPhase::Idle {
+        return;
+    }
+    *frames += 1;
+
+    if *frames == 20 {
+        match script.as_str() {
+            "industry" | "industrydrag" => next_screen.set(Screen::Industry),
+            "transport" => next_screen.set(Screen::Transport),
+            "trade" | "tradebuy" | "tradehist" | "trademarket" => next_screen.set(Screen::Trade),
+            "queue" | "queuetrade" | "queueendturn" => {
+                // Queue pending state: a chain target and a sell order.
+                game_commands.write(GameCommand::SetChainTarget {
+                    chain: "timber",
+                    step: "mill",
+                    target: 2,
+                });
+                game_commands.write(GameCommand::SetSellOrder {
+                    resource: "Grain".to_string(),
+                    quantity: 3,
+                });
+            }
+            _ => {}
+        }
+    }
+    if *frames == 60 {
+        match script.as_str() {
+            "queue" | "queueendturn" => next_screen.set(Screen::Industry),
+            "queuetrade" => next_screen.set(Screen::Trade),
+            _ => {}
+        }
+    }
+    if *frames == 80 {
+        match script.as_str() {
+            // Buffer a mid-drag value on the first chain slider so the
+            // screenshot shows the drag-in-progress visuals.
+            "industrydrag" => {
+                if let Some((ui, mut drag, _)) = chain_sliders
+                    .iter_mut()
+                    .find(|(_, _, action)| matches!(action, industry::IndustryAction::Chain { .. }))
+                {
+                    drag.dragging = true;
+                    drag.value = (ui.max / 2.0).round();
+                }
+            }
+            "tradehist" => {
+                for mut group in &mut tab_groups {
+                    group.active = 1;
+                }
+            }
+            "trademarket" => {
+                for mut group in &mut tab_groups {
+                    group.active = 2;
+                }
+            }
+            "queueendturn" => {
+                game_commands.write(GameCommand::EndTurn);
+            }
+            _ => {}
+        }
+    }
+    if *frames == 100
+        && script == "tradebuy"
+        && let Some(button) = buy_buttons.iter().next()
+    {
+        activations.write(ButtonActivated(button));
+    }
+    // History scripts: run two turns so the archives have data, then open
+    // the requested Trade tab. Frames only advance while idle, so the two
+    // EndTurns resolve sequentially.
+    if matches!(script.as_str(), "histdata" | "marketdata") {
+        if *frames == 20 || *frames == 40 {
+            game_commands.write(GameCommand::EndTurn);
+        }
+        if *frames == 70 {
+            next_screen.set(Screen::Trade);
+        }
+        if *frames == 100 {
+            for mut group in &mut tab_groups {
+                group.active = if script == "histdata" { 1 } else { 2 };
+            }
+        }
+    }
+}
+
+/// Debug driver for the M8 screens: `M8_DEBUG=<script>` switches screens and
+/// replays interactions so `MAP_SCREENSHOT` captures live state.
+/// Scripts: `diplomacy`, `diploarm`, `diploqueue`, `diploendturn`,
+/// `proposal`, `tech`, `techqueue`, `ledger`, `ledgerflow`.
+fn m8_debug_driver(
+    mut frames: Local<u32>,
+    phase: Res<State<TurnPhase>>,
+    meta: Res<GameMeta>,
+    vms: Res<ViewModels>,
+    mut next_screen: ResMut<NextState<Screen>>,
+    mut game_commands: MessageWriter<GameCommand>,
+    mut clicks: MessageWriter<MapClick>,
+    mut diplo: ResMut<DiploUi>,
+    mut ledger_ui: ResMut<ledger::LedgerUi>,
+    mut prompt: ResMut<ProposalPrompt>,
+    mut tab_groups: Query<&mut TabGroup>,
+) {
+    let Ok(script) = std::env::var("M8_DEBUG") else {
+        return;
+    };
+    if *phase.get() != TurnPhase::Idle {
+        return;
+    }
+    *frames += 1;
+
+    // A minor-nation capital the player can target with a consulate.
+    let consulate_target = || -> Option<(i32, i32)> {
+        let screen = vms.diplomacy_screen.as_ref()?;
+        let tiles = vms.map.as_ref()?;
+        let target = screen
+            .relations
+            .iter()
+            .find(|r| r.nation_type == "MinorNation" && r.actions.can_build_consulate)?;
+        tiles
+            .iter()
+            .find(|t| t.is_country_capital && t.nation_id == i64::from(target.nation_id))
+            .map(|t| (t.q, t.r))
+    };
+
+    if *frames == 20 {
+        match script.as_str() {
+            "diplomacy" | "diploarm" | "diploqueue" | "diploendturn" => {
+                next_screen.set(Screen::Diplomacy);
+            }
+            "tech" => next_screen.set(Screen::Tech),
+            "techqueue" => {
+                if let Some(tech) = vms.tech.as_ref()
+                    && let Some(entry) = tech.available.iter().find(|t| t.cost <= tech.treasury)
+                {
+                    game_commands.write(GameCommand::QueueTechResearch {
+                        name: entry.name.clone(),
+                    });
+                }
+            }
+            // One end turn first so cash flow + delta baselines exist.
+            "ledger" | "ledgerflow" => {
+                game_commands.write(GameCommand::EndTurn);
+            }
+            "proposal" => {
+                // Synthetic prompt: proposals come from AI turns and aren't
+                // deterministic in a 1-turn screenshot run.
+                prompt.0 = serde_json::from_value(serde_json::json!({
+                    "proposals": [
+                        {
+                            "index": 0,
+                            "from_nation_id": 1,
+                            "from_nation_name": "Shenia",
+                            "from_nation_color": "Orange",
+                            "proposal_type": "NonAggressionPact",
+                            "display_text": "Shenia proposes a Non-Aggression Pact",
+                            "turn_proposed": 1,
+                            "turns_until_expiry": 3,
+                        },
+                        {
+                            "index": 1,
+                            "from_nation_id": 2,
+                            "from_nation_name": "Gringrinlaria",
+                            "from_nation_color": "LightBlue",
+                            "proposal_type": "Alliance",
+                            "display_text": "Gringrinlaria proposes an Alliance",
+                            "turn_proposed": 1,
+                            "turns_until_expiry": 1,
+                        }
+                    ]
+                }))
+                .ok();
+            }
+            _ => {}
+        }
+    }
+    if *frames == 50 {
+        match script.as_str() {
+            "diploarm" | "diploqueue" | "diploendturn" => {
+                diplo.queued = Some(QueuedDiplomacyAction::Consulate);
+            }
+            "techqueue" => next_screen.set(Screen::Tech),
+            "ledger" | "ledgerflow" => next_screen.set(Screen::Ledger),
+            _ => {}
+        }
+    }
+    if *frames == 80 {
+        match script.as_str() {
+            "diploqueue" | "diploendturn" => {
+                if let Some((q, r)) = consulate_target() {
+                    clicks.write(MapClick(HoverTarget::Hex(q, r)));
+                }
+            }
+            "ledger" => ledger_ui.expanded = Some(meta.player_nation),
+            "ledgerflow" => {
+                // Cash-flow tab, human row expanded.
+                for mut group in &mut tab_groups {
+                    group.active = 1;
+                }
+                ledger_ui.expanded = Some(meta.player_nation);
+            }
+            _ => {}
+        }
+    }
+    if *frames == 110 && script == "diploendturn" {
+        game_commands.write(GameCommand::EndTurn);
+    }
+}
+
 /// Run the Bevy game. By default this is an observer game (every Great
 /// Power AI-driven); `HUMAN_GAME=1` starts a normal game with the human in
 /// seat 0 so the unit/civilian/naval flows are live. Nation choice and
@@ -234,6 +466,16 @@ pub fn run_game() {
             .add_systems(Update, gallery::gallery_interactions);
     }
     app.init_state::<TurnPhase>()
+        .init_state::<Screen>()
+        .init_resource::<industry::IndustryUi>()
+        .init_resource::<trade::TradeUi>()
+        .init_resource::<DiploUi>()
+        .init_resource::<PrevLedger>()
+        .init_resource::<TreatyMarkerIndex>()
+        .init_resource::<ProposalPrompt>()
+        .init_resource::<ledger::LedgerUi>()
+        .init_resource::<ledger::FlagCache>()
+        .init_resource::<proposals::ProposalModalState>()
         .insert_resource(SessionRes(Some(session)))
         .insert_resource(DataVersion(1))
         .insert_resource(meta)
@@ -297,14 +539,22 @@ pub fn run_game() {
                 markers::blink_selected_markers,
                 debug_screenshot,
                 m6_debug_driver,
+                m7_debug_driver,
+                m8_debug_driver,
                 turn_runner::poll_turn_task.run_if(in_state(TurnPhase::Processing)),
             ),
         )
         .add_systems(
             Update,
+            // Map interaction — only while the map is visible (Map /
+            // Transport / Diplomacy screens); the full-screen overlays
+            // block it. Diplomacy zoom-locks the camera and pins the
+            // diplomatic map mode.
             (
-                (camera::camera_movement, camera::wrap_camera).chain(),
-                layers::handle_map_mode_input,
+                (camera::camera_movement, camera::wrap_camera)
+                    .chain()
+                    .run_if(not(in_state(Screen::Diplomacy))),
+                layers::handle_map_mode_input.run_if(not(in_state(Screen::Diplomacy))),
                 (
                     picking::pick_hover,
                     picking::pick_select,
@@ -312,6 +562,15 @@ pub fn run_game() {
                 )
                     .chain(),
                 tooltip::update_map_tooltip,
+                // Esc precedence: the cascade only sees the key press
+                // before the modal system pops the top modal with it.
+                selection::esc_cascade.before(widgets::modal::esc_pops_top_modal),
+            )
+                .run_if(in_state(TurnPhase::Idle).and(map_interactive)),
+        )
+        .add_systems(
+            Update,
+            (
                 (
                     selection::sync_province_units,
                     selection::recompute_move_targets,
@@ -323,18 +582,79 @@ pub fn run_game() {
                 (
                     map_hud::end_turn_button,
                     map_hud::keyboard_commands,
-                    // Esc precedence: the cascade only sees the key press
-                    // before the modal system pops the top modal with it.
-                    selection::esc_cascade.before(widgets::modal::esc_pops_top_modal),
                     panels::handle_unit_checkboxes,
                     panels::handle_panel_buttons,
                     selection::handle_engineer_choice,
+                    // M7 screen affordances → GameCommand.
+                    industry::handle_industry_sliders,
+                    industry::handle_industry_buttons,
+                    industry::handle_show_targets,
+                    transport::handle_transport_buttons,
+                    trade::handle_trade_buttons,
+                    trade::handle_trade_sliders,
+                    trade::handle_trade_filters,
+                    trade::handle_hist_split,
+                    // M8 screen affordances → GameCommand / UI state.
+                    diplomacy::handle_diplo_buttons,
+                    tech::handle_tech_buttons,
+                    ledger::handle_ledger_buttons,
+                    ledger::handle_ledger_row_clicks,
+                    proposals::handle_proposal_buttons,
                     commands::apply_command,
                 )
                     .chain(),
             )
                 .run_if(in_state(TurnPhase::Idle)),
         )
+        // Screen navigation + M7/M8 screen rebuilds.
+        .add_systems(
+            Update,
+            (
+                map_hud::handle_screen_tabs,
+                map_hud::screen_hotkeys.before(widgets::modal::esc_pops_top_modal),
+                map_hud::update_screen_tabs,
+                industry::update_industry,
+                transport::update_transport,
+                (trade::update_trade_static, trade::update_trade_tables).chain(),
+                diplomacy::update_diplomacy_bar,
+                diplomacy::update_reason_tooltip.run_if(in_state(Screen::Diplomacy)),
+                tech::update_tech,
+                ledger::update_ledger,
+                proposals::sync_proposal_modal,
+            ),
+        )
+        .add_systems(
+            OnEnter(Screen::Industry),
+            (industry::enter_industry, tooltip::hide_map_tooltip),
+        )
+        .add_systems(OnExit(Screen::Industry), industry::exit_industry)
+        .add_systems(OnEnter(Screen::Transport), transport::enter_transport)
+        .add_systems(OnExit(Screen::Transport), transport::exit_transport)
+        .add_systems(
+            OnEnter(Screen::Trade),
+            (trade::enter_trade, tooltip::hide_map_tooltip),
+        )
+        .add_systems(OnExit(Screen::Trade), trade::exit_trade)
+        .add_systems(
+            OnEnter(Screen::Diplomacy),
+            (diplomacy::enter_diplomacy, tooltip::hide_map_tooltip),
+        )
+        .add_systems(OnExit(Screen::Diplomacy), diplomacy::exit_diplomacy)
+        .add_systems(
+            OnEnter(Screen::Tech),
+            (tech::enter_tech, tooltip::hide_map_tooltip),
+        )
+        .add_systems(OnExit(Screen::Tech), tech::exit_tech)
+        .add_systems(
+            OnEnter(Screen::Ledger),
+            (
+                ledger::ensure_flags,
+                ledger::enter_ledger,
+                tooltip::hide_map_tooltip,
+            )
+                .chain(),
+        )
+        .add_systems(OnExit(Screen::Ledger), ledger::exit_ledger)
         .add_systems(
             Update,
             (

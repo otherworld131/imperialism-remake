@@ -295,6 +295,7 @@ fn fill_gallery(content: &mut ChildSpawnerCommands, theme: &Theme) {
                 vec!["Sardinia".into(), "33500".into(), "5".into()],
                 vec!["Sweden".into(), "48750".into(), "7".into()],
             ],
+            sort: None,
             cell_builder: None,
         },
     );
@@ -380,7 +381,7 @@ pub fn gallery_interactions(
             commands.entity(handles.content).with_children(|body| {
                 body.spawn((
                     Text::new(
-                        "Esc or ✕ closes the top modal. Modals stack: \
+                        "Esc or × closes the top modal. Modals stack: \
                          open another from the gallery behind this one.",
                     ),
                     body_font,

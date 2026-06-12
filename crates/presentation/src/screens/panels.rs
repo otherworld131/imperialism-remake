@@ -548,7 +548,7 @@ fn spawn_unit_row(
                     ));
                     if unit.medals > 0 {
                         left.spawn((
-                            Text::new("★".repeat(unit.medals as usize)),
+                            Text::new("•".repeat(unit.medals as usize)),
                             theme.font(12.0),
                             TextColor(Color::srgb_u8(0xff, 0xd7, 0x00)),
                         ));

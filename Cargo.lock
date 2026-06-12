@@ -3458,8 +3458,11 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "frontend-api",
+ "resvg",
  "serde",
  "serde_json",
+ "tiny-skia",
+ "usvg",
 ]
 
 [[package]]

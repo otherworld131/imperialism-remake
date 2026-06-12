@@ -6,7 +6,8 @@
 use bevy::prelude::*;
 
 use crate::game::resources::{
-    DataVersion, DeployMode, GameMeta, SelectedCivilian, SelectedShips, SelectedUnits, SessionRes,
+    DataVersion, DeployMode, GameMeta, ProposalPrompt, QueuedDiplomacyAction, SelectedCivilian,
+    SelectedShips, SelectedUnits, SessionRes,
 };
 use crate::game::turn_runner::{self, ActiveTurn};
 use crate::game::vm;
@@ -64,6 +65,100 @@ pub enum GameCommand {
     CancelFleetMove {
         from_zone: u32,
     },
+    // ── M7: Industry screen ──────────────────────────────────────────
+    /// Output target for a production-chain step. `u32::MAX` = unlimited.
+    SetChainTarget {
+        chain: &'static str,
+        step: &'static str,
+        target: u32,
+    },
+    ExpandBuilding {
+        building_type: String,
+    },
+    SetPendingTraining {
+        to_trained: u32,
+        to_expert: u32,
+    },
+    SetPendingImmigration {
+        count: u32,
+    },
+    SetPendingFreightCars {
+        count: u32,
+    },
+    SetPendingArmyRecruits {
+        unit_type: String,
+        count: u32,
+    },
+    SetPendingShips {
+        ship_type: String,
+        count: u32,
+    },
+    SetPendingCivilianHire {
+        civilian_type: String,
+        count: u32,
+    },
+    // ── M7: Transport screen ─────────────────────────────────────────
+    SetTransportAllocation {
+        resource: String,
+        units: u32,
+    },
+    // ── M7: Trade screen ─────────────────────────────────────────────
+    SetAutoTradeWithMinors {
+        enabled: bool,
+    },
+    SetTradeSubsidy {
+        nation_id: u32,
+        amount: i64,
+    },
+    SetSellOrder {
+        resource: String,
+        quantity: u32,
+    },
+    SetBuyOrder {
+        resource: String,
+        quantity: u32,
+        max_price: i64,
+    },
+    // ── M8: Diplomacy screen ─────────────────────────────────────────
+    /// Fire an armed diplomatic action at a target nation. The action only
+    /// queues pending state (consulate/embassy/grant/war/break-treaty) or
+    /// files a proposal (NAP/alliance/peace) — everything resolves at end
+    /// turn.
+    QueueDiplomacy {
+        action: QueuedDiplomacyAction,
+        target: u32,
+    },
+    /// Dismiss a pending diplomacy action / outgoing proposal via its map
+    /// marker (web `dismiss_pending_action`).
+    DismissPendingDiplomacy {
+        target: u32,
+        action_key: String,
+    },
+    // ── M8: Proposal modal ───────────────────────────────────────────
+    AcceptProposal {
+        index: u32,
+    },
+    RejectProposal {
+        index: u32,
+    },
+    // ── M8: Tech screen ──────────────────────────────────────────────
+    QueueTechResearch {
+        name: String,
+    },
+    CancelTechResearch,
+}
+
+/// Toast on failure; always returns `true` so the data version bumps and the
+/// UI re-reads the authoritative queued state (success and failure alike).
+fn report(
+    result: Result<(), frontend_api::ApiError>,
+    context: &str,
+    toasts: &mut MessageWriter<Toast>,
+) -> bool {
+    if let Err(err) = result {
+        toasts.write(Toast::error(format!("{context}: {}", err.message())));
+    }
+    true
 }
 
 pub fn apply_command(
@@ -78,6 +173,7 @@ pub fn apply_command(
     mut selected_ships: ResMut<SelectedShips>,
     mut selected_civilian: ResMut<SelectedCivilian>,
     mut deploy: ResMut<DeployMode>,
+    mut proposal_prompt: ResMut<ProposalPrompt>,
 ) {
     for command in messages.read() {
         if let GameCommand::EndTurn = command {
@@ -332,6 +428,241 @@ pub fn apply_command(
                         toasts.write(Toast::error(format!("Cancel failed: {}", err.message())));
                     }
                 }
+            }
+
+            // ── M7 pending-state setters ─────────────────────────────
+            // All of these only queue state for end-turn resolution. On
+            // failure the data version is bumped anyway so sliders snap
+            // back to the real queued value.
+            GameCommand::SetChainTarget {
+                chain,
+                step,
+                target,
+            } => {
+                bump = report(
+                    frontend_api::industry::set_chain_target(game, nation, chain, step, *target),
+                    "Set target failed",
+                    &mut toasts,
+                );
+            }
+
+            GameCommand::ExpandBuilding { building_type } => {
+                bump = report(
+                    frontend_api::industry::expand_building(game, nation, building_type),
+                    "Expand failed",
+                    &mut toasts,
+                );
+            }
+
+            GameCommand::SetPendingTraining {
+                to_trained,
+                to_expert,
+            } => {
+                bump = report(
+                    frontend_api::units::set_pending_training(
+                        game,
+                        nation,
+                        *to_trained,
+                        *to_expert,
+                    ),
+                    "Set training failed",
+                    &mut toasts,
+                );
+            }
+
+            GameCommand::SetPendingImmigration { count } => {
+                bump = report(
+                    frontend_api::units::set_pending_immigration(game, nation, *count),
+                    "Set immigration failed",
+                    &mut toasts,
+                );
+            }
+
+            GameCommand::SetPendingFreightCars { count } => {
+                bump = report(
+                    frontend_api::transport::set_pending_freight_cars(game, nation, *count),
+                    "Set freight cars failed",
+                    &mut toasts,
+                );
+            }
+
+            GameCommand::SetPendingArmyRecruits { unit_type, count } => {
+                bump = report(
+                    frontend_api::units::set_pending_army_recruits(game, nation, unit_type, *count),
+                    "Set recruits failed",
+                    &mut toasts,
+                );
+            }
+
+            GameCommand::SetPendingShips { ship_type, count } => {
+                bump = report(
+                    frontend_api::units::set_pending_ships(game, nation, ship_type, *count),
+                    "Set ship orders failed",
+                    &mut toasts,
+                );
+            }
+
+            GameCommand::SetPendingCivilianHire {
+                civilian_type,
+                count,
+            } => {
+                bump = report(
+                    frontend_api::units::set_pending_civilian_hire(
+                        game,
+                        nation,
+                        civilian_type,
+                        *count,
+                    ),
+                    "Set hire failed",
+                    &mut toasts,
+                );
+            }
+
+            GameCommand::SetTransportAllocation { resource, units } => {
+                bump = report(
+                    frontend_api::transport::set_transport_allocation(
+                        game, nation, resource, *units,
+                    ),
+                    "Set allocation failed",
+                    &mut toasts,
+                );
+            }
+
+            GameCommand::SetAutoTradeWithMinors { enabled } => {
+                bump = report(
+                    frontend_api::trade::set_auto_trade_with_minors(game, nation, *enabled),
+                    "Toggle failed",
+                    &mut toasts,
+                );
+            }
+
+            GameCommand::SetTradeSubsidy { nation_id, amount } => {
+                bump = report(
+                    frontend_api::trade::set_trade_subsidy(game, nation, *nation_id, *amount),
+                    "Set subsidy failed",
+                    &mut toasts,
+                );
+            }
+
+            GameCommand::SetSellOrder { resource, quantity } => {
+                bump = report(
+                    frontend_api::trade::set_player_sell_order(
+                        game, nation, "resource", resource, *quantity,
+                    ),
+                    "Sell order failed",
+                    &mut toasts,
+                );
+            }
+
+            GameCommand::SetBuyOrder {
+                resource,
+                quantity,
+                max_price,
+            } => {
+                bump = report(
+                    frontend_api::trade::set_player_buy_order(
+                        game, nation, "resource", resource, *quantity, *max_price,
+                    ),
+                    "Buy order failed",
+                    &mut toasts,
+                );
+            }
+
+            // ── M8: Diplomacy ────────────────────────────────────────
+            GameCommand::QueueDiplomacy { action, target } => {
+                let target = *target;
+                let (result, context) = match action {
+                    QueuedDiplomacyAction::Consulate => (
+                        frontend_api::diplomacy::build_consulate(game, nation, target),
+                        "Consulate failed",
+                    ),
+                    QueuedDiplomacyAction::Embassy => (
+                        frontend_api::diplomacy::build_embassy(game, nation, target),
+                        "Embassy failed",
+                    ),
+                    QueuedDiplomacyAction::Nap => (
+                        frontend_api::diplomacy::propose_nap(game, nation, target),
+                        "NAP failed",
+                    ),
+                    QueuedDiplomacyAction::Alliance => (
+                        frontend_api::diplomacy::propose_alliance(game, nation, target),
+                        "Alliance failed",
+                    ),
+                    QueuedDiplomacyAction::Peace => (
+                        frontend_api::diplomacy::propose_peace(game, nation, target),
+                        "Peace failed",
+                    ),
+                    QueuedDiplomacyAction::Grant { amount } => (
+                        frontend_api::diplomacy::send_grant(game, nation, target, *amount),
+                        "Grant failed",
+                    ),
+                    QueuedDiplomacyAction::BreakTreaty { treaty_type } => (
+                        frontend_api::diplomacy::break_treaty(game, nation, target, treaty_type),
+                        "Break treaty failed",
+                    ),
+                    QueuedDiplomacyAction::War => (
+                        frontend_api::diplomacy::declare_war(game, nation, target),
+                        "Declare war failed",
+                    ),
+                };
+                bump = report(result, context, &mut toasts);
+            }
+
+            GameCommand::DismissPendingDiplomacy { target, action_key } => {
+                match frontend_api::diplomacy::dismiss_pending_action(
+                    game, nation, *target, action_key,
+                ) {
+                    Ok(()) => bump = true,
+                    // Web parity: stale-marker errors are silently ignored.
+                    Err(err) => {
+                        let msg = err.message();
+                        if !msg.contains("no pending diplomacy action")
+                            && !msg.contains("no outgoing proposal")
+                        {
+                            toasts.write(Toast::error(format!("Dismiss failed: {msg}")));
+                        }
+                        bump = true;
+                    }
+                }
+            }
+
+            // ── M8: Proposal modal ───────────────────────────────────
+            GameCommand::AcceptProposal { index } | GameCommand::RejectProposal { index } => {
+                let accept = matches!(command, GameCommand::AcceptProposal { .. });
+                let result = if accept {
+                    frontend_api::diplomacy::accept_proposal(game, nation, *index)
+                } else {
+                    frontend_api::diplomacy::reject_proposal(game, nation, *index)
+                };
+                let context = if accept {
+                    "Accept failed"
+                } else {
+                    "Reject failed"
+                };
+                bump = report(result, context, &mut toasts);
+                // Keep the modal in step with the authoritative list
+                // (indices shift after a removal).
+                proposal_prompt.0 = frontend_api::diplomacy::get_pending_proposals(game, nation)
+                    .ok()
+                    .and_then(|v| vm::parse_proposals(v).ok())
+                    .filter(|p| !p.proposals.is_empty());
+            }
+
+            // ── M8: Tech screen ──────────────────────────────────────
+            GameCommand::QueueTechResearch { name } => {
+                bump = report(
+                    frontend_api::tech::queue_tech_research(game, name),
+                    "Queue research failed",
+                    &mut toasts,
+                );
+            }
+
+            GameCommand::CancelTechResearch => {
+                bump = report(
+                    frontend_api::tech::cancel_tech_research(game),
+                    "Cancel research failed",
+                    &mut toasts,
+                );
             }
         }
 

@@ -12,9 +12,9 @@ use std::collections::HashMap;
 
 use crate::game::resources::{
     Blink, PendingMoves, PerspectiveNation, RenderSettings, SelectedCivilian, SelectedNavy,
-    ViewModels,
+    TreatyMarkerHit, TreatyMarkerIndex, ViewModels,
 };
-use crate::game::vm::MapTile;
+use crate::game::vm::{DiplomacyRelation, MapTile};
 use crate::map::geometry::{self, HEX_SIZE};
 use crate::map::icons::IconAssets;
 use crate::map::labels::{self, LabelTile};
@@ -141,6 +141,7 @@ pub fn rebuild_marker_layers(
     mut materials: ResMut<Assets<ColorMaterial>>,
     wrap_roots: Query<Entity, With<WrapRoot>>,
     existing: Query<Entity, With<MarkerLayer>>,
+    mut treaty_index: ResMut<TreatyMarkerIndex>,
     mut built: Local<Option<MarkerKey>>,
 ) {
     let Some(tiles) = vms.map.as_ref() else {
@@ -167,6 +168,7 @@ pub fn rebuild_marker_layers(
     for entity in &existing {
         commands.entity(entity).despawn();
     }
+    treaty_index.0.clear();
 
     let anchor_indices = navy::anchor_index_map(&vms.navy_markers);
 
@@ -661,6 +663,8 @@ pub fn rebuild_marker_layers(
             &theme,
             &vms,
             *mode,
+            &icons,
+            &mut treaty_index.0,
             root,
             &mut |c, z, gate| {
                 let mut entity = c.spawn((
@@ -676,6 +680,47 @@ pub fn rebuild_marker_layers(
             },
         );
     }
+}
+
+/// Diplomacy icon sprites for one relation, in render order (web
+/// `diplomacyIconsForRelation`). `(sprite name, action key)`: a key marks the
+/// icon as a pending action whose map marker dismisses it on click.
+fn diplomacy_icons_for_relation(rel: &DiplomacyRelation) -> Vec<(&'static str, Option<String>)> {
+    let mut icons: Vec<(&'static str, Option<String>)> = Vec::new();
+    if rel.has_pending_embassy {
+        icons.push(("Embassy", Some("embassy".into())));
+    } else if rel.has_embassy {
+        icons.push(("Embassy", None));
+    } else if rel.has_pending_consulate {
+        icons.push(("Consulate", Some("consulate".into())));
+    } else if rel.has_consulate {
+        icons.push(("Consulate", None));
+    }
+
+    if rel.has_pending_nap || rel.has_pending_alliance || rel.has_pending_peace {
+        let (sprite, key) = if rel.has_pending_peace {
+            ("Peace", "peace")
+        } else if rel.has_pending_alliance {
+            ("Alliance", "alliance")
+        } else {
+            ("NonAggressionPact", "nap")
+        };
+        icons.push((sprite, Some(key.into())));
+    }
+
+    if let Some(amount) = rel.pending_grant_amount_dollars {
+        icons.push(("Grant", Some(format!("grant:{amount}"))));
+    }
+
+    for treaty_type in &rel.pending_break_treaties {
+        icons.push(("BreakTreaty", Some(format!("break_treaty:{treaty_type}"))));
+    }
+
+    if rel.has_pending_war {
+        icons.push(("War", Some("war".into())));
+    }
+
+    icons
 }
 
 struct ArrowStyle {
@@ -735,6 +780,8 @@ fn spawn_labels(
     theme: &Theme,
     vms: &ViewModels,
     mode: MapMode,
+    icons: &IconAssets,
+    treaty_hits: &mut Vec<TreatyMarkerHit>,
     _root: Entity,
     group: &mut dyn FnMut(&mut Commands, f32, Option<LodGate>) -> Entity,
 ) {
@@ -783,6 +830,62 @@ fn spawn_labels(
         })
         .collect();
     let nation_labels = labels::compute_nation_labels(&label_tiles, 3, f64::from(HEX_SIZE));
+
+    // ── Diplomatic presence + pending-treaty icons (web pass 5b) ────────
+    // Anchored below each nation label centroid in diplomatic mode. Pending
+    // icons are clickable (dismiss) — their world hit circles go into
+    // `treaty_hits`, filled once per rebuild (the wrap copies share the
+    // primary copy's coordinates after wrap-normalization).
+    if mode == MapMode::Diplomatic
+        && let Some(overlay) = vms.diplomacy.as_ref()
+    {
+        let parent = group(commands, 3.4, None);
+        let fill_hits = treaty_hits.is_empty();
+        // React: `Math.max(36, HEX_SIZE * 2.4)` with HEX_SIZE = 18, in
+        // React pixel units (converted to world below).
+        let emoji_react = 43.2_f64;
+        for label in &nation_labels {
+            let Some(rel) = overlay
+                .relations
+                .iter()
+                .find(|r| r.nation_name == label.name)
+            else {
+                continue;
+            };
+            let icon_list = diplomacy_icons_for_relation(rel);
+            if icon_list.is_empty() {
+                continue;
+            }
+            let font_size = ((label.size as f32).sqrt() * 3.0).clamp(12.0, 28.0);
+            let base_y = label.cy + f64::from(font_size) * 0.6;
+            for (i, (sprite_name, action_key)) in icon_list.iter().enumerate() {
+                // React anchors the emoji's *top* at y; offset by half the
+                // sprite height to match with center-anchored sprites.
+                let y = base_y + emoji_react * (0.95 * i as f64 + 0.5);
+                let pos = react_to_world([label.cx, y]);
+                if let Some(image) = icons.get("diplomacy", sprite_name) {
+                    spawn_sprite(
+                        commands,
+                        parent,
+                        image,
+                        pos,
+                        0.0,
+                        rs(emoji_react as f32),
+                        Color::WHITE,
+                    );
+                }
+                if fill_hits {
+                    treaty_hits.push(TreatyMarkerHit {
+                        pos,
+                        radius: rs(emoji_react as f32) * 0.8,
+                        nation_id: rel.nation_id as u32,
+                        action_key: action_key.clone(),
+                    });
+                }
+            }
+        }
+    }
+
     let parent = group(commands, 2.6, Some(LodGate::NotPastLabels));
     for label in &nation_labels {
         let size = ((label.size as f32).sqrt() * 3.0).clamp(12.0, 28.0);

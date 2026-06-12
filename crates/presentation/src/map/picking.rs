@@ -1,11 +1,12 @@
 //! Cursor → map picking with the web frontend's hit order: navy marker →
-//! troop indicator → hex. Converts the cursor through the camera into world
-//! space, wrap-normalizes the position, and runs radius tests in world
-//! space. HUD nodes tagged [`PickingBlocker`] suppress picking while hovered.
+//! pending-treaty marker → troop indicator → hex. Converts the cursor
+//! through the camera into world space, wrap-normalizes the position, and
+//! runs radius tests in world space. HUD nodes tagged [`PickingBlocker`]
+//! suppress picking while hovered.
 
 use bevy::prelude::*;
 
-use crate::game::resources::ViewModels;
+use crate::game::resources::{TreatyMarkerIndex, ViewModels};
 use crate::game::vm::NavyMarker;
 use crate::map::camera::GameCamera;
 use crate::map::geometry;
@@ -13,6 +14,7 @@ use crate::map::layers::MapBounds;
 use crate::map::lod::ZoomLod;
 use crate::map::markers::troop_indicator_hit;
 use crate::map::navy;
+use crate::state::Screen;
 
 #[derive(Resource, Default)]
 pub struct HoveredHex(pub Option<(i32, i32)>);
@@ -28,6 +30,12 @@ pub enum HoverTarget {
     Hex(i32, i32),
     /// Stable navy-marker key (see [`navy::marker_key`]).
     Navy(String),
+    /// Pending diplomacy marker under a nation label — clicking dismisses
+    /// the queued action. Only produced on the Diplomacy screen.
+    Treaty {
+        nation_id: u32,
+        action_key: String,
+    },
 }
 
 /// Marker for HUD nodes that swallow map picking while the cursor is over
@@ -81,6 +89,8 @@ pub fn pick_hover(
     vms: Res<ViewModels>,
     index: Res<crate::game::resources::TileIndex>,
     lod: Res<ZoomLod>,
+    screen: Res<State<Screen>>,
+    treaty_markers: Res<TreatyMarkerIndex>,
     blockers: Query<&Interaction, With<PickingBlocker>>,
     mut hovered: ResMut<HoveredHex>,
     mut target: ResMut<HoverTarget>,
@@ -91,8 +101,22 @@ pub fn pick_hover(
         && let Some(bounds) = bounds.as_deref()
         && let Some(world) = cursor_world(&windows, &camera, bounds)
     {
+        // Pending-treaty markers are only interactive on the Diplomacy
+        // screen (web: `onPendingTreatyMarkerClick` gated on the screen).
+        let treaty_hit = (*screen.get() == Screen::Diplomacy)
+            .then(|| {
+                treaty_markers.0.iter().find(|m| {
+                    m.action_key.is_some() && m.pos.distance_squared(world) <= m.radius * m.radius
+                })
+            })
+            .flatten();
         if let Some(marker) = navy_marker_at(&vms.navy_markers, world) {
             next_target = HoverTarget::Navy(navy::marker_key(marker));
+        } else if let Some(hit) = treaty_hit {
+            next_target = HoverTarget::Treaty {
+                nation_id: hit.nation_id,
+                action_key: hit.action_key.clone().unwrap_or_default(),
+            };
         } else {
             // The troop indicator only exists past its LOD gate; below it,
             // hits fall through to the hex like the web (scale > 0.6 gate).

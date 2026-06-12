@@ -83,6 +83,25 @@ fn apply_province_names(game: &mut GameState, base_seed: u64) {
     }
 }
 
+/// Read-only query: every nation's flag SVG, for frontends that rasterize
+/// flags themselves (the native Bevy ledger). Returns
+/// `[{nation_id, flag_svg}]`; nations without generated flavor carry an
+/// empty string. Additive — no wasm export reads this.
+pub fn get_nation_flags(game: &GameState) -> serde_json::Value {
+    serde_json::Value::Array(
+        game.world
+            .nations
+            .iter()
+            .map(|n| {
+                serde_json::json!({
+                    "nation_id": n.id.0,
+                    "flag_svg": n.archives.flag_svg,
+                })
+            })
+            .collect(),
+    )
+}
+
 /// Wipe the flavor fields on every nation so a subsequent `apply_flavor`
 /// regenerates them. Used by the "re-roll names" preview path.
 pub fn clear_flavor(game: &mut GameState) {

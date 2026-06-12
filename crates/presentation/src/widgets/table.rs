@@ -35,6 +35,9 @@ pub struct TableProps {
     pub sortable: bool,
     pub rows: Vec<Vec<String>>,
     pub cell_builder: Option<CellBuilder>,
+    /// Initial `(column index, ascending)` sort, e.g. to preserve sorting
+    /// across a rebuild of the table.
+    pub sort: Option<(usize, bool)>,
 }
 
 /// Table state. Mutate `rows` (or `sort`) and the body rebuilds.
@@ -69,7 +72,7 @@ pub fn spawn_table(parent: &mut ChildSpawnerCommands, theme: &Theme, props: Tabl
                 columns: props.columns.clone(),
                 sortable: props.sortable,
                 rows: props.rows,
-                sort: None,
+                sort: props.sort,
                 cell_builder: props.cell_builder,
             },
             Node {

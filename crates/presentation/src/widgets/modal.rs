@@ -135,7 +135,7 @@ pub fn open_modal(
                     corner,
                     theme,
                     ButtonProps {
-                        label: "✕".into(),
+                        label: "×".into(),
                         flat: true,
                         font_size: 14.0,
                         ..default()

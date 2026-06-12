@@ -8,11 +8,27 @@ use crate::game::commands::GameCommand;
 use crate::game::resources::TurnInfo;
 use crate::map::layers::MapMode;
 use crate::map::picking::PickingBlocker;
+use crate::state::Screen;
 use crate::theme::{self, Theme};
-use crate::widgets::{self, ButtonActivated, ButtonProps};
+use crate::widgets::{self, ButtonActivated, ButtonProps, ModalStack};
 
 #[derive(Component)]
 pub struct TurnDisplay;
+
+/// Top-bar screen tab (web header tabs: F1 Map … F5 Trade).
+#[derive(Component)]
+pub struct ScreenTabButton(pub Screen);
+
+/// `(screen, label, hotkey)` for the top-bar tabs and the F-key bindings.
+pub const SCREEN_TABS: [(Screen, &str, &str); 7] = [
+    (Screen::Map, "Map", "F1"),
+    (Screen::Transport, "Transport", "F2"),
+    (Screen::Industry, "Industry", "F3"),
+    (Screen::Diplomacy, "Diplomacy", "F4"),
+    (Screen::Trade, "Trade", "F5"),
+    (Screen::Tech, "Tech", "F6"),
+    (Screen::Ledger, "Ledger", "F7"),
+];
 
 #[derive(Component)]
 pub struct ModeDisplay;
@@ -68,6 +84,33 @@ pub fn setup_hud(mut commands: Commands, theme: Res<Theme>) {
                         TextColor(Color::srgb(0.74, 0.77, 0.70)),
                         ModeDisplay,
                     ));
+                });
+
+            // Screen tabs (web header: F1 Map, F2 Transport, F3 Industry,
+            // F5 Trade).
+            bar.spawn((Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(2.0),
+                ..default()
+            },))
+                .with_children(|tabs| {
+                    for (screen, label, hotkey) in SCREEN_TABS {
+                        let button = widgets::spawn_button(
+                            tabs,
+                            &theme,
+                            ButtonProps {
+                                label: format!("{label} {hotkey}"),
+                                font_size: 13.0,
+                                flat: true,
+                                auto_label_tint: false,
+                                ..default()
+                            },
+                        );
+                        tabs.commands()
+                            .entity(button)
+                            .insert(ScreenTabButton(screen));
+                    }
                 });
 
             let end_turn = widgets::spawn_button(
@@ -133,6 +176,77 @@ pub fn keyboard_commands(
     // cascading cancel in `game::selection::esc_cascade` (modals first).
     if focus.0.is_none() && keys.just_pressed(KeyCode::Space) {
         commands_out.write(GameCommand::EndTurn);
+    }
+}
+
+/// Top-bar tab clicks switch the active screen.
+pub fn handle_screen_tabs(
+    mut activations: MessageReader<ButtonActivated>,
+    buttons: Query<&ScreenTabButton>,
+    mut next_screen: ResMut<NextState<Screen>>,
+) {
+    for ButtonActivated(entity) in activations.read() {
+        if let Ok(tab) = buttons.get(*entity) {
+            next_screen.set(tab.0);
+        }
+    }
+}
+
+/// F1/F2/F3/F5 jump to a screen; Esc returns to the map from a non-map
+/// screen once no modal is open (web `isFullScreen` Esc parity).
+pub fn screen_hotkeys(
+    keys: Res<ButtonInput<KeyCode>>,
+    focus: Res<InputFocus>,
+    screen: Res<State<Screen>>,
+    modal_stack: Res<ModalStack>,
+    mut next_screen: ResMut<NextState<Screen>>,
+) {
+    if focus.0.is_some() {
+        return;
+    }
+    for (target, key) in [
+        (Screen::Map, KeyCode::F1),
+        (Screen::Transport, KeyCode::F2),
+        (Screen::Industry, KeyCode::F3),
+        (Screen::Diplomacy, KeyCode::F4),
+        (Screen::Trade, KeyCode::F5),
+        (Screen::Tech, KeyCode::F6),
+        (Screen::Ledger, KeyCode::F7),
+    ] {
+        if keys.just_pressed(key) {
+            next_screen.set(target);
+        }
+    }
+    // Web parity: Esc only exits the full-screen views (Transport keeps the
+    // map live; its Esc belongs to the map's cancel cascade).
+    if keys.just_pressed(KeyCode::Escape) && modal_stack.is_empty() && screen.get().is_full_screen()
+    {
+        next_screen.set(Screen::Map);
+    }
+}
+
+/// Gold-tint the active screen tab.
+pub fn update_screen_tabs(
+    screen: Res<State<Screen>>,
+    buttons: Query<(&ScreenTabButton, &Children)>,
+    mut labels: Query<&mut TextColor>,
+) {
+    if !screen.is_changed() {
+        return;
+    }
+    for (tab, children) in &buttons {
+        let color = if tab.0 == *screen.get() {
+            theme::GOLD
+        } else {
+            theme::TEXT_DIM
+        };
+        for child in children {
+            if let Ok(mut text_color) = labels.get_mut(*child)
+                && text_color.0 != color
+            {
+                text_color.0 = color;
+            }
+        }
     }
 }
 

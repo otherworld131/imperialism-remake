@@ -5,8 +5,9 @@ use frontend_api::Session;
 use std::collections::{HashMap, HashSet};
 
 use crate::game::vm::{
-    CiviliansVm, DiplomacyOverlay, MapTile, MilitaryOverlayEntry, NavyMarker, PendingMoveVm,
-    ProvinceUnitsVm, SeaZone, ShipsVm,
+    BuildableUnitsVm, CiviliansVm, DiplomacyOverlay, DiplomacyScreenVm, GpLedgerEntryVm,
+    IndustryVm, MapTile, MilitaryOverlayEntry, NavyMarker, PendingMoveVm, ProposalsVm,
+    ProvinceUnitsVm, SeaZone, ShipsVm, TechScreenVm, TradeVm, TransportVm,
 };
 
 /// The game session. `None` only while a turn is resolving on the async
@@ -31,6 +32,14 @@ pub struct ViewModels {
     pub military: Vec<MilitaryOverlayEntry>,
     pub civilians: Option<CiviliansVm>,
     pub ships: Option<ShipsVm>,
+    pub industry: Option<IndustryVm>,
+    pub buildable: Option<BuildableUnitsVm>,
+    pub transport: Option<TransportVm>,
+    pub trade: Option<TradeVm>,
+    pub diplomacy_screen: Option<DiplomacyScreenVm>,
+    pub proposals: Option<ProposalsVm>,
+    pub tech: Option<TechScreenVm>,
+    pub ledger: Vec<GpLedgerEntryVm>,
     pub version: u64,
     /// Whether the map VM was fetched with fog disabled; refetched when the
     /// debug toggle flips.
@@ -47,6 +56,8 @@ pub struct TileIndex {
 #[derive(Resource)]
 pub struct TurnInfo {
     pub label: String,
+    /// Calendar year (Tech screen title), from `/report/year`.
+    pub year: u32,
 }
 
 impl Default for TurnInfo {
@@ -55,6 +66,7 @@ impl Default for TurnInfo {
         // comes verbatim from the turn report.
         Self {
             label: "1815 Q1".to_string(),
+            year: 1815,
         }
     }
 }
@@ -216,3 +228,96 @@ pub struct EngineerPromptState {
 /// Checked warships in the naval panel (scoped to the selected fleet).
 #[derive(Resource, Default)]
 pub struct SelectedShips(pub Vec<u32>);
+
+// ── M8: Diplomacy / Tech / Ledger ────────────────────────────────────────
+
+/// Armed diplomatic action (web `QueuedDiplomacyAction`): clicking an action
+/// button arms it, clicking a nation on the map fires the command. Esc or
+/// the ✕ in the banner cancels.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QueuedDiplomacyAction {
+    Consulate,
+    Embassy,
+    Nap,
+    Alliance,
+    Peace,
+    Grant { amount: i64 },
+    BreakTreaty { treaty_type: String },
+    War,
+}
+
+impl QueuedDiplomacyAction {
+    pub fn label(&self) -> String {
+        match self {
+            Self::Consulate => "Consulate".into(),
+            Self::Embassy => "Embassy".into(),
+            Self::Nap => "NAP".into(),
+            Self::Alliance => "Alliance".into(),
+            Self::Peace => "Peace".into(),
+            Self::Grant { amount } => format!("Grant ${amount}"),
+            Self::BreakTreaty { treaty_type } => format!("Break {treaty_type}"),
+            Self::War => "Declare War".into(),
+        }
+    }
+
+    /// Diplomacy icon-group sprite for the banner.
+    pub fn icon(&self) -> &'static str {
+        match self {
+            Self::Consulate => "Consulate",
+            Self::Embassy => "Embassy",
+            Self::Nap => "NonAggressionPact",
+            Self::Alliance => "Alliance",
+            Self::Peace => "Peace",
+            Self::Grant { .. } => "Grant",
+            Self::BreakTreaty { .. } => "BreakTreaty",
+            Self::War => "War",
+        }
+    }
+}
+
+/// Diplomacy-screen UI state: the armed action, the inline pickers, and the
+/// camera/map-mode snapshot restored when the screen closes.
+#[derive(Resource, Default)]
+pub struct DiploUi {
+    pub queued: Option<QueuedDiplomacyAction>,
+    pub show_grant_picker: bool,
+    pub show_break_picker: bool,
+    pub confirm_war: bool,
+    /// `(map mode, camera translation, ortho scale)` captured on screen
+    /// entry; restored on exit (the screen forces diplomatic mode + fit zoom).
+    pub saved_view: Option<(crate::map::layers::MapMode, Vec3, f32)>,
+}
+
+/// Previous-turn snapshot of the Great-Power ledger, rotated only when the
+/// turn advances (web `prevGpLedgerData` / `prevLedgerTurnRef` parity).
+/// Drives the per-cell delta chips.
+#[derive(Resource, Default)]
+pub struct PrevLedger {
+    pub entries: Vec<GpLedgerEntryVm>,
+    /// Turn label the *current* `ViewModels::ledger` was fetched at.
+    pub fetched_turn: Option<String>,
+}
+
+/// Pending-treaty / diplomatic-presence markers drawn under the nation
+/// labels in diplomatic mode, in world space of the primary map copy.
+/// Rebuilt with the marker layers; consumed by picking (clickable dismiss).
+#[derive(Resource, Default)]
+pub struct TreatyMarkerIndex(pub Vec<TreatyMarkerHit>);
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TreatyMarkerHit {
+    pub pos: Vec2,
+    pub radius: f32,
+    pub nation_id: u32,
+    /// `None` = presence icon (embassy/consulate already built, not
+    /// clickable); `Some(key)` = pending action dismissable via
+    /// `dismiss_pending_action` (`"consulate"`, `"embassy"`, `"nap"`,
+    /// `"alliance"`, `"peace"`, `"grant:N"`, `"break_treaty:T"`, `"war"`).
+    pub action_key: Option<String>,
+}
+
+/// Proposals surfaced after turn resolution (war declarations already
+/// auto-acknowledged). `Some` opens the proposal modal; emptied / `None`
+/// closes it.
+#[derive(Resource, Default)]
+pub struct ProposalPrompt(pub Option<ProposalsVm>);

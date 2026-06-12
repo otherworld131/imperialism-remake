@@ -12,15 +12,17 @@ use std::collections::HashSet;
 
 use crate::game::commands::GameCommand;
 use crate::game::resources::{
-    DeployMode, DeployState, EngineerPrompt, EngineerPromptState, FleetTargets, GameMeta,
+    DeployMode, DeployState, DiploUi, EngineerPrompt, EngineerPromptState, FleetTargets, GameMeta,
     MoveTargets, PendingMoveList, PendingMoves, ProvinceUnits, SelectedCivilian, SelectedNavy,
     SelectedShips, SelectedUnits, SessionRes, TileIndex, ViewModels,
 };
 use crate::game::vm::{self, MapTile};
 use crate::map::navy;
 use crate::map::picking::{HoverTarget, MapClick, SelectedHex};
+use crate::screens::diplomacy::{can_target_nation, invalid_target_reason};
+use crate::state::Screen;
 use crate::theme::{self, Theme};
-use crate::widgets::{self, ButtonProps, ModalProps, ModalStack};
+use crate::widgets::{self, ButtonProps, ModalProps, ModalStack, Toast};
 
 /// Terrains a prospector can search (web `PROSPECTOR_TERRAIN`).
 const PROSPECTOR_TERRAIN: [&str; 5] = ["Hills", "Mountain", "Swamp", "Desert", "Tundra"];
@@ -98,6 +100,9 @@ pub fn handle_map_click(
     move_targets: Res<MoveTargets>,
     fleet_targets: Res<FleetTargets>,
     theme: Res<Theme>,
+    screen: Res<State<Screen>>,
+    mut diplo: ResMut<DiploUi>,
+    mut toasts: MessageWriter<Toast>,
     mut commands: Commands,
     mut modal_stack: ResMut<ModalStack>,
     mut game_commands: MessageWriter<GameCommand>,
@@ -128,6 +133,69 @@ pub fn handle_map_click(
             }
             _ => None,
         };
+
+        // 0. Diplomacy screen: pending-marker dismiss → armed-action fire →
+        //    plain selection (pins the nation card). Unit / civilian /
+        //    fleet flows never trigger here (web parity).
+        if *screen.get() == Screen::Diplomacy {
+            match target {
+                HoverTarget::Treaty {
+                    nation_id,
+                    action_key,
+                } => {
+                    if !meta.observer {
+                        game_commands.write(GameCommand::DismissPendingDiplomacy {
+                            target: *nation_id,
+                            action_key: action_key.clone(),
+                        });
+                    }
+                }
+                HoverTarget::Hex(..) => {
+                    let Some(tile) = tile else {
+                        continue;
+                    };
+                    if let Some(action) = diplo.queued.clone() {
+                        if meta.observer {
+                            continue;
+                        }
+                        let target_nation = (!tile.is_sea() && tile.nation_id >= 0)
+                            .then_some(tile.nation_id as u32)
+                            .filter(|id| *id != meta.player_nation);
+                        let valid = target_nation.is_some_and(|id| {
+                            can_target_nation(&action, id, vms.diplomacy_screen.as_ref())
+                        });
+                        if !valid {
+                            let reason = invalid_target_reason(
+                                &action,
+                                target_nation,
+                                meta.player_nation,
+                                vms.diplomacy_screen.as_ref(),
+                            )
+                            .unwrap_or_else(|| {
+                                "Select a foreign nation for this diplomatic action.".into()
+                            });
+                            // The armed action stays armed (web parity).
+                            toasts.write(Toast::error(reason));
+                            continue;
+                        }
+                        if let Some(target_nation) = target_nation {
+                            diplo.queued = None;
+                            game_commands.write(GameCommand::QueueDiplomacy {
+                                action,
+                                target: target_nation,
+                            });
+                        }
+                        continue;
+                    }
+                    // No armed action: pin the clicked nation's card.
+                    selected_hex.0 = Some((tile.q, tile.r));
+                    selected_navy.0 = None;
+                    selected_units.0.clear();
+                }
+                _ => {}
+            }
+            continue;
+        }
 
         // 1. Fleet movement: player fleet selected + clicked sea hex inside
         //    an adjacent zone → queue a fleet move (resolved at end turn).
@@ -350,11 +418,17 @@ pub fn sync_engineer_prompt(mut prompt: ResMut<EngineerPrompt>, nodes: Query<(),
 // ── Esc cascade ──────────────────────────────────────────────────────────
 
 /// Esc cancels, in order: engineer popup (handled by the modal stack) →
-/// deploy mode → unit selection → navy selection → tile selection → quit.
+/// armed diplomacy action → deploy mode → unit selection → navy selection →
+/// tile selection → back to the map screen (from Transport / Diplomacy) →
+/// quit. The full-screen overlays gate this system off;
+/// `map_hud::screen_hotkeys` owns Esc there.
 pub fn esc_cascade(
     keys: Res<ButtonInput<KeyCode>>,
     modals: Res<ModalStack>,
     focus: Res<bevy::input_focus::InputFocus>,
+    screen: Res<State<Screen>>,
+    mut next_screen: ResMut<NextState<Screen>>,
+    mut diplo: ResMut<DiploUi>,
     mut deploy: ResMut<DeployMode>,
     mut selected_units: ResMut<SelectedUnits>,
     mut selected_navy: ResMut<SelectedNavy>,
@@ -367,7 +441,16 @@ pub fn esc_cascade(
     if !keys.just_pressed(KeyCode::Escape) || !modals.is_empty() || focus.0.is_some() {
         return;
     }
-    if deploy.0.is_some() {
+    if diplo.queued.is_some()
+        || diplo.show_grant_picker
+        || diplo.show_break_picker
+        || diplo.confirm_war
+    {
+        diplo.queued = None;
+        diplo.show_grant_picker = false;
+        diplo.show_break_picker = false;
+        diplo.confirm_war = false;
+    } else if deploy.0.is_some() {
         deploy.0 = None;
     } else if !selected_units.0.is_empty() {
         selected_units.0.clear();
@@ -376,6 +459,8 @@ pub fn esc_cascade(
     } else if selected_hex.0.is_some() || selected_civilian.0.is_some() {
         selected_hex.0 = None;
         selected_civilian.0 = None;
+    } else if *screen.get() != Screen::Map {
+        next_screen.set(Screen::Map);
     } else {
         exit.write(AppExit::Success);
     }
