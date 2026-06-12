@@ -4,10 +4,58 @@
 
 use crate::ApiError;
 use domain::game_state::GameState;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub struct Session {
     game: GameState,
+}
+
+/// Metadata card for one save file in a saves directory (native save
+/// browser). Additive — no wasm export reads this.
+#[derive(Debug, Clone)]
+pub struct SaveSummary {
+    /// File name within the saves directory (e.g. `mymap-turn3.json.gz`).
+    pub file_name: String,
+    pub path: PathBuf,
+    pub nation_name: String,
+    /// Human-readable turn display, e.g. "1820 Q1".
+    pub turn_display: String,
+    pub difficulty: String,
+    /// ISO 8601 timestamp the save was written at.
+    pub timestamp: String,
+}
+
+/// List the save files in `dir` (newest first) with their metadata.
+/// Unreadable/corrupt files are listed with empty metadata so the UI can
+/// still show (and overwrite) them.
+pub fn list_saves(dir: &Path) -> Vec<SaveSummary> {
+    infrastructure::persistence::list_saves(dir)
+        .into_iter()
+        .map(|path| {
+            let file_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            match infrastructure::persistence::read_save_metadata(&path) {
+                Some(meta) => SaveSummary {
+                    file_name,
+                    path,
+                    nation_name: meta.nation_name,
+                    turn_display: meta.turn_display,
+                    difficulty: meta.difficulty,
+                    timestamp: meta.timestamp,
+                },
+                None => SaveSummary {
+                    file_name,
+                    path,
+                    nation_name: String::new(),
+                    turn_display: String::new(),
+                    difficulty: String::new(),
+                    timestamp: String::new(),
+                },
+            }
+        })
+        .collect()
 }
 
 impl Session {
@@ -49,6 +97,29 @@ impl Session {
     /// Nation id of the human seat (the viewpoint nation in observer mode).
     pub fn human_nation(&self) -> u32 {
         self.game.human_player_nation.0
+    }
+
+    /// Map seed key the world was generated from.
+    pub fn map_key(&self) -> &str {
+        &self.game.world.map_key
+    }
+
+    /// Current turn number (1-based).
+    pub fn turn_number(&self) -> u32 {
+        self.game.turn.0
+    }
+
+    /// Difficulty as the frontend's 0..=4 scale (see
+    /// [`crate::setup::difficulty_from_u8`]).
+    pub fn difficulty_u8(&self) -> u8 {
+        use domain::types::Difficulty;
+        match self.game.difficulty {
+            Difficulty::Introductory => 0,
+            Difficulty::Easy => 1,
+            Difficulty::Normal => 2,
+            Difficulty::Hard => 3,
+            Difficulty::NighOnImpossible => 4,
+        }
     }
 
     pub fn game_mut(&mut self) -> &mut GameState {

@@ -6,14 +6,14 @@ use frontend_api::Session;
 use crate::game::commands::{self, GameCommand};
 use crate::game::refresh;
 use crate::game::resources::{
-    Blink, CurrentTurnNews, DataVersion, DeferredProposals, DeployMode, DiploUi, EngineerPrompt,
-    FleetTargets, GameMeta, MoveTargets, NewsArchive, NewsDebugSettings, PendingMoveList,
-    PendingMoves, PerspectiveNation, PrevLedger, ProposalPrompt, ProvinceUnits,
+    Blink, CameraCentered, CurrentTurnNews, DataVersion, DeferredProposals, DeployMode, DiploUi,
+    EngineerPrompt, FleetTargets, GameMeta, MoveTargets, NewsArchive, NewsDebugSettings,
+    PendingMoveList, PendingMoves, PerspectiveNation, PrevLedger, ProposalPrompt, ProvinceUnits,
     QueuedDiplomacyAction, RenderSettings, SelectedCivilian, SelectedNavy, SelectedShips,
     SelectedUnits, SessionRes, TileIndex, TreatyMarkerIndex, TurnInfo, ViewModels, tick_blink,
 };
 use crate::game::selection;
-use crate::game::turn_runner::{self, ActiveTurn};
+use crate::game::turn_runner::{self, ActiveSkip, ActiveTurn, BusyProgress};
 use crate::map::camera;
 use crate::map::icons;
 use crate::map::layers::{self, BordersCache, MapMode};
@@ -23,9 +23,10 @@ use crate::map::picking::{self, HoverTarget, HoveredHex, MapClick, SelectedHex};
 use crate::map::tooltip::{self, MapTooltipState};
 use crate::screens::{
     battles, diplomacy, gallery, industry, ledger, legend, map_hud, news, panels, proposals,
-    side_panel, tech, trade, transport,
+    saveload, side_panel, tech, trade, transport,
 };
-use crate::state::{Screen, TurnPhase, map_interactive};
+use crate::setup::{self, SetupAction, SetupConfig, SetupUi};
+use crate::state::{AppState, Screen, TurnPhase, map_interactive};
 use crate::widgets::{self, ButtonActivated, TabGroup, WidgetsPlugin};
 
 /// Debug hook: when `MAP_SCREENSHOT=<path>` is set, capture the primary
@@ -567,22 +568,513 @@ fn m9_debug_driver(
     }
 }
 
-/// Run the Bevy game. By default this is an observer game (every Great
-/// Power AI-driven); `HUMAN_GAME=1` starts a normal game with the human in
-/// seat 0 so the unit/civilian/naval flows are live. Nation choice and
-/// setup screens come in later milestones.
+/// Grouped parameters for [`m10_debug_driver`] (system-param limit).
+#[derive(bevy::ecs::system::SystemParam)]
+struct M10Driver<'w, 's> {
+    commands: Commands<'w, 's>,
+    theme: Res<'w, crate::theme::Theme>,
+    modal_stack: ResMut<'w, widgets::ModalStack>,
+    config: ResMut<'w, SetupConfig>,
+    ui: ResMut<'w, SetupUi>,
+    session: Res<'w, SessionRes>,
+    actions: MessageWriter<'w, SetupAction>,
+    game_commands: MessageWriter<'w, GameCommand>,
+    active_skip: Res<'w, ActiveSkip>,
+    active_job: ResMut<'w, setup::jobs::ActiveSetupJob>,
+    next_phase: ResMut<'w, NextState<TurnPhase>>,
+    toasts: MessageWriter<'w, widgets::Toast>,
+    exit: MessageWriter<'w, AppExit>,
+    load_rows: Query<'w, 's, (Entity, &'static saveload::LoadSaveBtn)>,
+    restart_rows: Query<'w, 's, Entity, With<saveload::RestartConfirmBtn>>,
+    save_rows: Query<'w, 's, Entity, With<saveload::SaveConfirmBtn>>,
+    overwrite_rows: Query<'w, 's, Entity, With<saveload::OverwriteConfirmBtn>>,
+    activations: MessageWriter<'w, ButtonActivated>,
+}
+
+/// Debug driver for the M10 setup flow: `M10_DEBUG=<script>` drives the
+/// real setup actions (button paths) so screenshots and the end-to-end
+/// check exercise live code. Scripts:
+/// - `config` — config step as booted.
+/// - `preview` — generate and show the preview step.
+/// - `capital` — non-observer flow into capital placement (yield preview +
+///   suggestions visible).
+/// - `save` — begin an observer game, open the Save modal.
+/// - `load` — begin, write two saves, open the Load modal.
+/// - `loadcli` — loads CLI-written saves (`save_1815_Q1.json` / `.bin`)
+///   through the real Load-modal buttons; prints `M10_LOADCLI OK/FAIL`.
+/// - `restart` — begin → end turn → confirm Restart → same seed at turn 1;
+///   prints `M10_RESTART OK/FAIL`.
+/// - `e2e` — setup → preview → re-roll names → place capital → begin →
+///   two turns → save → load → verify; prints `M10_E2E OK/FAIL` and exits.
+/// - `skip` — begin observer; Skip 5, Skip Until, cancel mid-skip; prints
+///   `M10_SKIP OK/FAIL` and exits.
+fn m10_debug_driver(
+    mut frames: Local<u32>,
+    mut step: Local<u32>,
+    mut stash: Local<Vec<String>>,
+    phase: Res<State<TurnPhase>>,
+    app_state: Res<State<AppState>>,
+    mut p: M10Driver,
+) {
+    let Ok(script) = std::env::var("M10_DEBUG") else {
+        return;
+    };
+    let idle = *phase.get() == TurnPhase::Idle;
+    // The cancel step is the one place the driver acts mid-Processing (it
+    // pokes the running skip's cancel flag, like the overlay button).
+    if !idle {
+        if script == "skip"
+            && *step == 5
+            && let Some(run) = p.active_skip.0.as_ref()
+        {
+            run.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            if !stash.iter().any(|s| s == "cancel-requested") {
+                stash.push("cancel-requested".to_string());
+            }
+        }
+        return;
+    }
+    *frames += 1;
+    let in_game = *app_state.get() == AppState::InGame;
+    let preview_ready =
+        p.ui.step == setup::SetupStep::Preview && p.session.0.is_some() && !p.ui.gps.is_empty();
+    let turn = p.session.0.as_ref().map(|s| s.turn_number()).unwrap_or(0);
+    let fail = |exit: &mut MessageWriter<AppExit>, tag: &str, message: &str| {
+        println!("{tag} FAIL: {message}");
+        exit.write(AppExit::error());
+    };
+    if *frames > 4000 {
+        fail(&mut p.exit, "M10", "timed out");
+        return;
+    }
+
+    match script.as_str() {
+        "config" => {}
+        "preview" => {
+            if *frames == 20 {
+                p.actions.write(SetupAction::PreviewMap);
+            }
+        }
+        "capital" => match *step {
+            0 => {
+                p.config.observer = false;
+                p.ui.config_dirty = true;
+                *step = 1;
+            }
+            1 if *frames >= 10 => {
+                p.actions.write(SetupAction::PreviewMap);
+                *step = 2;
+            }
+            2 if preview_ready => {
+                p.actions.write(SetupAction::PickNation(0));
+                *step = 3;
+            }
+            3 if p.config.picked_nation == Some(0) => {
+                p.actions.write(SetupAction::EnterCapitalStage);
+                *step = 4;
+            }
+            4 if !p.ui.suggestions.is_empty() => {
+                p.actions.write(SetupAction::PickSuggestion(0));
+                *step = 5;
+            }
+            _ => {}
+        },
+        "save" | "load" => match *step {
+            0 => {
+                p.actions.write(SetupAction::PreviewMap);
+                *step = 1;
+            }
+            1 if preview_ready => {
+                p.actions.write(SetupAction::BeginCampaign);
+                *step = 2;
+            }
+            2 if in_game => {
+                if script == "load" {
+                    saveload::write_save(&p.session, "alpha-1815.json.gz", &mut p.toasts);
+                    saveload::write_save(&p.session, "beta-1815.json.gz", &mut p.toasts);
+                    saveload::open_load_modal(&mut p.commands, &mut p.modal_stack, &p.theme);
+                } else {
+                    let name = saveload::default_save_name(&p.session);
+                    saveload::open_save_modal(&mut p.commands, &mut p.modal_stack, &p.theme, &name);
+                }
+                *step = 3;
+            }
+            _ => {}
+        },
+        // CLI-compat proof: requires `saves/save_1815_Q1.json` + `.bin`
+        // written by the CLI binary. Advances one turn, then loads each CLI
+        // save through the real Load-modal button path and verifies the
+        // session rolled back to turn 1.
+        "loadcli" => match *step {
+            0 => {
+                p.actions.write(SetupAction::PreviewMap);
+                *step = 1;
+            }
+            1 if preview_ready => {
+                p.actions.write(SetupAction::BeginCampaign);
+                *step = 2;
+            }
+            2 if in_game => {
+                p.game_commands.write(GameCommand::EndTurn);
+                *step = 3;
+            }
+            3 | 6 if turn == 2 => {
+                saveload::open_load_modal(&mut p.commands, &mut p.modal_stack, &p.theme);
+                *step += 1;
+            }
+            4 | 7 => {
+                let want = if *step == 4 {
+                    "save_1815_Q1.json"
+                } else {
+                    "save_1815_Q1.bin"
+                };
+                let Some((entity, _)) = p
+                    .load_rows
+                    .iter()
+                    .find(|(_, row)| row.path.file_name().is_some_and(|n| n == want))
+                else {
+                    if *frames > 600 {
+                        fail(&mut p.exit, "M10_LOADCLI", &format!("{want} not listed"));
+                    }
+                    return;
+                };
+                p.activations.write(ButtonActivated(entity));
+                *step += 1;
+            }
+            5 if turn == 1 => {
+                println!("M10_LOADCLI json OK: CLI save loaded, back at turn 1");
+                p.game_commands.write(GameCommand::EndTurn);
+                *step = 6;
+            }
+            8 if turn == 1 => {
+                println!("M10_LOADCLI bin OK: CLI binary save loaded, back at turn 1");
+                println!("M10_LOADCLI OK");
+                p.exit.write(AppExit::Success);
+                *step = 9;
+            }
+            _ => {}
+        },
+        // Setup-screen load proof: the config step's "Load Save" button
+        // loads straight into the game (needs `saves/m10-e2e.json.gz` from
+        // an earlier `e2e` run).
+        "loadsetup" => {
+            match *step {
+                0 if *frames >= 10 => {
+                    p.actions.write(SetupAction::OpenLoadModal);
+                    *step = 1;
+                }
+                1 => {
+                    if let Some((entity, _)) = p.load_rows.iter().find(|(_, row)| {
+                        row.path.file_name().is_some_and(|n| n == "m10-e2e.json.gz")
+                    }) {
+                        p.activations.write(ButtonActivated(entity));
+                        *step = 2;
+                    } else if *frames > 600 {
+                        fail(&mut p.exit, "M10_LOADSETUP", "m10-e2e.json.gz not listed");
+                    }
+                }
+                2 if in_game && turn == 3 => {
+                    println!("M10_LOADSETUP OK: loaded from the setup screen, turn 3");
+                    p.exit.write(AppExit::Success);
+                    *step = 3;
+                }
+                _ => {}
+            }
+        }
+        // Overwrite proof: saving onto an existing file must raise the
+        // confirm modal, and confirming must write and close everything.
+        "overwrite" => match *step {
+            0 => {
+                p.actions.write(SetupAction::PreviewMap);
+                *step = 1;
+            }
+            1 if preview_ready => {
+                p.actions.write(SetupAction::BeginCampaign);
+                *step = 2;
+            }
+            2 if in_game => {
+                saveload::write_save(&p.session, "dup.json.gz", &mut p.toasts);
+                saveload::open_save_modal(&mut p.commands, &mut p.modal_stack, &p.theme, "dup");
+                *step = 3;
+            }
+            3 => {
+                if let Some(entity) = p.save_rows.iter().next() {
+                    p.activations.write(ButtonActivated(entity));
+                    *step = 4;
+                }
+            }
+            4 => {
+                if let Some(entity) = p.overwrite_rows.iter().next() {
+                    println!("M10_OVERWRITE confirm modal appeared");
+                    p.activations.write(ButtonActivated(entity));
+                    *step = 5;
+                } else if *frames > 600 {
+                    fail(&mut p.exit, "M10_OVERWRITE", "confirm modal never appeared");
+                }
+            }
+            5 if p.save_rows.is_empty() && p.overwrite_rows.is_empty() => {
+                if saveload::saves_dir().join("dup.json.gz").exists() {
+                    println!("M10_OVERWRITE OK: confirmed overwrite, modals closed");
+                    p.exit.write(AppExit::Success);
+                } else {
+                    fail(&mut p.exit, "M10_OVERWRITE", "file missing after overwrite");
+                }
+                *step = 6;
+            }
+            _ => {}
+        },
+        // Restart proof: begin → end a turn → confirm Restart → the same
+        // seed rebuilds at turn 1.
+        "restart" => match *step {
+            0 => {
+                p.actions.write(SetupAction::PreviewMap);
+                *step = 1;
+            }
+            1 if preview_ready => {
+                p.actions.write(SetupAction::BeginCampaign);
+                *step = 2;
+            }
+            2 if in_game => {
+                stash.push(
+                    p.session
+                        .0
+                        .as_ref()
+                        .map(|s| s.map_key().to_string())
+                        .unwrap_or_default(),
+                );
+                p.game_commands.write(GameCommand::EndTurn);
+                *step = 3;
+            }
+            3 if turn == 2 => {
+                saveload::open_restart_modal(&mut p.commands, &mut p.modal_stack, &p.theme);
+                *step = 4;
+            }
+            4 => {
+                if let Some(entity) = p.restart_rows.iter().next() {
+                    p.activations.write(ButtonActivated(entity));
+                    *step = 5;
+                }
+            }
+            5 if turn == 1 => {
+                let map_key = p
+                    .session
+                    .0
+                    .as_ref()
+                    .map(|s| s.map_key().to_string())
+                    .unwrap_or_default();
+                if Some(&map_key) == stash.first() {
+                    println!("M10_RESTART OK: back at turn 1, same seed {map_key}");
+                    p.exit.write(AppExit::Success);
+                } else {
+                    fail(
+                        &mut p.exit,
+                        "M10_RESTART",
+                        &format!("seed changed: {map_key}"),
+                    );
+                }
+                *step = 6;
+            }
+            _ => {}
+        },
+        "e2e" => match *step {
+            0 => {
+                p.config.observer = false;
+                p.ui.config_dirty = true;
+                p.actions.write(SetupAction::PreviewMap);
+                *step = 1;
+            }
+            1 if preview_ready => {
+                stash.push(p.ui.gps[0].name.clone()); // pre-reroll name
+                p.actions.write(SetupAction::RerollNames);
+                *step = 2;
+            }
+            2 if preview_ready && Some(&p.ui.gps[0].name) != stash.first() => {
+                println!("M10_E2E reroll-names: {} -> {}", stash[0], p.ui.gps[0].name);
+                p.actions.write(SetupAction::PickNation(0));
+                *step = 3;
+            }
+            3 if p.config.picked_nation == Some(0) => {
+                p.actions.write(SetupAction::EnterCapitalStage);
+                *step = 4;
+            }
+            4 if !p.ui.suggestions.is_empty() => {
+                let s = &p.ui.suggestions[0];
+                println!(
+                    "M10_E2E capital pick: {} ({}, {}) support {}",
+                    s.province_name, s.preview.q, s.preview.r, s.preview.support
+                );
+                stash.push(format!("{},{}", s.preview.q, s.preview.r));
+                p.actions.write(SetupAction::PickSuggestion(0));
+                *step = 5;
+            }
+            5 if p.ui.picked_capital.is_some() => {
+                p.actions.write(SetupAction::BeginCampaign);
+                *step = 6;
+            }
+            6 if in_game => {
+                let Some(session) = p.session.0.as_ref() else {
+                    return;
+                };
+                // The override capital must be the picked tile — read the
+                // authoritative map straight from the session.
+                let coords: Vec<i32> = stash[1].split(',').filter_map(|v| v.parse().ok()).collect();
+                let placed = frontend_api::map::get_map_data(session.game(), true)
+                    .ok()
+                    .and_then(|v| crate::game::vm::parse_map_tiles(v).ok())
+                    .is_some_and(|tiles| {
+                        tiles
+                            .iter()
+                            .any(|t| t.q == coords[0] && t.r == coords[1] && t.is_country_capital)
+                    });
+                if !placed {
+                    fail(
+                        &mut p.exit,
+                        "M10_E2E",
+                        "capital override not on picked tile",
+                    );
+                    return;
+                }
+                stash.push(session.map_key().to_string());
+                println!(
+                    "M10_E2E in game: map_key={} turn={}",
+                    session.map_key(),
+                    session.turn_number()
+                );
+                p.game_commands.write(GameCommand::EndTurn);
+                *step = 7;
+            }
+            7 if turn == 2 => {
+                p.game_commands.write(GameCommand::EndTurn);
+                *step = 8;
+            }
+            8 if turn == 3 => {
+                if !saveload::write_save(&p.session, "m10-e2e.json.gz", &mut p.toasts) {
+                    fail(&mut p.exit, "M10_E2E", "save failed");
+                    return;
+                }
+                setup::jobs::start_load(
+                    &mut p.active_job,
+                    &mut p.next_phase,
+                    saveload::saves_dir().join("m10-e2e.json.gz"),
+                );
+                *step = 9;
+                *frames = 0;
+            }
+            9 if *frames > 10 => {
+                let Some(session) = p.session.0.as_ref() else {
+                    return;
+                };
+                let turn_ok = session.turn_number() == 3;
+                let map_ok = stash.get(2).map(String::as_str) == Some(session.map_key());
+                if turn_ok && map_ok {
+                    println!(
+                        "M10_E2E OK: loaded turn {} map_key {}",
+                        session.turn_number(),
+                        session.map_key()
+                    );
+                    p.exit.write(AppExit::Success);
+                } else {
+                    let want = stash.get(2).cloned().unwrap_or_default();
+                    fail(
+                        &mut p.exit,
+                        "M10_E2E",
+                        &format!(
+                            "after load: turn {} (want 3), map_key {} (want {want})",
+                            session.turn_number(),
+                            session.map_key(),
+                        ),
+                    );
+                }
+                *step = 10;
+            }
+            _ => {}
+        },
+        "skip" => match *step {
+            0 => {
+                p.actions.write(SetupAction::PreviewMap);
+                *step = 1;
+            }
+            1 if preview_ready => {
+                p.actions.write(SetupAction::BeginCampaign);
+                *step = 2;
+            }
+            2 if in_game => {
+                p.game_commands.write(GameCommand::SkipTurns { count: 5 });
+                *step = 3;
+            }
+            3 if p.active_skip.0.is_none() && turn >= 6 => {
+                if turn != 6 {
+                    fail(
+                        &mut p.exit,
+                        "M10_SKIP",
+                        &format!("skip 5: turn {turn}, want 6"),
+                    );
+                    return;
+                }
+                println!("M10_SKIP skip-5 OK: turn {turn}");
+                p.game_commands
+                    .write(GameCommand::SkipUntil { text: "the".into() });
+                *step = 4;
+            }
+            4 if p.active_skip.0.is_none() && turn > 6 => {
+                println!("M10_SKIP skip-until matched at turn {turn}");
+                stash.push(format!("baseline:{turn}"));
+                p.game_commands.write(GameCommand::SkipTurns { count: 400 });
+                *step = 5;
+            }
+            5 if stash.iter().any(|s| s == "cancel-requested") && p.active_skip.0.is_none() => {
+                let baseline: u32 = stash
+                    .iter()
+                    .find_map(|s| s.strip_prefix("baseline:"))
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0);
+                if turn >= baseline + 400 {
+                    fail(&mut p.exit, "M10_SKIP", "cancel did not stop the run");
+                    return;
+                }
+                println!(
+                    "M10_SKIP cancel OK: stopped at turn {turn} (started {baseline}, cap {})",
+                    baseline + 400
+                );
+                println!("M10_SKIP OK");
+                p.exit.write(AppExit::Success);
+                *step = 6;
+            }
+            _ => {}
+        },
+        _ => {}
+    }
+}
+
+/// Run the Bevy game. The app boots into the setup flow (config → preview →
+/// capital placement → campaign). Debug shortcuts skip setup and start a
+/// game directly: `HUMAN_GAME=1` (human in seat 0), `OBSERVER_GAME=1`, or
+/// any `MAP_SCREENSHOT` capture without an `M10_DEBUG` script (the M6–M9
+/// drivers rely on booting straight into a game).
 pub fn run_game() {
     let human = std::env::var("HUMAN_GAME").as_deref() == Ok("1");
-    let game = if human {
-        frontend_api::setup::new_game("imperialism", 2, 0, 80, 50, 7, 16, "", "", None)
+    let observer_shortcut = std::env::var("OBSERVER_GAME").as_deref() == Ok("1");
+    let m10 = std::env::var("M10_DEBUG").is_ok();
+    let screenshot = std::env::var("MAP_SCREENSHOT").is_ok();
+    let skip_setup = human || observer_shortcut || (screenshot && !m10);
+
+    let (initial_state, session) = if skip_setup {
+        let game = if human {
+            frontend_api::setup::new_game("imperialism", 2, 0, 80, 50, 7, 16, "", "", None)
+        } else {
+            frontend_api::setup::new_observer_game("imperialism", 2, 80, 50, 7, 16, "", "")
+        };
+        (AppState::InGame, Some(Session::from_game(game)))
     } else {
-        frontend_api::setup::new_observer_game("imperialism", 2, 80, 50, 7, 16, "", "")
+        (AppState::Setup, None)
     };
-    let session = Session::from_game(game);
-    let meta = GameMeta {
-        observer: session.observer_mode(),
-        player_nation: session.human_nation(),
-    };
+    let meta = session
+        .as_ref()
+        .map(|session| GameMeta {
+            observer: session.observer_mode(),
+            player_nation: session.human_nation(),
+        })
+        .unwrap_or_default();
     // Debug widget gallery overlay (cheap; sits on top of the map).
     let widget_gallery = std::env::var("WIDGET_GALLERY").as_deref() == Ok("1");
 
@@ -610,7 +1102,8 @@ pub fn run_game() {
         app.add_systems(Startup, gallery::setup_gallery)
             .add_systems(Update, gallery::gallery_interactions);
     }
-    app.init_state::<TurnPhase>()
+    app.insert_state(initial_state)
+        .init_state::<TurnPhase>()
         .init_state::<Screen>()
         .init_resource::<industry::IndustryUi>()
         .init_resource::<trade::TradeUi>()
@@ -628,7 +1121,7 @@ pub fn run_game() {
         .init_resource::<news::NewsUi>()
         .init_resource::<battles::BattlesUi>()
         .init_resource::<battles::BattleArchive>()
-        .insert_resource(SessionRes(Some(session)))
+        .insert_resource(SessionRes(session))
         .insert_resource(DataVersion(1))
         .insert_resource(meta)
         .insert_resource(PerspectiveNation(meta.player_nation))
@@ -642,6 +1135,14 @@ pub fn run_game() {
         .init_resource::<TileIndex>()
         .init_resource::<TurnInfo>()
         .init_resource::<ActiveTurn>()
+        .init_resource::<ActiveSkip>()
+        .init_resource::<BusyProgress>()
+        .init_resource::<CameraCentered>()
+        .init_resource::<SetupConfig>()
+        .init_resource::<SetupUi>()
+        .init_resource::<setup::ActiveGameConfig>()
+        .init_resource::<setup::jobs::ActiveSetupJob>()
+        .init_resource::<setup::jobs::PendingSession>()
         .init_resource::<MapMode>()
         .init_resource::<HoveredHex>()
         .init_resource::<SelectedHex>()
@@ -663,17 +1164,28 @@ pub fn run_game() {
         .init_resource::<MapTooltipState>()
         .add_message::<GameCommand>()
         .add_message::<MapClick>()
+        .add_message::<SetupAction>()
         .add_systems(
             Startup,
             (
                 camera::setup_camera,
                 layers::setup_rings,
                 icons::load_icons,
+                map_hud::spawn_busy_overlay,
+                setup::ui::init_setup,
+            ),
+        )
+        // The in-game HUD chrome exists only once a game starts.
+        .add_systems(
+            OnEnter(AppState::InGame),
+            (
+                setup::ui::cleanup_setup_ui,
                 map_hud::setup_hud,
                 side_panel::setup_side_panel,
                 tooltip::setup_map_tooltip,
             ),
         )
+        // Shared map/world systems (setup preview + in-game).
         .add_systems(
             Update,
             (
@@ -690,12 +1202,62 @@ pub fn run_game() {
                 tick_blink,
                 markers::blink_selected_markers,
                 debug_screenshot,
-                m6_debug_driver,
-                m7_debug_driver,
-                m8_debug_driver,
-                m9_debug_driver,
                 turn_runner::poll_turn_task.run_if(in_state(TurnPhase::Processing)),
+                turn_runner::poll_skip_task.run_if(in_state(TurnPhase::Processing)),
+                setup::jobs::poll_setup_job,
+                setup::jobs::apply_pending_session,
+                map_hud::update_busy_text,
+                map_hud::handle_skip_cancel,
             ),
+        )
+        // Debug drivers.
+        .add_systems(
+            Update,
+            (
+                (
+                    m6_debug_driver,
+                    m7_debug_driver,
+                    m8_debug_driver,
+                    m9_debug_driver,
+                )
+                    .run_if(in_state(AppState::InGame)),
+                m10_debug_driver,
+            ),
+        )
+        // Setup-flow systems.
+        .add_systems(
+            Update,
+            (
+                (
+                    setup::route_action_buttons,
+                    setup::ui::handle_interaction_clicks,
+                    setup::ui::handle_setup_actions,
+                    setup::ui::handle_config_inputs,
+                    setup::ui::handle_config_sliders,
+                    setup::ui::handle_config_checkboxes,
+                    setup::ui::handle_terrain_sliders,
+                    setup::ui::handle_preview_map_clicks,
+                )
+                    .chain(),
+                (
+                    setup::ui::sync_preview_gps,
+                    setup::ui::compute_suggestions,
+                    setup::ui::capital_hover_preview,
+                    setup::ui::suggestion_row_hover,
+                    ledger::ensure_flags.run_if(|ui: Res<SetupUi>| ui.preview_dirty),
+                    setup::ui::rebuild_config_ui,
+                    setup::ui::rebuild_preview_ui,
+                    setup::ui::update_yields_panel,
+                    setup::ui::tint_selected_buttons,
+                )
+                    .chain(),
+            )
+                .run_if(in_state(AppState::Setup).and(in_state(TurnPhase::Idle))),
+        )
+        // Save/load modal plumbing (config step + in-game top bar).
+        .add_systems(
+            Update,
+            saveload::handle_saveload_buttons.run_if(in_state(TurnPhase::Idle)),
         )
         .add_systems(
             Update,
@@ -711,13 +1273,15 @@ pub fn run_game() {
                 (
                     picking::pick_hover,
                     picking::pick_select,
-                    selection::handle_map_click,
+                    selection::handle_map_click.run_if(in_state(AppState::InGame)),
                 )
                     .chain(),
-                tooltip::update_map_tooltip,
+                tooltip::update_map_tooltip.run_if(in_state(AppState::InGame)),
                 // Esc precedence: the cascade only sees the key press
                 // before the modal system pops the top modal with it.
-                selection::esc_cascade.before(widgets::modal::esc_pops_top_modal),
+                selection::esc_cascade
+                    .before(widgets::modal::esc_pops_top_modal)
+                    .run_if(in_state(AppState::InGame)),
             )
                 .run_if(in_state(TurnPhase::Idle).and(map_interactive)),
         )
@@ -736,6 +1300,8 @@ pub fn run_game() {
                     (
                         map_hud::end_turn_button,
                         map_hud::keyboard_commands,
+                        map_hud::handle_convenience_buttons,
+                        map_hud::handle_viewpoint_dropdown,
                         panels::handle_unit_checkboxes,
                         panels::handle_panel_buttons,
                         selection::handle_engineer_choice,
@@ -770,7 +1336,7 @@ pub fn run_game() {
                 )
                     .chain(),
             )
-                .run_if(in_state(TurnPhase::Idle)),
+                .run_if(in_state(TurnPhase::Idle).and(in_state(AppState::InGame))),
         )
         // Screen navigation + M7/M8 screen rebuilds.
         .add_systems(
@@ -792,7 +1358,8 @@ pub fn run_game() {
                 (battles::ensure_battle_archive, battles::update_battles)
                     .chain()
                     .run_if(in_state(Screen::Battles)),
-            ),
+            )
+                .run_if(in_state(AppState::InGame)),
         )
         .add_systems(
             OnEnter(Screen::Industry),
@@ -856,6 +1423,7 @@ pub fn run_game() {
             (
                 map_hud::update_turn_display,
                 map_hud::update_mode_display,
+                map_hud::sync_viewpoint_dropdown,
                 side_panel::handle_toggles,
                 side_panel::handle_mode_dropdown,
                 side_panel::sync_mode_dropdown,
@@ -866,7 +1434,8 @@ pub fn run_game() {
                 panels::update_unit_panel,
                 panels::update_civilian_panel,
                 panels::update_naval_panel,
-            ),
+            )
+                .run_if(in_state(AppState::InGame)),
         )
         .add_systems(
             OnEnter(TurnPhase::Processing),

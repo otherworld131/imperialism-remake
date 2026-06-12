@@ -92,6 +92,12 @@ pub struct RenderSettings {
     pub show_ai_civilians: bool,
     /// Debug: when true the whole board is visible (observer default).
     pub disable_fog: bool,
+    /// Setup preview: reveal every hidden resource (web sets
+    /// `resource_hidden: false` on all preview tiles).
+    pub preview_reveal_resources: bool,
+    /// Setup preview, non-observer: strip the provisional capital, depots
+    /// and armies the generator placed — the player overrides the capital.
+    pub preview_hide_ownership: bool,
 }
 
 impl Default for RenderSettings {
@@ -105,6 +111,8 @@ impl Default for RenderSettings {
             show_hidden_resources: false,
             show_ai_civilians: false,
             disable_fog: true,
+            preview_reveal_resources: false,
+            preview_hide_ownership: false,
         }
     }
 }
@@ -164,14 +172,30 @@ pub struct SelectedNavy(pub Option<String>);
 #[derive(Resource, Default)]
 pub struct SelectedCivilian(pub Option<i64>);
 
-/// Game-mode metadata captured at startup. `observer` games disable every
-/// player command and hide the interactive panels (read-only map).
+/// Game-mode metadata for the active session. `observer` games disable every
+/// player command and hide the interactive panels (read-only map). Updated
+/// whenever a session is installed (game start, restart, load, viewpoint
+/// switch).
 #[derive(Resource, Clone, Copy)]
 pub struct GameMeta {
     pub observer: bool,
     /// Nation id of the human seat (viewpoint nation in observer mode).
     pub player_nation: u32,
 }
+
+impl Default for GameMeta {
+    fn default() -> Self {
+        Self {
+            observer: true,
+            player_nation: 0,
+        }
+    }
+}
+
+/// `false` re-centers the camera on the map once [`MapBounds`] is published
+/// (initial boot, and again after restart / load / preview generation).
+#[derive(Resource, Default)]
+pub struct CameraCentered(pub bool);
 
 /// Units loaded for the selected capital province (the unit panel VM),
 /// kept in sync with [`SelectedHex`](crate::map::picking::SelectedHex) and

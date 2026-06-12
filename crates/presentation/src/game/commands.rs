@@ -6,10 +6,10 @@
 use bevy::prelude::*;
 
 use crate::game::resources::{
-    DataVersion, DeployMode, GameMeta, ProposalPrompt, QueuedDiplomacyAction, SelectedCivilian,
-    SelectedShips, SelectedUnits, SessionRes,
+    DataVersion, DeployMode, GameMeta, PerspectiveNation, ProposalPrompt, QueuedDiplomacyAction,
+    SelectedCivilian, SelectedShips, SelectedUnits, SessionRes,
 };
-use crate::game::turn_runner::{self, ActiveTurn};
+use crate::game::turn_runner::{self, ActiveSkip, ActiveTurn, SkipSpec};
 use crate::game::vm;
 use crate::state::TurnPhase;
 use crate::widgets::Toast;
@@ -17,6 +17,21 @@ use crate::widgets::Toast;
 #[derive(Message, Debug, Clone, PartialEq, Eq)]
 pub enum GameCommand {
     EndTurn,
+    /// Top bar "Skip N": process up to N turns (1..=500) on the compute
+    /// pool with progress + cancel.
+    SkipTurns {
+        count: u32,
+    },
+    /// Top bar "Skip Until": process turns until a headline matches the
+    /// text (case-insensitive substring), capped at 1000 turns.
+    SkipUntil {
+        text: String,
+    },
+    /// Observer viewpoint switch (web header dropdown): re-seat the
+    /// human/viewpoint nation by Great-Power index.
+    SetViewpoint {
+        index: usize,
+    },
     /// Queue every selected unit's move to one province, all-or-nothing:
     /// any failure rolls back the units queued earlier in the batch.
     QueueUnitMoves {
@@ -161,12 +176,15 @@ fn report(
     true
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn apply_command(
     mut messages: MessageReader<GameCommand>,
     mut session: ResMut<SessionRes>,
     mut active: ResMut<ActiveTurn>,
+    mut active_skip: ResMut<ActiveSkip>,
     mut next_phase: ResMut<NextState<TurnPhase>>,
-    meta: Res<GameMeta>,
+    mut meta: ResMut<GameMeta>,
+    mut perspective: ResMut<PerspectiveNation>,
     mut data_version: ResMut<DataVersion>,
     mut toasts: MessageWriter<Toast>,
     mut selected_units: ResMut<SelectedUnits>,
@@ -178,6 +196,45 @@ pub fn apply_command(
     for command in messages.read() {
         if let GameCommand::EndTurn = command {
             turn_runner::start_end_turn(&mut session, &mut active, &mut next_phase);
+            continue;
+        }
+        if let GameCommand::SkipTurns { count } = command {
+            turn_runner::start_skip(
+                &mut session,
+                &mut active_skip,
+                &mut next_phase,
+                SkipSpec::Count(*count),
+            );
+            continue;
+        }
+        if let GameCommand::SkipUntil { text } = command {
+            turn_runner::start_skip(
+                &mut session,
+                &mut active_skip,
+                &mut next_phase,
+                SkipSpec::Until(text.clone()),
+            );
+            continue;
+        }
+        // Viewpoint switching is the one command that works in observer
+        // mode — it only moves the viewpoint seat, never queues actions.
+        if let GameCommand::SetViewpoint { index } = command {
+            let Some(session) = session.0.as_mut() else {
+                continue;
+            };
+            match frontend_api::setup::set_human_player(session.game_mut(), *index) {
+                Ok(()) => {
+                    meta.player_nation = session.human_nation();
+                    perspective.0 = meta.player_nation;
+                    data_version.0 += 1;
+                }
+                Err(err) => {
+                    toasts.write(Toast::error(format!(
+                        "Viewpoint switch failed: {}",
+                        err.message()
+                    )));
+                }
+            }
             continue;
         }
         // Observer games are read-only; the panels that emit these commands
@@ -193,7 +250,10 @@ pub fn apply_command(
         let mut bump = false;
 
         match command {
-            GameCommand::EndTurn => unreachable!(),
+            GameCommand::EndTurn
+            | GameCommand::SkipTurns { .. }
+            | GameCommand::SkipUntil { .. }
+            | GameCommand::SetViewpoint { .. } => unreachable!(),
 
             GameCommand::QueueUnitMoves {
                 unit_ids,

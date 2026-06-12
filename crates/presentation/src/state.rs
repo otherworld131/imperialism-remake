@@ -1,8 +1,22 @@
-//! App-wide state machines: the turn phase and the active game screen.
+//! App-wide state machines: setup vs. in-game, the turn phase, and the
+//! active game screen.
 
 use bevy::prelude::*;
 
+/// Top-level app mode: the game-setup flow (config → preview → capital) or
+/// a live game. [`Screen`] only matters while `InGame`; during `Setup` it
+/// stays on the default `Map` so the preview map renders underneath the
+/// setup chrome.
+#[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum AppState {
+    #[default]
+    Setup,
+    InGame,
+}
+
 /// Whether the player can act or a turn is resolving on a background thread.
+/// Setup's async world generation also parks in `Processing` so input,
+/// debug-screenshot frame counting, and the busy overlay behave uniformly.
 #[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum TurnPhase {
     #[default]

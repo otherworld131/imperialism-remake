@@ -30,7 +30,32 @@ pub fn refresh_view_models(
     let disable_fog = settings.disable_fog;
 
     match frontend_api::map::get_map_data(game, disable_fog).map(vm::parse_map_tiles) {
-        Ok(Ok(tiles)) => {
+        Ok(Ok(mut tiles)) => {
+            // Setup-preview transforms (web GameSetup `previewMapTiles`):
+            // reveal hidden resources; in non-observer previews also strip
+            // the provisional capital/depot/army markers the generator
+            // placed (the player picks the real capital).
+            if settings.preview_reveal_resources {
+                for tile in &mut tiles {
+                    tile.resource_hidden = false;
+                }
+            }
+            if settings.preview_hide_ownership {
+                for tile in &mut tiles {
+                    let was_country_capital = tile.is_country_capital;
+                    tile.is_capital = false;
+                    tile.is_country_capital = false;
+                    tile.improvement_level = 0;
+                    if was_country_capital {
+                        tile.has_depot = false;
+                        tile.army_firepower = 0.0;
+                        tile.army_unit_count = 0;
+                        tile.army_composition = None;
+                        tile.naval_firepower = 0;
+                        tile.naval_ship_count = 0;
+                    }
+                }
+            }
             index.by_coord = tiles
                 .iter()
                 .enumerate()

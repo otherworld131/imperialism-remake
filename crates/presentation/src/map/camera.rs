@@ -5,6 +5,7 @@
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 
+use crate::game::resources::CameraCentered;
 use crate::map::layers::MapBounds;
 
 #[derive(Component)]
@@ -28,13 +29,16 @@ pub fn setup_camera(mut commands: Commands) {
     ));
 }
 
-/// Jump to the map center once the first layer build publishes bounds.
+/// Jump to the map center once the layer build publishes bounds. Session
+/// swaps (restart / load / new preview world) reset [`CameraCentered`] and
+/// remove the stale [`MapBounds`], so this re-centers once the new map's
+/// bounds are published.
 pub fn center_camera_when_map_ready(
     bounds: Option<Res<MapBounds>>,
-    mut centered: Local<bool>,
+    mut centered: ResMut<CameraCentered>,
     mut camera: Query<&mut Transform, With<GameCamera>>,
 ) {
-    if *centered {
+    if centered.0 {
         return;
     }
     let Some(bounds) = bounds else {
@@ -45,7 +49,7 @@ pub fn center_camera_when_map_ready(
     };
     transform.translation.x = bounds.center.x;
     transform.translation.y = bounds.center.y;
-    *centered = true;
+    centered.0 = true;
 }
 
 pub fn camera_movement(

@@ -8,6 +8,7 @@ pub mod app;
 pub mod game;
 pub mod map;
 pub mod screens;
+pub mod setup;
 pub mod state;
 pub mod theme;
 pub mod widgets;

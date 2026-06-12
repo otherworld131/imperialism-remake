@@ -99,6 +99,13 @@ pub fn max_workers_supportable(grain: u32, fruit: u32, meat: u32) -> u32 {
     domain::economy::labor::max_workers_supportable(grain, fruit, meat)
 }
 
+/// Build a capital-override coordinate from raw axial values. Lets frontends
+/// that treat domain types as opaque (the native Bevy UI) pass a capital
+/// pick into [`new_game`] / [`new_scenario_game`].
+pub fn hex_coord(q: i32, r: i32) -> HexCoord {
+    HexCoord::new(q, r)
+}
+
 /// Create a new game.
 /// `flavor_key` seeds names/flags; pass an empty string to reuse `map_key`.
 /// `terrain_json` is an optional JSON object overriding fields of `TerrainMix`
