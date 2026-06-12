@@ -83,10 +83,12 @@ fn apply_province_names(game: &mut GameState, base_seed: u64) {
     }
 }
 
-/// Read-only query: every nation's flag SVG, for frontends that rasterize
-/// flags themselves (the native Bevy ledger). Returns
-/// `[{nation_id, flag_svg}]`; nations without generated flavor carry an
-/// empty string. Additive — no wasm export reads this.
+/// Read-only query: every nation's identity card (name, color, type,
+/// government title) plus its flag SVG, for frontends that rasterize flags
+/// themselves (the native Bevy ledger / legend / battle screens). Returns
+/// `[{nation_id, name, color, nation_type, government_title, flag_svg}]`;
+/// nations without generated flavor carry empty strings. Additive — no wasm
+/// export reads this.
 pub fn get_nation_flags(game: &GameState) -> serde_json::Value {
     serde_json::Value::Array(
         game.world
@@ -95,6 +97,10 @@ pub fn get_nation_flags(game: &GameState) -> serde_json::Value {
             .map(|n| {
                 serde_json::json!({
                     "nation_id": n.id.0,
+                    "name": n.name,
+                    "color": format!("{:?}", n.color),
+                    "nation_type": format!("{:?}", n.nation_type),
+                    "government_title": n.archives.government_title,
                     "flag_svg": n.archives.flag_svg,
                 })
             })

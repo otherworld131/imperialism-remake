@@ -5,7 +5,9 @@
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
-use crate::game::resources::{RenderSettings, SelectedNavy, TileIndex, ViewModels};
+use crate::game::resources::{
+    NewsDebugSettings, RenderSettings, SelectedNavy, TileIndex, ViewModels,
+};
 use crate::map::icons::IconAssets;
 use crate::map::layers::MapMode;
 use crate::map::navy;
@@ -41,9 +43,18 @@ pub enum ToggleKind {
     ShowHiddenResources,
     ShowAiCivilians,
     DisableFog,
+    ShowAiReasoning,
+    ShowAiNonActions,
+    ShowRetreatDebug,
+    ShowBattleFirepower,
 }
 
-pub fn setup_side_panel(mut commands: Commands, theme: Res<Theme>, settings: Res<RenderSettings>) {
+pub fn setup_side_panel(
+    mut commands: Commands,
+    theme: Res<Theme>,
+    settings: Res<RenderSettings>,
+    news_debug: Res<NewsDebugSettings>,
+) {
     // ── Right-hand panel ─────────────────────────────────────────────────
     commands
         .spawn((
@@ -140,6 +151,26 @@ pub fn setup_side_panel(mut commands: Commands, theme: Res<Theme>, settings: Res
                         "Disable fog of war",
                         settings.disable_fog,
                     ),
+                    (
+                        ToggleKind::ShowAiReasoning,
+                        "Show AI reasoning",
+                        news_debug.show_ai_reasoning,
+                    ),
+                    (
+                        ToggleKind::ShowAiNonActions,
+                        "Show AI non-actions",
+                        news_debug.show_ai_non_actions,
+                    ),
+                    (
+                        ToggleKind::ShowRetreatDebug,
+                        "Battle retreat math",
+                        news_debug.show_retreat_debug,
+                    ),
+                    (
+                        ToggleKind::ShowBattleFirepower,
+                        "Battle firepower detail",
+                        news_debug.show_battle_firepower,
+                    ),
                 ];
                 spawn_toggles(content, &theme, &debug_toggles);
 
@@ -229,6 +260,7 @@ pub fn handle_toggles(
     mut toggles: MessageReader<CheckboxToggled>,
     kinds: Query<&ToggleKind>,
     mut settings: ResMut<RenderSettings>,
+    mut news_debug: ResMut<NewsDebugSettings>,
 ) {
     for toggle in toggles.read() {
         let Ok(kind) = kinds.get(toggle.entity) else {
@@ -243,6 +275,10 @@ pub fn handle_toggles(
             ToggleKind::ShowHiddenResources => settings.show_hidden_resources = toggle.checked,
             ToggleKind::ShowAiCivilians => settings.show_ai_civilians = toggle.checked,
             ToggleKind::DisableFog => settings.disable_fog = toggle.checked,
+            ToggleKind::ShowAiReasoning => news_debug.show_ai_reasoning = toggle.checked,
+            ToggleKind::ShowAiNonActions => news_debug.show_ai_non_actions = toggle.checked,
+            ToggleKind::ShowRetreatDebug => news_debug.show_retreat_debug = toggle.checked,
+            ToggleKind::ShowBattleFirepower => news_debug.show_battle_firepower = toggle.checked,
         }
     }
 }

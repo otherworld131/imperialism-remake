@@ -20,7 +20,7 @@ pub struct TurnDisplay;
 pub struct ScreenTabButton(pub Screen);
 
 /// `(screen, label, hotkey)` for the top-bar tabs and the F-key bindings.
-pub const SCREEN_TABS: [(Screen, &str, &str); 7] = [
+pub const SCREEN_TABS: [(Screen, &str, &str); 10] = [
     (Screen::Map, "Map", "F1"),
     (Screen::Transport, "Transport", "F2"),
     (Screen::Industry, "Industry", "F3"),
@@ -28,6 +28,9 @@ pub const SCREEN_TABS: [(Screen, &str, &str); 7] = [
     (Screen::Trade, "Trade", "F5"),
     (Screen::Tech, "Tech", "F6"),
     (Screen::Ledger, "Ledger", "F7"),
+    (Screen::News, "News", "F8"),
+    (Screen::Battles, "Battles", "F9"),
+    (Screen::Legend, "Legend", "F10"),
 ];
 
 #[derive(Component)]
@@ -60,27 +63,29 @@ pub fn setup_hud(mut commands: Commands, theme: Res<Theme>) {
             PickingBlocker,
         ))
         .with_children(|bar| {
+            // Compact left block — ten screen tabs share the 1280px bar.
             bar.spawn((Node {
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
-                column_gap: Val::Px(18.0),
+                column_gap: Val::Px(10.0),
+                flex_shrink: 0.0,
                 ..default()
             },))
                 .with_children(|left| {
                     left.spawn((
-                        Text::new("Imperialism Remake"),
-                        theme.font_bold(17.0),
+                        Text::new("Imperialism"),
+                        theme.font_bold(15.0),
                         TextColor(theme::GOLD),
                     ));
                     left.spawn((
                         Text::new("1815 Q1"),
-                        theme.font(15.0),
+                        theme.font(13.0),
                         TextColor(theme::TEXT),
                         TurnDisplay,
                     ));
                     left.spawn((
-                        Text::new("Political map (M/Tab)"),
-                        theme.font(13.0),
+                        Text::new("Political (M/Tab)"),
+                        theme.font(11.0),
                         TextColor(Color::srgb(0.74, 0.77, 0.70)),
                         ModeDisplay,
                     ));
@@ -101,15 +106,25 @@ pub fn setup_hud(mut commands: Commands, theme: Res<Theme>) {
                             &theme,
                             ButtonProps {
                                 label: format!("{label} {hotkey}"),
-                                font_size: 13.0,
+                                font_size: 11.5,
                                 flat: true,
                                 auto_label_tint: false,
                                 ..default()
                             },
                         );
-                        tabs.commands()
-                            .entity(button)
-                            .insert(ScreenTabButton(screen));
+                        tabs.commands().entity(button).insert((
+                            ScreenTabButton(screen),
+                            // Tighter than the kit default so ten tabs fit.
+                            Node {
+                                height: Val::Px(30.0),
+                                padding: UiRect::horizontal(Val::Px(6.0)),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border_radius: BorderRadius::all(Val::Px(3.0)),
+                                flex_shrink: 0.0,
+                                ..default()
+                            },
+                        ));
                     }
                 });
 
@@ -170,12 +185,20 @@ pub fn end_turn_button(
 pub fn keyboard_commands(
     keys: Res<ButtonInput<KeyCode>>,
     focus: Res<InputFocus>,
+    screen: Res<State<Screen>>,
+    mut next_screen: ResMut<NextState<Screen>>,
     mut commands_out: MessageWriter<GameCommand>,
 ) {
     // A focused text input owns the keyboard. Esc is handled by the
     // cascading cancel in `game::selection::esc_cascade` (modals first).
     if focus.0.is_none() && keys.just_pressed(KeyCode::Space) {
-        commands_out.write(GameCommand::EndTurn);
+        // Web parity: Space on the newspaper dismisses it instead of ending
+        // another turn (the proposal modal then opens if proposals pend).
+        if *screen.get() == Screen::News {
+            next_screen.set(Screen::Map);
+        } else {
+            commands_out.write(GameCommand::EndTurn);
+        }
     }
 }
 
@@ -212,6 +235,9 @@ pub fn screen_hotkeys(
         (Screen::Trade, KeyCode::F5),
         (Screen::Tech, KeyCode::F6),
         (Screen::Ledger, KeyCode::F7),
+        (Screen::News, KeyCode::F8),
+        (Screen::Battles, KeyCode::F9),
+        (Screen::Legend, KeyCode::F10),
     ] {
         if keys.just_pressed(key) {
             next_screen.set(target);
@@ -281,7 +307,7 @@ pub fn update_mode_display(mode: Res<MapMode>, mut texts: Query<&mut Text, With<
         return;
     }
     for mut text in &mut texts {
-        **text = format!("{} map (M/Tab)", mode.label());
+        **text = format!("{} (M/Tab)", mode.label());
     }
 }
 

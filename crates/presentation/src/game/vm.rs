@@ -914,11 +914,264 @@ pub struct GpTechnologyVm {
     pub researched_names: Vec<String>,
 }
 
-/// One entry from `frontend_api::flavor::get_nation_flags`.
+/// One entry from `frontend_api::flavor::get_nation_flags` — the nation
+/// roster (identity card + flag SVG).
 #[derive(Debug, Clone, Deserialize)]
-pub struct NationFlagVm {
+#[allow(dead_code)]
+pub struct NationInfoVm {
     pub nation_id: u32,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub color: String,
+    /// `"GreatPower" | "MinorNation"`.
+    #[serde(default)]
+    pub nation_type: String,
+    #[serde(default)]
+    pub government_title: String,
+    #[serde(default)]
     pub flag_svg: String,
+}
+
+impl NationInfoVm {
+    pub fn is_great_power(&self) -> bool {
+        self.nation_type == "GreatPower"
+    }
+}
+
+// ── Newspaper (turn report + `frontend_api::newspaper`) ─────────────────
+
+/// One newspaper headline (turn report `headlines` / archive entries).
+#[derive(Debug, Clone, Deserialize)]
+pub struct HeadlineVm {
+    pub text: String,
+    /// Category name as emitted by the backend (`"War"`, `"Battle"`, …);
+    /// match case-insensitively against the lowercase color keys.
+    #[serde(default)]
+    pub category: String,
+    /// AI decision rationale (debug toggle).
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// AI declined-action headline, hidden unless the debug toggle is on.
+    #[serde(default)]
+    pub is_non_action: bool,
+    /// Nations involved (country filter).
+    #[serde(default)]
+    pub nation_ids: Vec<i64>,
+}
+
+/// One archived turn from `frontend_api::newspaper::get_newspaper_archive_since`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ArchivedNewspaperVm {
+    pub turn: u32,
+    pub year: i64,
+    pub quarter: u32,
+    pub headlines: Vec<HeadlineVm>,
+}
+
+// ── Battles (turn report + `frontend_api::battles::get_battle_data`) ────
+
+/// A surviving unit in a battle result.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BattleUnitVm {
+    pub unit_type: String,
+    pub health: u32,
+    pub medals: u32,
+    pub effective_firepower: f64,
+}
+
+/// Per-unit battle log (firepower debug toggle).
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct BattleUnitLogVm {
+    pub unit_type: String,
+    pub medals_initial: u32,
+    pub medals_final: u32,
+    pub initial_health: u32,
+    pub final_health: u32,
+    pub initial_firepower: f64,
+    pub final_firepower: f64,
+    #[serde(default)]
+    pub defender_breakdown: Option<DefenderBreakdownVm>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DefenderBreakdownVm {
+    pub applied_firepower: f64,
+    pub fort_multiplier: f64,
+    pub entrenchment_fp: f64,
+    pub initial_total_contribution: f64,
+}
+
+/// One round of the battle playout trace (round 0 = first-strike volley).
+#[derive(Debug, Clone, Deserialize)]
+pub struct BattleRoundLogVm {
+    pub round: u32,
+    #[serde(default)]
+    pub first_strike_side: Option<String>,
+    pub atk_fp: f64,
+    pub def_fp: f64,
+    pub atk_shots: u32,
+    pub def_shots: u32,
+    #[serde(default)]
+    pub atk_casualties: Vec<String>,
+    #[serde(default)]
+    pub def_casualties: Vec<String>,
+    /// `"attacker"` / `"defender"` when a mid-battle retreat fired.
+    #[serde(default)]
+    pub retreat_triggered: Option<String>,
+}
+
+/// Non-finite f64s (e.g. an infinite FP ratio against a zero-FP side)
+/// serialize to JSON `null`; decode those as NaN instead of failing.
+fn f64_or_nan<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<f64>::deserialize(deserializer)?.unwrap_or(f64::NAN))
+}
+
+/// Retreat-math debug block. The ratio fields divide by a side's FP and can
+/// be non-finite (→ JSON `null` → NaN here).
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct RetreatDebugVm {
+    pub side: String,
+    /// `"pre_battle" | "mid_battle" | "none"`.
+    pub stage: String,
+    #[serde(deserialize_with = "f64_or_nan")]
+    pub measured_value: f64,
+    #[serde(deserialize_with = "f64_or_nan")]
+    pub threshold: f64,
+    #[serde(deserialize_with = "f64_or_nan")]
+    pub attacker_prebattle_ratio: f64,
+    #[serde(deserialize_with = "f64_or_nan")]
+    pub defender_prebattle_ratio: f64,
+    #[serde(deserialize_with = "f64_or_nan")]
+    pub attacker_prebattle_threshold: f64,
+    #[serde(deserialize_with = "f64_or_nan")]
+    pub defender_prebattle_threshold: f64,
+    pub round: u32,
+}
+
+/// One land battle from the turn report / battle archive.
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct LandBattleVm {
+    pub attacker: String,
+    pub attacker_id: u32,
+    pub defender: String,
+    pub defender_id: u32,
+    pub province: String,
+    pub province_id: u64,
+    pub attacker_won: bool,
+    pub retreated: bool,
+    #[serde(default)]
+    pub defender_retreated: bool,
+    pub attacker_casualties: Vec<String>,
+    pub defender_casualties: Vec<String>,
+    pub attacker_survivors: Vec<BattleUnitVm>,
+    pub defender_survivors: Vec<BattleUnitVm>,
+    #[serde(default)]
+    pub terrain: Option<String>,
+    pub fort_level: u32,
+    #[serde(default)]
+    pub siege_reduced_fort: bool,
+    pub attacker_initial_count: u32,
+    pub defender_initial_count: u32,
+    pub attacker_initial_fp: f64,
+    pub defender_initial_fp: f64,
+    pub attacker_survivors_count: u32,
+    pub defender_survivors_count: u32,
+    pub medal_awards: Vec<MedalAwardVm>,
+    #[serde(default)]
+    pub capital_tile: Option<HexRef>,
+    #[serde(default)]
+    pub province_tiles: Vec<HexRef>,
+    #[serde(default)]
+    pub origin_tiles: Vec<HexRef>,
+    #[serde(default)]
+    pub origin_province_names: Vec<String>,
+    #[serde(default)]
+    pub is_naval_landing: bool,
+    #[serde(default)]
+    pub retreat_debug: Option<RetreatDebugVm>,
+    #[serde(default)]
+    pub attacker_unit_logs: Vec<BattleUnitLogVm>,
+    #[serde(default)]
+    pub defender_unit_logs: Vec<BattleUnitLogVm>,
+    #[serde(default)]
+    pub round_logs: Vec<BattleRoundLogVm>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MedalAwardVm {
+    pub unit_type: String,
+    pub medals: u32,
+}
+
+/// One naval battle from the turn report / battle archive.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NavalBattleVm {
+    pub attacker: String,
+    pub attacker_id: u32,
+    pub defender: String,
+    pub defender_id: u32,
+    pub attacker_won: bool,
+    pub attacker_ships_lost: Vec<String>,
+    pub defender_ships_lost: Vec<String>,
+    pub attacker_survivors_count: u32,
+    pub defender_survivors_count: u32,
+}
+
+/// One archived turn from `frontend_api::battles::get_battle_data`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ArchivedBattleTurnVm {
+    pub turn: u32,
+    pub year: i64,
+    pub quarter: u32,
+    pub battles: Vec<LandBattleVm>,
+    pub naval_battles: Vec<NavalBattleVm>,
+}
+
+// ── Political snapshot (`frontend_api::map::get_political_snapshot`) ────
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct PoliticalSnapshotVm {
+    pub turn: u32,
+    pub year: i64,
+    pub quarter: u32,
+    pub map_width: i32,
+    pub map_height: i32,
+    pub tiles: Vec<SnapshotTileVm>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct SnapshotTileVm {
+    pub q: i32,
+    pub r: i32,
+    pub terrain: String,
+    pub owner: String,
+    pub owner_color: String,
+    pub province: String,
+    pub is_capital: bool,
+    pub is_country_capital: bool,
+    pub is_minor: bool,
+    pub is_incorporated_minor: bool,
+    #[serde(default)]
+    pub visual_group: Option<String>,
+}
+
+impl SnapshotTileVm {
+    /// Border group: incorporated minors keep their own country border.
+    pub fn visual_group_or_owner(&self) -> &str {
+        match self.visual_group.as_deref() {
+            Some(vg) if !vg.is_empty() => vg,
+            _ => &self.owner,
+        }
+    }
 }
 
 pub fn parse_map_tiles(value: serde_json::Value) -> Result<Vec<MapTile>, serde_json::Error> {
@@ -1007,8 +1260,42 @@ pub fn parse_gp_ledger(
     serde_json::from_value(value)
 }
 
-pub fn parse_nation_flags(
+pub fn parse_nation_roster(
     value: serde_json::Value,
-) -> Result<Vec<NationFlagVm>, serde_json::Error> {
+) -> Result<Vec<NationInfoVm>, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
+pub fn parse_headlines(value: serde_json::Value) -> Result<Vec<HeadlineVm>, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
+pub fn parse_newspaper_archive(
+    value: serde_json::Value,
+) -> Result<Vec<ArchivedNewspaperVm>, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
+pub fn parse_land_battles(
+    value: serde_json::Value,
+) -> Result<Vec<LandBattleVm>, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
+pub fn parse_naval_battles(
+    value: serde_json::Value,
+) -> Result<Vec<NavalBattleVm>, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
+pub fn parse_battle_archive(
+    value: serde_json::Value,
+) -> Result<Vec<ArchivedBattleTurnVm>, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
+pub fn parse_political_snapshot(
+    value: serde_json::Value,
+) -> Result<PoliticalSnapshotVm, serde_json::Error> {
     serde_json::from_value(value)
 }

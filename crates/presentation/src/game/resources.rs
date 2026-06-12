@@ -5,9 +5,10 @@ use frontend_api::Session;
 use std::collections::{HashMap, HashSet};
 
 use crate::game::vm::{
-    BuildableUnitsVm, CiviliansVm, DiplomacyOverlay, DiplomacyScreenVm, GpLedgerEntryVm,
-    IndustryVm, MapTile, MilitaryOverlayEntry, NavyMarker, PendingMoveVm, ProposalsVm,
-    ProvinceUnitsVm, SeaZone, ShipsVm, TechScreenVm, TradeVm, TransportVm,
+    ArchivedNewspaperVm, BuildableUnitsVm, CiviliansVm, DiplomacyOverlay, DiplomacyScreenVm,
+    GpLedgerEntryVm, HeadlineVm, IndustryVm, LandBattleVm, MapTile, MilitaryOverlayEntry,
+    NationInfoVm, NavalBattleVm, NavyMarker, PendingMoveVm, ProposalsVm, ProvinceUnitsVm, SeaZone,
+    ShipsVm, TechScreenVm, TradeVm, TransportVm,
 };
 
 /// The game session. `None` only while a turn is resolving on the async
@@ -40,6 +41,8 @@ pub struct ViewModels {
     pub proposals: Option<ProposalsVm>,
     pub tech: Option<TechScreenVm>,
     pub ledger: Vec<GpLedgerEntryVm>,
+    /// Nation roster (name, color, type, government title, flag SVG).
+    pub nations: Vec<NationInfoVm>,
     pub version: u64,
     /// Whether the map VM was fetched with fog disabled; refetched when the
     /// debug toggle flips.
@@ -321,3 +324,53 @@ pub struct TreatyMarkerHit {
 /// closes it.
 #[derive(Resource, Default)]
 pub struct ProposalPrompt(pub Option<ProposalsVm>);
+
+// ── M9: Newspaper / Battles / Legend ─────────────────────────────────────
+
+/// Proposals fetched during end turn but held back until the newspaper
+/// interstitial is dismissed (web order: turn → newspaper → proposal modal).
+#[derive(Resource, Default)]
+pub struct DeferredProposals(pub Option<ProposalsVm>);
+
+/// The freshest turn report's newspaper + battle content (web `headlines` /
+/// `currentBattles` / `currentNavalBattles`). Empty until the first end turn.
+#[derive(Resource, Default)]
+pub struct CurrentTurnNews {
+    /// Whether at least one turn has resolved.
+    pub has_report: bool,
+    /// Current (new) turn number / calendar — the masthead date (web shows
+    /// the post-turn date over the resolved turn's headlines).
+    pub turn_number: u32,
+    pub year: i64,
+    pub quarter: u32,
+    pub headlines: Vec<HeadlineVm>,
+    pub battles: Vec<LandBattleVm>,
+    pub naval_battles: Vec<NavalBattleVm>,
+}
+
+/// Lazily loaded newspaper archive, fetched incrementally via
+/// `get_newspaper_archive_since(after_turn = loaded_through)` whenever the
+/// Archive tab opens (ports the web's incremental cache idea).
+#[derive(Resource, Default)]
+pub struct NewsArchive {
+    pub entries: Vec<ArchivedNewspaperVm>,
+    /// Highest archived turn already loaded.
+    pub loaded_through: u32,
+    /// At least one (possibly empty) load completed.
+    pub loaded: bool,
+}
+
+/// Debug toggles for the newspaper / battle screens, mirroring the web side
+/// panel's debug section. Kept out of [`RenderSettings`] so flipping them
+/// never rebuilds map layers.
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NewsDebugSettings {
+    /// Show AI decision rationale under headlines.
+    pub show_ai_reasoning: bool,
+    /// Show AI declined-action headlines.
+    pub show_ai_non_actions: bool,
+    /// Battle screen: retreat math block.
+    pub show_retreat_debug: bool,
+    /// Battle screen: firepower walkthrough + round playout.
+    pub show_battle_firepower: bool,
+}

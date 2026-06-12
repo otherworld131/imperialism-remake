@@ -10,10 +10,11 @@ pub enum TurnPhase {
     Processing,
 }
 
-/// Active game screen (web `ScreenTab` parity). `Industry`, `Trade`, `Tech`
-/// and `Ledger` are full-screen overlays drawn over the live map world;
-/// `Transport` and `Diplomacy` keep the map visible (Diplomacy zoom-locks it
-/// and forces the diplomatic overlay). Extensible for the M9 screens.
+/// Active game screen (web `ScreenTab` parity). `Industry`, `Trade`, `Tech`,
+/// `Ledger`, `News`, `Battles` and `Legend` are full-screen overlays drawn
+/// over the live map world; `Transport` and `Diplomacy` keep the map visible
+/// (Diplomacy zoom-locks it and forces the diplomatic overlay). `News` also
+/// auto-opens after every end turn (the newspaper interstitial).
 #[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Screen {
     #[default]
@@ -24,6 +25,9 @@ pub enum Screen {
     Trade,
     Tech,
     Ledger,
+    News,
+    Battles,
+    Legend,
 }
 
 impl Screen {
@@ -31,7 +35,13 @@ impl Screen {
     pub fn is_full_screen(self) -> bool {
         matches!(
             self,
-            Screen::Industry | Screen::Trade | Screen::Tech | Screen::Ledger
+            Screen::Industry
+                | Screen::Trade
+                | Screen::Tech
+                | Screen::Ledger
+                | Screen::News
+                | Screen::Battles
+                | Screen::Legend
         )
     }
 }

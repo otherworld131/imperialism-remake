@@ -246,6 +246,16 @@ pub fn refresh_view_models(
     prev_ledger.fetched_turn = Some(turn_info.label.clone());
     vms.ledger = ledger;
 
+    // Nation roster (names, colors, types, government titles, flag SVGs)
+    // for the newspaper country filter and the legend screen.
+    vms.nations = match vm::parse_nation_roster(frontend_api::flavor::get_nation_flags(game)) {
+        Ok(nations) => nations,
+        Err(err) => {
+            warn!("nation-roster decode failed: {err}");
+            Vec::new()
+        }
+    };
+
     let pending = match frontend_api::units::get_pending_unit_moves(game, perspective.0)
         .map(vm::parse_pending_moves)
     {

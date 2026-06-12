@@ -134,7 +134,7 @@ pub fn ensure_flags(
         return;
     };
     let flags = frontend_api::flavor::get_nation_flags(session.game());
-    let Ok(flags) = vm::parse_nation_flags(flags) else {
+    let Ok(flags) = vm::parse_nation_roster(flags) else {
         warn!("nation-flags decode failed");
         return;
     };

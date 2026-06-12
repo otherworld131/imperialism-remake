@@ -6,8 +6,9 @@ use frontend_api::Session;
 use crate::game::commands::{self, GameCommand};
 use crate::game::refresh;
 use crate::game::resources::{
-    Blink, DataVersion, DeployMode, DiploUi, EngineerPrompt, FleetTargets, GameMeta, MoveTargets,
-    PendingMoveList, PendingMoves, PerspectiveNation, PrevLedger, ProposalPrompt, ProvinceUnits,
+    Blink, CurrentTurnNews, DataVersion, DeferredProposals, DeployMode, DiploUi, EngineerPrompt,
+    FleetTargets, GameMeta, MoveTargets, NewsArchive, NewsDebugSettings, PendingMoveList,
+    PendingMoves, PerspectiveNation, PrevLedger, ProposalPrompt, ProvinceUnits,
     QueuedDiplomacyAction, RenderSettings, SelectedCivilian, SelectedNavy, SelectedShips,
     SelectedUnits, SessionRes, TileIndex, TreatyMarkerIndex, TurnInfo, ViewModels, tick_blink,
 };
@@ -21,8 +22,8 @@ use crate::map::markers;
 use crate::map::picking::{self, HoverTarget, HoveredHex, MapClick, SelectedHex};
 use crate::map::tooltip::{self, MapTooltipState};
 use crate::screens::{
-    diplomacy, gallery, industry, ledger, map_hud, panels, proposals, side_panel, tech, trade,
-    transport,
+    battles, diplomacy, gallery, industry, ledger, legend, map_hud, news, panels, proposals,
+    side_panel, tech, trade, transport,
 };
 use crate::state::{Screen, TurnPhase, map_interactive};
 use crate::widgets::{self, ButtonActivated, TabGroup, WidgetsPlugin};
@@ -71,12 +72,18 @@ fn debug_screenshot(
             ortho.scale = zoom;
         }
     }
-    if *frames == 150 {
+    // Long-running drivers (e.g. the M9 battle hunt) override the capture
+    // frame via MAP_SCREENSHOT_FRAME.
+    let capture_frame: u32 = std::env::var("MAP_SCREENSHOT_FRAME")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(150);
+    if *frames == capture_frame {
         commands
             .spawn(Screenshot::primary_window())
             .observe(save_to_disk(path));
     }
-    if *frames == 220 {
+    if *frames == capture_frame + 70 {
         exit.write(AppExit::Success);
     }
 }
@@ -422,6 +429,144 @@ fn m8_debug_driver(
     }
 }
 
+/// Debug driver for the M9 screens: `M9_DEBUG=<script>` ends turns and
+/// switches screens so `MAP_SCREENSHOT` captures live state. Scripts:
+/// `news` (end turn → newspaper interstitial), `newsproposal` (end turn →
+/// newspaper → dismiss → proposal modal), `newsarchive` (two turns →
+/// Archive tab → turn selected → Show Map modal), `battles` /
+/// `battlesdebug` (fast-forwards turns until the battle archive has
+/// entries, then opens the battle screen's Archive tab), `legend` /
+/// `legendflags` (scrolled to the nation flags).
+fn m9_debug_driver(
+    mut frames: Local<u32>,
+    phase: Res<State<TurnPhase>>,
+    mut session: ResMut<SessionRes>,
+    mut data_version: ResMut<DataVersion>,
+    mut turn_info: ResMut<TurnInfo>,
+    mut next_screen: ResMut<NextState<Screen>>,
+    mut game_commands: MessageWriter<GameCommand>,
+    mut activations: MessageWriter<ButtonActivated>,
+    mut news_debug: ResMut<NewsDebugSettings>,
+    news_tabs: Query<(Entity, &news::NewsModeTab)>,
+    news_turns: Query<(Entity, &news::NewsArchiveTurnButton)>,
+    show_map: Query<Entity, With<news::NewsShowMapButton>>,
+    battle_tabs: Query<(Entity, &battles::BattlesModeTab)>,
+    mut scroll_areas: Query<&mut bevy::ui::ScrollPosition, With<widgets::UiScrollArea>>,
+    mut deferred: ResMut<DeferredProposals>,
+) {
+    let Ok(script) = std::env::var("M9_DEBUG") else {
+        return;
+    };
+    if *phase.get() != TurnPhase::Idle {
+        return;
+    }
+    *frames += 1;
+
+    match script.as_str() {
+        "news" => {
+            if *frames == 20 {
+                game_commands.write(GameCommand::EndTurn);
+            }
+        }
+        // End-turn flow order proof: turn resolves → newspaper opens; a
+        // (synthetic) proposal batch is parked behind it; dismissing the
+        // paper returns to the map and the proposal modal opens.
+        "newsproposal" => {
+            if *frames == 20 {
+                game_commands.write(GameCommand::EndTurn);
+            }
+            if *frames == 60 {
+                deferred.0 = serde_json::from_value(serde_json::json!({
+                    "proposals": [{
+                        "index": 0,
+                        "from_nation_id": 1,
+                        "from_nation_name": "Shenia",
+                        "from_nation_color": "Orange",
+                        "proposal_type": "NonAggressionPact",
+                        "display_text": "Shenia proposes a Non-Aggression Pact",
+                        "turn_proposed": 1,
+                        "turns_until_expiry": 3,
+                    }]
+                }))
+                .ok();
+            }
+            if *frames == 90 {
+                // Dismiss the newspaper (Space/Esc equivalent).
+                next_screen.set(Screen::Map);
+            }
+        }
+        "newsarchive" => {
+            // Two turns of history, then Archive tab → newest turn →
+            // political-map modal.
+            if *frames == 20 || *frames == 40 {
+                game_commands.write(GameCommand::EndTurn);
+            }
+            if *frames == 80
+                && let Some((tab, _)) = news_tabs.iter().find(|(_, tab)| tab.0)
+            {
+                activations.write(ButtonActivated(tab));
+            }
+            if *frames == 100
+                && let Some((button, _)) = news_turns.iter().max_by_key(|(_, turn)| turn.0)
+            {
+                activations.write(ButtonActivated(button));
+            }
+            if *frames == 120
+                && let Some(button) = show_map.iter().next()
+            {
+                activations.write(ButtonActivated(button));
+            }
+        }
+        "battles" | "battlesdebug" => {
+            if *frames == 1 && script == "battlesdebug" {
+                news_debug.show_battle_firepower = true;
+                news_debug.show_retreat_debug = true;
+            }
+            // Fast-forward turns synchronously (blocking is fine for a
+            // capture run) until the battle archive has entries — battles
+            // appear within ~10–30 turns once AIs go to war — then open
+            // the battle screen and (later) its Archive tab.
+            if *frames == 10 {
+                if let Some(session) = session.0.as_mut() {
+                    let mut turns = 0;
+                    loop {
+                        let _ = frontend_api::turn::process_turns(session.game_mut(), 10);
+                        turns += 10;
+                        let has_battles = frontend_api::battles::get_battle_data(session.game())
+                            .ok()
+                            .and_then(|v| v.as_array().map(|a| !a.is_empty()))
+                            .unwrap_or(false);
+                        if has_battles || turns >= 150 {
+                            break;
+                        }
+                    }
+                    let turn = session.game().turn;
+                    turn_info.label = format!("{turn}");
+                    turn_info.year = turn.year();
+                    data_version.0 += 1;
+                }
+                next_screen.set(Screen::Battles);
+            }
+            if *frames == 60
+                && let Some((tab, _)) = battle_tabs.iter().find(|(_, tab)| tab.0)
+            {
+                activations.write(ButtonActivated(tab));
+            }
+        }
+        "legend" | "legendflags" => {
+            if *frames == 20 {
+                next_screen.set(Screen::Legend);
+            }
+            if script == "legendflags" && *frames == 60 {
+                for mut position in &mut scroll_areas {
+                    position.y = 100_000.0;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Run the Bevy game. By default this is an observer game (every Great
 /// Power AI-driven); `HUMAN_GAME=1` starts a normal game with the human in
 /// seat 0 so the unit/civilian/naval flows are live. Nation choice and
@@ -476,6 +621,13 @@ pub fn run_game() {
         .init_resource::<ledger::LedgerUi>()
         .init_resource::<ledger::FlagCache>()
         .init_resource::<proposals::ProposalModalState>()
+        .init_resource::<CurrentTurnNews>()
+        .init_resource::<NewsArchive>()
+        .init_resource::<DeferredProposals>()
+        .init_resource::<NewsDebugSettings>()
+        .init_resource::<news::NewsUi>()
+        .init_resource::<battles::BattlesUi>()
+        .init_resource::<battles::BattleArchive>()
         .insert_resource(SessionRes(Some(session)))
         .insert_resource(DataVersion(1))
         .insert_resource(meta)
@@ -541,6 +693,7 @@ pub fn run_game() {
                 m6_debug_driver,
                 m7_debug_driver,
                 m8_debug_driver,
+                m9_debug_driver,
                 turn_runner::poll_turn_task.run_if(in_state(TurnPhase::Processing)),
             ),
         )
@@ -580,26 +733,39 @@ pub fn run_game() {
                 )
                     .chain(),
                 (
-                    map_hud::end_turn_button,
-                    map_hud::keyboard_commands,
-                    panels::handle_unit_checkboxes,
-                    panels::handle_panel_buttons,
-                    selection::handle_engineer_choice,
+                    (
+                        map_hud::end_turn_button,
+                        map_hud::keyboard_commands,
+                        panels::handle_unit_checkboxes,
+                        panels::handle_panel_buttons,
+                        selection::handle_engineer_choice,
+                    ),
                     // M7 screen affordances → GameCommand.
-                    industry::handle_industry_sliders,
-                    industry::handle_industry_buttons,
-                    industry::handle_show_targets,
-                    transport::handle_transport_buttons,
-                    trade::handle_trade_buttons,
-                    trade::handle_trade_sliders,
-                    trade::handle_trade_filters,
-                    trade::handle_hist_split,
+                    (
+                        industry::handle_industry_sliders,
+                        industry::handle_industry_buttons,
+                        industry::handle_show_targets,
+                        transport::handle_transport_buttons,
+                        trade::handle_trade_buttons,
+                        trade::handle_trade_sliders,
+                        trade::handle_trade_filters,
+                        trade::handle_hist_split,
+                    ),
                     // M8 screen affordances → GameCommand / UI state.
-                    diplomacy::handle_diplo_buttons,
-                    tech::handle_tech_buttons,
-                    ledger::handle_ledger_buttons,
-                    ledger::handle_ledger_row_clicks,
-                    proposals::handle_proposal_buttons,
+                    (
+                        diplomacy::handle_diplo_buttons,
+                        tech::handle_tech_buttons,
+                        ledger::handle_ledger_buttons,
+                        ledger::handle_ledger_row_clicks,
+                        proposals::handle_proposal_buttons,
+                    ),
+                    // M9 screen affordances.
+                    (
+                        news::handle_news_buttons,
+                        news::handle_news_filters,
+                        battles::handle_battles_buttons,
+                        legend::handle_legend_buttons,
+                    ),
                     commands::apply_command,
                 )
                     .chain(),
@@ -621,6 +787,11 @@ pub fn run_game() {
                 tech::update_tech,
                 ledger::update_ledger,
                 proposals::sync_proposal_modal,
+                // M9 screen rebuilds.
+                (news::update_news_chrome, news::update_news_content),
+                (battles::ensure_battle_archive, battles::update_battles)
+                    .chain()
+                    .run_if(in_state(Screen::Battles)),
             ),
         )
         .add_systems(
@@ -655,6 +826,31 @@ pub fn run_game() {
                 .chain(),
         )
         .add_systems(OnExit(Screen::Ledger), ledger::exit_ledger)
+        .add_systems(
+            OnEnter(Screen::News),
+            (news::enter_news, tooltip::hide_map_tooltip),
+        )
+        .add_systems(OnExit(Screen::News), news::exit_news)
+        .add_systems(
+            OnEnter(Screen::Battles),
+            (
+                ledger::ensure_flags,
+                battles::enter_battles,
+                tooltip::hide_map_tooltip,
+            )
+                .chain(),
+        )
+        .add_systems(OnExit(Screen::Battles), battles::exit_battles)
+        .add_systems(
+            OnEnter(Screen::Legend),
+            (
+                ledger::ensure_flags,
+                legend::enter_legend,
+                tooltip::hide_map_tooltip,
+            )
+                .chain(),
+        )
+        .add_systems(OnExit(Screen::Legend), legend::exit_legend)
         .add_systems(
             Update,
             (
