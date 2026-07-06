@@ -16,7 +16,7 @@ import sprites4
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
 ALL = dict(sprites.BATCH1)
-for batch in (sprites2.BATCH2, sprites3.BATCH3, sprites4.BATCH4):
+for batch in (sprites.WORK_FRAMES, sprites2.BATCH2, sprites3.BATCH3, sprites4.BATCH4):
     ALL.update(dict(batch))
 
 for name, fn in sorted(ALL.items()):

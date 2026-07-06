@@ -49,6 +49,15 @@ pub struct WorkingCivilianAnim {
     phase: f32,
 }
 
+/// Two-frame pixel animation on a working civilian's icon: the sprite flips
+/// between the rest pose and the `<Type>Work` action pose while on the job.
+#[derive(Component)]
+pub struct WorkFrameAnim {
+    rest: Handle<Image>,
+    work: Handle<Image>,
+    phase: f32,
+}
+
 #[derive(Component)]
 pub struct PendingMoveAnim {
     phase: f32,
@@ -474,15 +483,25 @@ pub fn rebuild_marker_layers(
                     ));
                 }
                 if let Some(image) = icons.get("civilians", &civ.civ_type) {
-                    spawn_sprite(
+                    let sprite = spawn_sprite(
                         &mut commands,
                         marker,
-                        image,
+                        image.clone(),
                         Vec2::ZERO,
                         0.0,
                         civ_size,
                         Color::WHITE,
                     );
+                    if civ.working
+                        && civ.turns_remaining > 0
+                        && let Some(work) = icons.get("civilians", &format!("{}Work", civ.civ_type))
+                    {
+                        commands.entity(sprite).insert(WorkFrameAnim {
+                            rest: image,
+                            work,
+                            phase: (tile.q * 31 + tile.r * 13).rem_euclid(11) as f32 * 0.09,
+                        });
+                    }
                 }
                 if civ.working && civ.turns_remaining > 0 {
                     // Engineer build tasks show the target infrastructure
@@ -773,6 +792,7 @@ pub fn animate_map_markers(
             &mut MeshMaterial2d<ColorMaterial>,
         )>,
         Query<(&PendingMoveAnim, &mut Transform)>,
+        Query<(&WorkFrameAnim, &mut Sprite)>,
     )>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
@@ -791,6 +811,14 @@ pub fn animate_map_markers(
         let pos = anim.from.lerp(anim.to, eased);
         transform.translation.x = pos.x;
         transform.translation.y = pos.y;
+    }
+    // Working civilians: flip between rest and action poses (~0.4s a frame).
+    for (anim, mut sprite) in &mut sets.p2() {
+        let t = (now * 1.25 + anim.phase).fract();
+        let target = if t < 0.5 { &anim.rest } else { &anim.work };
+        if sprite.image != *target {
+            sprite.image = target.clone();
+        }
     }
 }
 

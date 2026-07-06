@@ -31,13 +31,17 @@ def _worker_base(c, hat, shirt="navy", arm="navy_lt", bib="wood", bib_lt="wood_l
     hat(c)
 
 
-def farmer():
-    c = Canvas()
+def _farmer_body(c):
     def hat(c):
         c.rect(11, 3, 15, 5, "straw")
         c.rect(7, 6, 19, 7, "straw"); c.hline(8, 18, 6, "straw_lt")
         c.hline(11, 15, 5, "wood_sh")  # band
     _worker_base(c, hat, shirt="moss", arm="moss_lt")
+
+
+def farmer():
+    c = Canvas()
+    _farmer_body(c)
     # pitchfork right of figure: steel tines + wood handle held by right hand
     c.vline(23, 9, 29, "wood"); c.px(23, 9, "wood_lt")
     c.vline(21, 4, 8, "steel"); c.vline(23, 3, 8, "steel"); c.vline(25, 4, 8, "steel")
@@ -47,13 +51,31 @@ def farmer():
     return c
 
 
-def miner():
+def farmer_work():
+    """Work frame: pitchfork thrust down into the ground, hay flying."""
     c = Canvas()
+    _farmer_body(c)
+    thick_diag(c, 19, 12, 25, 20, "wood")           # handle angled down
+    c.hline(24, 30, 21, "steel_dk")                 # crossbar
+    c.vline(24, 22, 27, "steel"); c.vline(27, 22, 27, "steel")
+    c.vline(30, 22, 27, "steel")
+    c.px(22, 29, "gold_lt"); c.px(28, 29, "gold_lt"); c.px(31, 28, "straw_lt")  # hay
+    c.rect(19, 13, 21, 15, "skin")                  # hand high on the handle
+    c.outline_silhouette()
+    return c
+
+
+def _miner_body(c):
     def hat(c):
         c.rect(9, 5, 17, 7, "gold"); c.hline(10, 16, 4, "gold")
         c.rect(12, 5, 14, 6, "gold_lt")  # lamp
         c.px(13, 5, "snow")
     _worker_base(c, hat, shirt="red", arm="red_lt", bib="coal", bib_lt="coal_lt", legs="coal")
+
+
+def miner():
+    c = Canvas()
+    _miner_body(c)
     # pickaxe: vertical-ish handle at right, curved steel pick head on top
     thick_diag(c, 23, 22, 25, 8, "wood")
     c.px(24, 8, "wood_lt")
@@ -66,13 +88,31 @@ def miner():
     return c
 
 
-def engineer():
+def miner_work():
+    """Work frame: pick swung down into the rock, spark at the impact."""
     c = Canvas()
+    _miner_body(c)
+    thick_diag(c, 19, 12, 26, 21, "wood")
+    # pick head curving into the ground
+    c.px(25, 20, "steel"); c.px(27, 22, "steel"); c.px(28, 23, "steel")
+    c.px(29, 25, "steel"); c.px(30, 27, "steel_dk"); c.px(24, 19, "steel_dk")
+    c.px(31, 28, "gold_lt"); c.px(29, 29, "gold_lt")  # sparks
+    c.rect(19, 13, 21, 15, "skin")
+    c.outline_silhouette()
+    return c
+
+
+def _engineer_body(c):
     def hat(c):
         c.rect(9, 5, 17, 7, "navy_lt"); c.rect(11, 3, 15, 4, "navy_lt")
         c.hline(11, 15, 3, "navy"); c.hline(8, 18, 7, "navy")
     _worker_base(c, hat, shirt="parch_sh", arm="parch", bib="navy", bib_lt="navy_lt",
                  legs="navy_dk")
+
+
+def engineer():
+    c = Canvas()
+    _engineer_body(c)
     # big wrench held upright in right hand: shaft + open jaw at top
     thick_diag(c, 24, 21, 24, 9, "steel", 2)
     c.vline(24, 9, 21, "steel_lt")
@@ -82,6 +122,23 @@ def engineer():
     c.rect(22, 5, 23, 8, "steel")
     c.px(22, 4, "steel_lt"); c.px(22, 5, "steel_lt")
     c.rect(20, 19, 23, 21, "skin")  # hand gripping shaft
+    c.outline_silhouette()
+    return c
+
+
+def engineer_work():
+    """Work frame: wrench swung overhead, clink sparks."""
+    c = Canvas()
+    _engineer_body(c)
+    thick_diag(c, 21, 17, 26, 10, "steel")
+    c.px(22, 16, "steel_lt")
+    # jaw at the top of the swing
+    c.rect(25, 4, 30, 5, "steel")
+    c.rect(25, 8, 30, 9, "steel")
+    c.rect(25, 5, 26, 8, "steel")
+    c.px(25, 4, "steel_lt")
+    c.px(31, 2, "gold_lt"); c.px(29, 1, "gold_lt")  # clink sparks
+    c.rect(20, 17, 22, 19, "skin")
     c.outline_silhouette()
     return c
 
@@ -325,8 +382,7 @@ def handshake():
     return c
 
 
-def rancher():
-    c = Canvas()
+def _rancher_body(c):
     def hat(c):
         c.rect(10, 3, 16, 5, "sand"); c.px(13, 3, "sand_sh")  # dented crown
         c.rect(6, 6, 20, 7, "sand"); c.hline(7, 19, 6, "sand_sh")
@@ -334,6 +390,11 @@ def rancher():
     _worker_base(c, hat, shirt="denim", arm="denim_lt", bib=None, legs="wood")
     # red bandana at the neck
     c.rect(11, 14, 15, 15, "red"); c.px(13, 16, "red_dk")
+
+
+def rancher():
+    c = Canvas()
+    _rancher_body(c)
     # coiled lasso hanging from the right hand
     for dx, dy in ((0, -3), (0, 3), (-3, 0), (3, 0), (-2, -2), (2, -2), (-2, 2), (2, 2)):
         c.px(24 + dx, 23 + dy, "straw")
@@ -343,13 +404,33 @@ def rancher():
     return c
 
 
-def forester():
+def rancher_work():
+    """Work frame: lasso loop spinning overhead."""
     c = Canvas()
+    _rancher_body(c)
+    # spinning loop above and right of the hat
+    for dx, dy in ((0, -4), (0, 4), (-4, 0), (4, 0), (-3, -3), (3, -3), (-3, 3), (3, 3),
+                   (-4, -1), (4, 1), (-1, -4), (1, 4)):
+        c.px(24 + dx, 5 + dy, "straw")
+    c.px(27, 3, "straw_lt"); c.px(21, 8, "straw_lt")
+    # rope down to a raised hand
+    c.line(23, 10, 21, 14, "straw")
+    c.rect(19, 14, 21, 16, "skin")
+    c.outline_silhouette()
+    return c
+
+
+def _forester_body(c):
     def hat(c):
         c.rect(9, 5, 17, 7, "pine"); c.rect(10, 4, 16, 4, "pine")
         c.hline(9, 12, 7, "pine_lt")
         c.hline(17, 20, 7, "pine_dk")  # small peak
     _worker_base(c, hat, shirt="wood", arm="wood_lt", bib="pine", bib_lt="pine_lt")
+
+
+def forester():
+    c = Canvas()
+    _forester_body(c)
     # axe shouldered on the right: handle diagonal, steel head up top
     thick_diag(c, 20, 22, 26, 8, "wood_lt")
     c.rect(24, 4, 28, 7, "steel")
@@ -360,37 +441,94 @@ def forester():
     return c
 
 
-def driller():
+def forester_work():
+    """Work frame: axe swung down into the log, chips flying."""
     c = Canvas()
+    _forester_body(c)
+    thick_diag(c, 19, 13, 26, 21, "wood_lt")
+    # axe head biting low, edge down-right
+    c.rect(26, 22, 30, 25, "steel")
+    c.hline(27, 31, 26, "steel_lt")
+    c.px(26, 22, "steel_dk"); c.px(26, 25, "steel_dk")
+    c.px(31, 28, "wood_lt"); c.px(29, 29, "wood_lt"); c.px(24, 28, "wood")  # chips
+    c.rect(19, 14, 21, 16, "skin")
+    c.outline_silhouette()
+    return c
+
+
+def _driller_body(c):
     def hat(c):
         c.rect(9, 5, 17, 7, "orange"); c.rect(11, 3, 15, 4, "orange")
         c.hline(11, 15, 3, "orange_lt"); c.hline(8, 18, 7, "orange_lt")
     _worker_base(c, hat, shirt="denim", arm="denim_lt", bib="coal", bib_lt="coal_lt",
                  legs="coal")
+
+
+def _derrick(c):
     # mini oil derrick at his right: tapering truss tower
     c.line(22, 28, 25, 6, "wood_sh"); c.line(30, 28, 27, 6, "wood_sh")
     c.hline(25, 27, 5, "wood_sh")
     for y in (11, 16, 21, 26):  # crossbars
         w = (y - 5) // 4
         c.hline(26 - w, 26 + w, y, "wood")
+
+
+def driller():
+    c = Canvas()
+    _driller_body(c)
+    _derrick(c)
     c.px(26, 4, "gold")  # crown light
     c.outline_silhouette()
     return c
 
 
-def prospector():
+def driller_work():
+    """Work frame: the derrick strikes oil — gusher over the crown."""
     c = Canvas()
+    _driller_body(c)
+    _derrick(c)
+    # gusher spurting above the crown
+    c.vline(26, 1, 4, "coal"); c.px(26, 0, "coal_lt")
+    c.px(24, 2, "coal_lt"); c.px(28, 1, "coal_lt"); c.px(29, 3, "coal")
+    # arm raised toward the rig
+    c.line(20, 16, 22, 14, "denim_lt"); c.px(22, 13, "skin")
+    c.outline_silhouette()
+    return c
+
+
+def _prospector_body(c):
     def hat(c):
         c.rect(10, 3, 16, 5, "wood_sh")
         c.rect(6, 6, 20, 7, "wood_sh"); c.hline(7, 19, 6, "wood")
     _worker_base(c, hat, shirt="parch_sh", arm="parch", bib="wood_sh", bib_lt="wood",
                  legs="grey_dk")
+
+
+def prospector():
+    c = Canvas()
+    _prospector_body(c)
     # gold pan held out at the right, nuggets inside
     c.rect(21, 18, 29, 19, "steel_dk")
     c.rect(22, 16, 28, 17, "steel")
     c.hline(23, 27, 16, "steel_lt")
     c.px(24, 16, "gold"); c.px(26, 16, "gold_lt"); c.px(25, 15, "gold")
     c.line(20, 21, 22, 19, "skin")  # arm up to pan
+    c.outline_silhouette()
+    return c
+
+
+def prospector_work():
+    """Work frame: pan tilted, water sloshing out, gold staying in."""
+    c = Canvas()
+    _prospector_body(c)
+    # tilted pan (high on the left, pouring right)
+    c.line(21, 16, 29, 20, "steel_dk"); c.line(21, 17, 29, 21, "steel_dk")
+    c.line(22, 15, 28, 18, "steel")
+    c.px(22, 14, "steel_lt"); c.px(23, 15, "steel_lt")
+    # gold nuggets held at the high side, water spilling off the low side
+    c.px(23, 14, "gold"); c.px(24, 14, "gold_lt")
+    c.px(30, 22, "denim_lt"); c.px(31, 24, "denim_lt"); c.px(29, 25, "denim_lt")
+    c.line(20, 20, 21, 18, "skin")
     c.outline_silhouette()
     return c
 
@@ -495,4 +633,14 @@ BATCH1 = [
     ("terrain/Tundra", tundra),
     ("terrain/Grassland", grassland),
     ("ui/Tent", tent),
+]
+
+WORK_FRAMES = [
+    ("civilians/FarmerWork", farmer_work),
+    ("civilians/MinerWork", miner_work),
+    ("civilians/EngineerWork", engineer_work),
+    ("civilians/RancherWork", rancher_work),
+    ("civilians/ForesterWork", forester_work),
+    ("civilians/DrillerWork", driller_work),
+    ("civilians/ProspectorWork", prospector_work),
 ]

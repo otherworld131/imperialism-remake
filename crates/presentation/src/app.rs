@@ -31,9 +31,10 @@ use crate::widgets::{self, ButtonActivated, TabGroup, WidgetsPlugin};
 
 /// Debug hook: when `MAP_SCREENSHOT=<path>` is set, capture the primary
 /// window after the map settles, then exit. `MAP_DEBUG_MODE` (a map-mode
-/// label) and `MAP_DEBUG_ZOOM` (orthographic scale) tweak the captured view.
-/// Frames only count while idle so async turn resolution never races the
-/// capture.
+/// label) and `MAP_DEBUG_ZOOM` (orthographic scale) tweak the captured view;
+/// `MAP_DEBUG_SKIP=<n>` fast-forwards n turns (no newspaper interstitials)
+/// before the capture. Frames only count while idle so async turn
+/// resolution never races the capture.
 fn debug_screenshot(
     mut commands: Commands,
     mut frames: Local<u32>,
@@ -41,6 +42,9 @@ fn debug_screenshot(
     mut settings: ResMut<RenderSettings>,
     phase: Res<State<TurnPhase>>,
     mut camera: Query<&mut Projection, With<camera::GameCamera>>,
+    mut game_commands: MessageWriter<GameCommand>,
+    screen: Res<State<Screen>>,
+    mut next_screen: ResMut<NextState<Screen>>,
     mut exit: MessageWriter<AppExit>,
 ) {
     use bevy::render::view::screenshot::{Screenshot, save_to_disk};
@@ -50,7 +54,17 @@ fn debug_screenshot(
     if *phase.get() != TurnPhase::Idle {
         return;
     }
+    // Skip mode wants the map: dismiss the newspaper the skip lands on.
+    if std::env::var("MAP_DEBUG_SKIP").is_ok() && *screen.get() == Screen::News {
+        next_screen.set(Screen::Map);
+        return;
+    }
     *frames += 1;
+    // Re-applied every frame: the game session inserts fresh RenderSettings
+    // after this hook's first frames tick.
+    if std::env::var("MAP_DEBUG_AI_CIVS").as_deref() == Ok("1") && !settings.show_ai_civilians {
+        settings.show_ai_civilians = true;
+    }
     if *frames == 1 {
         if let Ok(label) = std::env::var("MAP_DEBUG_MODE")
             && let Some(target) = MapMode::ALL
@@ -62,6 +76,15 @@ fn debug_screenshot(
         if std::env::var("MAP_DEBUG_FOG").as_deref() == Ok("1") {
             settings.disable_fog = false;
         }
+    }
+    // Fires after the M6/M7 drivers' scripted clicks (latest at frame 70) so
+    // a queued order (e.g. a civilian deploy) resolves during the skip.
+    if *frames == 100
+        && let Ok(skip) = std::env::var("MAP_DEBUG_SKIP")
+        && let Ok(count) = skip.parse::<u32>()
+        && count > 0
+    {
+        game_commands.write(GameCommand::SkipTurns { count });
         if std::env::var("MAP_DEBUG_STRAIGHT").as_deref() == Ok("1") {
             settings.organic_borders = false;
         }
