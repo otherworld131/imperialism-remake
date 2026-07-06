@@ -66,13 +66,14 @@ the view models emit.
 | Clothing | `crates/presentation/assets/icons/commodities/Clothing.png` | Navy frock coat with brass buttons |
 | Hardware | `crates/presentation/assets/icons/commodities/Hardware.png` | Eight-tooth gear wheel |
 
-## civilians/ (14)
+## civilians/ (21)
 
 Each civilian is a worker **figure** (head, torso, role hat) shown with the
-tool of their trade — not the tool alone. Every civilian also has a
-`<Name>Work.png` action frame (tool in motion: pick striking, axe chopping,
-lasso spinning, …); while a civilian is working on a tile the map marker
-flips between the two frames (`WorkFrameAnim` in `map/markers.rs`).
+tool of their trade — not the tool alone. Every civilian also has two action
+frames — `<Name>Work1.png` (mid-swing) and `<Name>Work2.png` (strike: pick
+hitting rock, axe biting the log, lasso overhead, …). While a civilian works
+on a tile the map marker plays the three images ping-pong
+(rest → mid → strike → mid; `WorkFrameAnim` in `map/markers.rs`).
 
 | Name | Output | Pictogram |
 |------|--------|-----------|

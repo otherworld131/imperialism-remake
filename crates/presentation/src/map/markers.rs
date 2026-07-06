@@ -49,12 +49,12 @@ pub struct WorkingCivilianAnim {
     phase: f32,
 }
 
-/// Two-frame pixel animation on a working civilian's icon: the sprite flips
-/// between the rest pose and the `<Type>Work` action pose while on the job.
+/// Three-image pixel animation on a working civilian's icon: while on the
+/// job the sprite cycles rest → `<Type>Work1` (mid-swing) → `<Type>Work2`
+/// (strike) → mid-swing, i.e. the frames are stored in ping-pong play order.
 #[derive(Component)]
 pub struct WorkFrameAnim {
-    rest: Handle<Image>,
-    work: Handle<Image>,
+    frames: [Handle<Image>; 4],
     phase: f32,
 }
 
@@ -494,12 +494,13 @@ pub fn rebuild_marker_layers(
                     );
                     if civ.working
                         && civ.turns_remaining > 0
-                        && let Some(work) = icons.get("civilians", &format!("{}Work", civ.civ_type))
+                        && let Some(mid) = icons.get("civilians", &format!("{}Work1", civ.civ_type))
+                        && let Some(strike) =
+                            icons.get("civilians", &format!("{}Work2", civ.civ_type))
                     {
                         commands.entity(sprite).insert(WorkFrameAnim {
-                            rest: image,
-                            work,
-                            phase: (tile.q * 31 + tile.r * 13).rem_euclid(11) as f32 * 0.09,
+                            frames: [image, mid.clone(), strike, mid],
+                            phase: (tile.q * 31 + tile.r * 13).rem_euclid(11) as f32 * 0.36,
                         });
                     }
                 }
@@ -812,10 +813,10 @@ pub fn animate_map_markers(
         transform.translation.x = pos.x;
         transform.translation.y = pos.y;
     }
-    // Working civilians: flip between rest and action poses (~0.4s a frame).
+    // Working civilians: step through the ping-pong pose cycle (~0.3s a frame).
     for (anim, mut sprite) in &mut sets.p2() {
-        let t = (now * 1.25 + anim.phase).fract();
-        let target = if t < 0.5 { &anim.rest } else { &anim.work };
+        let step = ((now * 3.3 + anim.phase) as usize) % anim.frames.len();
+        let target = &anim.frames[step];
         if sprite.image != *target {
             sprite.image = target.clone();
         }

@@ -635,12 +635,116 @@ BATCH1 = [
     ("ui/Tent", tent),
 ]
 
+# ── Mid-swing frames (between the rest pose and the action pose) ────────
+
+
+def farmer_work_mid():
+    """Mid frame: pitchfork lifted level, mid-pitch."""
+    c = Canvas()
+    _farmer_body(c)
+    thick_diag(c, 19, 16, 28, 11, "wood")
+    c.hline(25, 31, 9, "steel_dk")                  # crossbar
+    c.vline(26, 4, 8, "steel"); c.vline(28, 4, 8, "steel"); c.vline(30, 5, 8, "steel")
+    c.rect(19, 15, 21, 17, "skin")
+    c.outline_silhouette()
+    return c
+
+
+def miner_work_mid():
+    """Mid frame: pick swung level, head leading."""
+    c = Canvas()
+    _miner_body(c)
+    thick_diag(c, 19, 17, 27, 13, "wood")
+    # head vertical at the leading end, tips curling back
+    c.vline(29, 9, 18, "steel"); c.vline(30, 10, 16, "steel_lt")
+    c.px(28, 8, "steel_dk"); c.px(27, 7, "steel_dk")
+    c.px(28, 19, "steel_dk"); c.px(27, 20, "steel_dk")
+    c.rect(19, 15, 21, 17, "skin")
+    c.outline_silhouette()
+    return c
+
+
+def engineer_work_mid():
+    """Mid frame: wrench tilted, starting the swing."""
+    c = Canvas()
+    _engineer_body(c)
+    thick_diag(c, 23, 19, 25, 9, "steel")
+    c.px(23, 18, "steel_lt")
+    c.rect(23, 4, 28, 5, "steel")
+    c.rect(23, 8, 28, 9, "steel")
+    c.rect(23, 5, 24, 8, "steel")
+    c.px(23, 4, "steel_lt")
+    c.rect(20, 18, 22, 20, "skin")
+    c.outline_silhouette()
+    return c
+
+
+def rancher_work_mid():
+    """Mid frame: small loop at shoulder height, winding up."""
+    c = Canvas()
+    _rancher_body(c)
+    for dx, dy in ((0, -3), (0, 3), (-3, 0), (3, 0), (-2, -2), (2, -2), (-2, 2), (2, 2)):
+        c.px(25 + dx, 12 + dy, "straw")
+    c.px(27, 10, "straw_lt")
+    c.line(23, 14, 21, 16, "straw")
+    c.rect(19, 15, 21, 17, "skin")
+    c.outline_silhouette()
+    return c
+
+
+def forester_work_mid():
+    """Mid frame: axe raised overhead, wound up."""
+    c = Canvas()
+    _forester_body(c)
+    thick_diag(c, 20, 17, 23, 6, "wood_lt")
+    c.rect(22, 2, 26, 5, "steel")
+    c.hline(25, 27, 6, "steel_lt"); c.px(27, 5, "steel_lt")
+    c.px(22, 2, "steel_dk"); c.px(22, 5, "steel_dk")
+    c.rect(19, 16, 21, 18, "skin")
+    c.outline_silhouette()
+    return c
+
+
+def driller_work_mid():
+    """Mid frame: the well starts to blow — small spurt at the crown."""
+    c = Canvas()
+    _driller_body(c)
+    _derrick(c)
+    c.px(26, 4, "gold")
+    c.px(26, 3, "coal"); c.px(26, 2, "coal_lt")
+    c.line(20, 17, 21, 15, "denim_lt"); c.px(21, 14, "skin")
+    c.outline_silhouette()
+    return c
+
+
+def prospector_work_mid():
+    """Mid frame: pan half-tilted, water rippling."""
+    c = Canvas()
+    _prospector_body(c)
+    c.line(21, 17, 29, 19, "steel_dk"); c.line(21, 18, 29, 20, "steel_dk")
+    c.line(22, 16, 28, 17, "steel")
+    c.px(22, 15, "steel_lt")
+    c.px(24, 15, "gold"); c.px(25, 15, "gold_lt")
+    c.px(26, 16, "denim_lt"); c.px(30, 21, "denim_lt")
+    c.line(20, 20, 21, 18, "skin")
+    c.outline_silhouette()
+    return c
+
+
+# Frame 1 = mid-swing, frame 2 = full action; the map plays rest→1→2→1.
 WORK_FRAMES = [
-    ("civilians/FarmerWork", farmer_work),
-    ("civilians/MinerWork", miner_work),
-    ("civilians/EngineerWork", engineer_work),
-    ("civilians/RancherWork", rancher_work),
-    ("civilians/ForesterWork", forester_work),
-    ("civilians/DrillerWork", driller_work),
-    ("civilians/ProspectorWork", prospector_work),
+    ("civilians/FarmerWork1", farmer_work_mid),
+    ("civilians/FarmerWork2", farmer_work),
+    ("civilians/MinerWork1", miner_work_mid),
+    ("civilians/MinerWork2", miner_work),
+    ("civilians/EngineerWork1", engineer_work_mid),
+    ("civilians/EngineerWork2", engineer_work),
+    ("civilians/RancherWork1", rancher_work_mid),
+    ("civilians/RancherWork2", rancher_work),
+    ("civilians/ForesterWork1", forester_work_mid),
+    ("civilians/ForesterWork2", forester_work),
+    ("civilians/DrillerWork1", driller_work_mid),
+    ("civilians/DrillerWork2", driller_work),
+    ("civilians/ProspectorWork1", prospector_work_mid),
+    ("civilians/ProspectorWork2", prospector_work),
 ]
