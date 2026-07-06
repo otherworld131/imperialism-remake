@@ -44,6 +44,18 @@ pub struct TroopHalo(pub (i32, i32));
 #[derive(Component)]
 pub struct CivMarker(pub i64);
 
+#[derive(Component)]
+pub struct WorkingCivilianAnim {
+    phase: f32,
+}
+
+#[derive(Component)]
+pub struct PendingMoveAnim {
+    phase: f32,
+    from: Vec2,
+    to: Vec2,
+}
+
 #[derive(Clone, PartialEq)]
 pub struct MarkerKey {
     version: u64,
@@ -124,6 +136,16 @@ fn spawn_sprite(
             ChildOf(parent),
         ))
         .id()
+}
+
+fn tent_count(army_unit_count: u32) -> u32 {
+    match army_unit_count {
+        0 => 0,
+        1 => 1,
+        2..=4 => 2,
+        5..=8 => 3,
+        _ => 4,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -324,23 +346,22 @@ pub fn rebuild_marker_layers(
             }
         }
 
-        // ── Troop indicators at capitals ─────────────────────────────────
+        // ── Troop encampments at province capitals ───────────────────────
         if settings.show_armies && *mode != MapMode::Diplomatic {
             let parent = group(&mut commands, 3.0, Some(LodGate::Troops));
-            let swords = icons.get("ui", "Swords");
+            let tent = icons.get("ui", "Tent");
             for tile in tiles {
                 if tile.is_sea() || !tile.is_capital || tile.army_unit_count == 0 {
                     continue;
                 }
-                let n = tile.army_unit_count as f32;
-                let size_scale = (0.55 + n * 0.08).min(1.1);
-                let emoji_size = rs((RH * size_scale).max(7.0));
                 let p = geometry::hex_to_world(tile.q, tile.r);
-                let pos = world_at(p, RH * 0.6, -RH * 0.55);
+                let pos = world_at(p, RH * 0.55, -RH * 0.5);
+                let tents = tent_count(tile.army_unit_count);
+                let tent_size = rs(8.5);
 
-                // Steady selection halo behind the blinking icon.
+                // Steady selection halo behind the blinking encampment.
                 commands.spawn((
-                    Mesh2d(meshes.add(Circle::new(emoji_size * 0.65))),
+                    Mesh2d(meshes.add(Circle::new(rs(11.0)))),
                     MeshMaterial2d(materials.add(Color::srgba(1.0, 220.0 / 255.0, 0.0, 0.35))),
                     Transform::from_xyz(pos.x, pos.y, -0.02),
                     Visibility::Hidden,
@@ -356,22 +377,47 @@ pub fn rebuild_marker_layers(
                         ChildOf(parent),
                     ))
                     .id();
-                if let Some(image) = swords.clone() {
-                    spawn_sprite(
-                        &mut commands,
-                        marker,
-                        image,
-                        Vec2::ZERO,
-                        0.0,
-                        emoji_size,
-                        Color::WHITE.with_alpha(0.85),
-                    );
+                // Camp layout: tents fan out in a small cluster; closer tents
+                // sit lower so the camp reads with a sense of depth. `z` rises
+                // toward the front so overlapping tents stack correctly.
+                let dx = tent_size * 0.42;
+                let dy = tent_size * 0.3;
+                let layout: &[(Vec2, f32)] = match tents {
+                    1 => &[(Vec2::new(0.0, 0.0), 0.0)],
+                    2 => &[
+                        (Vec2::new(-dx, dy * 0.4), 0.0),
+                        (Vec2::new(dx, -dy * 0.4), 0.02),
+                    ],
+                    3 => &[
+                        (Vec2::new(0.0, dy), 0.0),
+                        (Vec2::new(-dx, -dy * 0.7), 0.02),
+                        (Vec2::new(dx, -dy * 0.7), 0.02),
+                    ],
+                    _ => &[
+                        (Vec2::new(-dx, dy), 0.0),
+                        (Vec2::new(dx, dy), 0.0),
+                        (Vec2::new(-dx, -dy), 0.02),
+                        (Vec2::new(dx, -dy), 0.02),
+                    ],
+                };
+                if let Some(image) = tent.clone() {
+                    for (offset, z) in layout {
+                        spawn_sprite(
+                            &mut commands,
+                            marker,
+                            image.clone(),
+                            *offset,
+                            *z,
+                            tent_size,
+                            Color::WHITE,
+                        );
+                    }
                 }
-                let count_size = (emoji_size * 0.65).max(rs(6.0));
+                let count_size = rs(6.5);
                 spawn_outlined_text(
                     &mut commands,
                     marker,
-                    Vec2::new(0.0, -(emoji_size * 0.4 + count_size * 0.55)),
+                    Vec2::new(0.0, -rs(11.5)),
                     0.05,
                     &tile.army_unit_count.to_string(),
                     TextStyle2d {
@@ -387,7 +433,7 @@ pub fn rebuild_marker_layers(
         // ── Civilians on tiles ───────────────────────────────────────────
         {
             let parent = group(&mut commands, 3.2, Some(LodGate::Civilians));
-            let civ_size = rs((RH * 0.55).max(6.0));
+            let civ_size = rs((RH * 0.9).max(12.0));
             for tile in tiles {
                 let Some(civ) = tile.civilian_on_tile.as_ref() else {
                     continue;
@@ -408,11 +454,22 @@ pub fn rebuild_marker_layers(
                 // Nation-colored disc behind the icon.
                 if !civ.owner_color.is_empty() {
                     commands.spawn((
-                        Mesh2d(meshes.add(Circle::new(civ_size * 0.45))),
+                        Mesh2d(meshes.add(Circle::new(civ_size * 0.52))),
                         MeshMaterial2d(
-                            materials.add(theme::nation_color(&civ.owner_color).with_alpha(0.5)),
+                            materials.add(theme::nation_color(&civ.owner_color).with_alpha(0.58)),
                         ),
                         Transform::from_xyz(0.0, 0.0, -0.01),
+                        ChildOf(marker),
+                    ));
+                }
+                if civ.working && civ.turns_remaining > 0 {
+                    commands.spawn((
+                        Mesh2d(meshes.add(Circle::new(civ_size * 0.68))),
+                        MeshMaterial2d(materials.add(Color::srgba(0.2, 0.85, 0.45, 0.45))),
+                        Transform::from_xyz(0.0, 0.0, -0.02),
+                        WorkingCivilianAnim {
+                            phase: (tile.q * 37 + tile.r * 19).rem_euclid(17) as f32 * 0.08,
+                        },
                         ChildOf(marker),
                     ));
                 }
@@ -484,7 +541,7 @@ pub fn rebuild_marker_layers(
                             image,
                             pos,
                             0.05,
-                            civ_size * 0.9,
+                            civ_size * 0.78,
                             Color::WHITE.with_alpha(0.95),
                         );
                         commands.entity(sprite).insert(CivMarker(civ.id));
@@ -655,6 +712,25 @@ pub fn rebuild_marker_layers(
                         dash: None,
                     },
                 );
+                let mut dot = MeshBuilder2d::default();
+                dot.add_circle(Vec2::ZERO, rs(3.2), 12);
+                commands.spawn((
+                    Mesh2d(meshes.add(dot.build())),
+                    MeshMaterial2d(materials.add(Color::srgba(
+                        210.0 / 255.0,
+                        1.0,
+                        210.0 / 255.0,
+                        0.95,
+                    ))),
+                    Transform::from_xyz(from.x, from.y, 0.04),
+                    PendingMoveAnim {
+                        phase: ((arrow.source_province_id ^ arrow.dest_province_id) % 11) as f32
+                            * 0.09,
+                        from,
+                        to,
+                    },
+                    ChildOf(parent),
+                ));
             }
         }
 
@@ -686,6 +762,36 @@ pub fn rebuild_marker_layers(
         vms.version,
         build_started.elapsed(),
     );
+}
+
+pub fn animate_map_markers(
+    time: Res<Time>,
+    mut sets: ParamSet<(
+        Query<(
+            &WorkingCivilianAnim,
+            &mut Transform,
+            &mut MeshMaterial2d<ColorMaterial>,
+        )>,
+        Query<(&PendingMoveAnim, &mut Transform)>,
+    )>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
+    let now = time.elapsed_secs();
+    for (anim, mut transform, material) in &mut sets.p0() {
+        let wave = ((now * 3.2 + anim.phase) % std::f32::consts::TAU).sin() * 0.5 + 0.5;
+        let scale = 0.78 + wave * 0.5;
+        transform.scale = Vec3::splat(scale);
+        if let Some(mat) = materials.get_mut(&material.0) {
+            mat.color = Color::srgba(0.22, 0.9, 0.45, 0.16 + (1.0 - wave) * 0.36);
+        }
+    }
+    for (anim, mut transform) in &mut sets.p1() {
+        let t = (now * 0.65 + anim.phase).fract();
+        let eased = t * t * (3.0 - 2.0 * t);
+        let pos = anim.from.lerp(anim.to, eased);
+        transform.translation.x = pos.x;
+        transform.translation.y = pos.y;
+    }
 }
 
 /// Diplomacy icon sprites for one relation, in render order (web
@@ -1055,7 +1161,7 @@ pub fn troop_indicator_hit(tiles: &[MapTile], world: Vec2) -> Option<(i32, i32)>
             continue;
         }
         let p = geometry::hex_to_world(tile.q, tile.r);
-        let anchor = world_at(p, RH * 0.6, -RH * 0.55);
+        let anchor = world_at(p, RH * 0.55, -RH * 0.5);
         if anchor.distance_squared(world) <= hit_radius * hit_radius {
             return Some((tile.q, tile.r));
         }

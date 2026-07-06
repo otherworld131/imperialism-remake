@@ -1,6 +1,7 @@
 //! Map icon assets: the 64×64 PNGs under `crates/presentation/assets/icons/`
 //! (see `assets-src/icons/MANIFEST.md`), preloaded once at startup.
 
+use bevy::image::{ImageLoaderSettings, ImageSampler};
 use bevy::prelude::*;
 use std::collections::HashMap;
 
@@ -19,14 +20,22 @@ impl IconAssets {
 }
 
 /// The asset-root directory the app should serve from: the crate's own
-/// `assets/` in dev builds, the working directory's `assets/` when packaged.
+/// `assets/` in dev builds, then `assets/` beside the executable or current
+/// working directory when packaged.
 pub fn asset_root() -> std::path::PathBuf {
     let dev = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets");
     if dev.is_dir() {
-        dev
-    } else {
-        std::path::PathBuf::from("assets")
+        return dev;
     }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let packaged = dir.join("assets");
+        if packaged.is_dir() {
+            return packaged;
+        }
+    }
+    std::path::PathBuf::from("assets")
 }
 
 /// Discover and load every icon under `<asset root>/icons/<group>/<name>.png`.
@@ -50,9 +59,16 @@ pub fn load_icons(mut commands: Commands, asset_server: Res<AssetServer>) {
                     continue;
                 };
                 let relative = format!("icons/{group_name}/{stem}.png");
+                // Icons are pixel art: sample with nearest-neighbor so the
+                // pixels stay crisp at any map zoom instead of blurring.
                 icons.insert(
                     (group_name.clone(), stem.to_string()),
-                    asset_server.load(relative),
+                    asset_server.load_with_settings(
+                        relative,
+                        |settings: &mut ImageLoaderSettings| {
+                            settings.sampler = ImageSampler::nearest();
+                        },
+                    ),
                 );
             }
         }

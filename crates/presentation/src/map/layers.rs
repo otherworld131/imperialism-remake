@@ -16,6 +16,7 @@ use crate::game::vm::MapTile;
 use crate::map::borders::{self, MapBorders};
 use crate::map::camera::GameCamera;
 use crate::map::geometry::{self, HEX_SIZE};
+use crate::map::icons::IconAssets;
 use crate::map::lod::LodGate;
 use crate::map::organic::Point;
 use crate::map::picking::{HoveredHex, SelectedHex};
@@ -273,6 +274,7 @@ pub fn rebuild_layers(
     mut cache: ResMut<BordersCache>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
+    icons: Res<IconAssets>,
     wrap_roots: Query<Entity, With<WrapRoot>>,
     layers: Query<Entity, With<StaticLayer>>,
     mut built: Local<Option<StaticKey>>,
@@ -396,6 +398,37 @@ pub fn rebuild_layers(
             0.0,
             None,
         );
+    }
+
+    // ── Pass 1a: terrain motif sprites (terrain mode) ───────────────────
+    // Every land tile gets an authored terrain icon (mountains, forest,
+    // swamp, …) layered over its color fill, so terrain reads as art and
+    // not just a flat tint. These live in the static layer because they
+    // depend only on the map, not on per-turn marker state.
+    if *mode == MapMode::Terrain {
+        let terrain_size = HEX_SIZE * 1.5;
+        for tile in tiles {
+            if tile.is_sea() {
+                continue;
+            }
+            let Some(image) = icons.get("terrain", &tile.terrain) else {
+                continue;
+            };
+            let p = geometry::hex_to_world(tile.q, tile.r);
+            for &root in &roots {
+                commands.spawn((
+                    Sprite {
+                        image: image.clone(),
+                        custom_size: Some(Vec2::splat(terrain_size)),
+                        color: Color::WHITE.with_alpha(0.92),
+                        ..default()
+                    },
+                    Transform::from_xyz(p.x, p.y, 0.12),
+                    StaticLayer,
+                    ChildOf(root),
+                ));
+            }
+        }
     }
 
     // ── Pass 1b: organic fill-correction strips ─────────────────────────

@@ -1301,6 +1301,7 @@ pub fn run_game() {
                 layers::update_rings,
                 tick_blink,
                 markers::blink_selected_markers,
+                markers::animate_map_markers,
                 debug_screenshot,
                 turn_runner::poll_turn_task.run_if(in_state(TurnPhase::Processing)),
                 turn_runner::poll_skip_task.run_if(in_state(TurnPhase::Processing)),

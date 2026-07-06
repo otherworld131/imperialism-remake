@@ -96,15 +96,13 @@ impl FromWorld for Theme {
     }
 }
 
-/// Read a bundled TTF from disk and register it as a font asset. Checked
-/// locations: the presentation crate's `assets/fonts/` (dev builds, via the
-/// compile-time manifest dir) and `assets/fonts/` relative to the working
-/// directory (packaged builds).
+/// Read a bundled TTF from disk and register it as a font asset.
 fn load_font(fonts: &mut Assets<Font>, file: &str) -> Handle<Font> {
     let candidates = [
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("assets/fonts")
             .join(file),
+        crate::map::icons::asset_root().join("fonts").join(file),
         std::path::PathBuf::from("assets/fonts").join(file),
     ];
     for path in &candidates {

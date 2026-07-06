@@ -11,10 +11,19 @@ unit/ship `type` and `category` names from the `get_buildable_units` contract).
 Note: the material is `CannedFood` (enum name); the display alias `"Canned Food"`
 maps to the same icon.
 
-Shared style: flat fills, dark outline `#2a2418` (stroke 2.5 at 64px), warm
-parchment-era palette (parchment `#f2ead6`, wood `#8a5a2b`, brass/gold
-`#d9a441`/`#e3b341`, navy `#2c4a66`, steel `#9aa0a6`, coal `#3a3530`,
-brick `#a33b2e`).
+Shared style: **pixel art** on a 32×32 grid, scaled exactly 2× to the 64×64
+output. Every icon is authored in `pixel-src/` (Python: one function per
+sprite drawing on a palette-indexed canvas) and emitted as a pixel-rect SVG,
+so the SVG stays the pipeline's source of truth. All sprites share the muted
+19th-century palette in `pixel-src/pixelkit.py` (single source of truth) and
+a 1px silhouette outline `#2a2418`. The game loads these PNGs with
+nearest-neighbor sampling (`map/icons.rs`) so the pixels stay crisp at any
+map zoom.
+
+To edit an icon: change its function in `pixel-src/sprites*.py`, then run
+`python3 assets-src/icons/pixel-src/gen.py && cargo run -p gen_assets`.
+Hand-drawn replacement PNGs/SVGs also work — the pipeline doesn't care how
+the SVG was made.
 
 ## Replacing an icon
 
@@ -59,15 +68,18 @@ the view models emit.
 
 ## civilians/ (7)
 
+Each civilian is a worker **figure** (head, torso, role hat) shown with the
+tool of their trade — not the tool alone.
+
 | Name | Output | Pictogram |
 |------|--------|-----------|
-| Prospector | `crates/presentation/assets/icons/civilians/Prospector.png` | Gold pan with nuggets, pick behind |
-| Miner | `crates/presentation/assets/icons/civilians/Miner.png` | Crossed pickaxe and spade |
-| Farmer | `crates/presentation/assets/icons/civilians/Farmer.png` | Pitchfork beside wheat stalk |
-| Rancher | `crates/presentation/assets/icons/civilians/Rancher.png` | Coiled lasso with open loop |
-| Forester | `crates/presentation/assets/icons/civilians/Forester.png` | Axe embedded in tree stump |
-| Driller | `crates/presentation/assets/icons/civilians/Driller.png` | Oil derrick tower with oil drop |
-| Engineer | `crates/presentation/assets/icons/civilians/Engineer.png` | Crossed hammer and spanner over hard hat |
+| Prospector | `crates/presentation/assets/icons/civilians/Prospector.png` | Worker in a wide-brim hat holding a gold pan with nuggets |
+| Miner | `crates/presentation/assets/icons/civilians/Miner.png` | Worker in a lamped helmet shouldering a pickaxe |
+| Farmer | `crates/presentation/assets/icons/civilians/Farmer.png` | Worker in a straw hat with a pitchfork |
+| Rancher | `crates/presentation/assets/icons/civilians/Rancher.png` | Worker in a cowboy hat with a coiled lasso |
+| Forester | `crates/presentation/assets/icons/civilians/Forester.png` | Worker in a green cap shouldering an axe |
+| Driller | `crates/presentation/assets/icons/civilians/Driller.png` | Worker in an orange hard hat beside an oil derrick |
+| Engineer | `crates/presentation/assets/icons/civilians/Engineer.png` | Worker in a blue hard hat holding a wrench, with a gear |
 
 ## units/ (6)
 
@@ -122,14 +134,30 @@ the view models emit.
 | Grant | `crates/presentation/assets/icons/diplomacy/Grant.png` | Tied money sack with gold coin |
 | BreakTreaty | `crates/presentation/assets/icons/diplomacy/BreakTreaty.png` | Document torn in two, wax seal |
 
-## ui/ (7)
+## ui/ (8)
 
 | Name | Output | Pictogram |
 |------|--------|-----------|
 | Anchor | `crates/presentation/assets/icons/ui/Anchor.png` | Classic navy anchor with stock and flukes |
-| Swords | `crates/presentation/assets/icons/ui/Swords.png` | Two crossed straight swords |
+| Swords | `crates/presentation/assets/icons/ui/Swords.png` | Two crossed straight swords (legacy; map now uses tents) |
 | Treasury | `crates/presentation/assets/icons/ui/Treasury.png` | Gold coin with crown emboss |
 | Workers | `crates/presentation/assets/icons/ui/Workers.png` | Two capped worker busts |
 | FreightCar | `crates/presentation/assets/icons/ui/FreightCar.png` | Railway boxcar on rail |
 | Science | `crates/presentation/assets/icons/ui/Science.png` | Erlenmeyer flask with teal liquid |
 | News | `crates/presentation/assets/icons/ui/News.png` | Folded newspaper with masthead |
+| Tent | `crates/presentation/assets/icons/ui/Tent.png` | Canvas A-frame tent with red pennant (army encampment marker, 1–4 per capital) |
+
+## terrain/ (7)
+
+Per-tile terrain motifs layered over the color fill in Terrain map mode, so
+each tile reads as art (mountains, forest, …) rather than a flat tint.
+
+| Name | Output | Pictogram |
+|------|--------|-----------|
+| Mountain | `crates/presentation/assets/icons/terrain/Mountain.png` | Two snow-capped grey peaks |
+| Hills | `crates/presentation/assets/icons/terrain/Hills.png` | Two rounded green mounds |
+| Forest | `crates/presentation/assets/icons/terrain/Forest.png` | Pair of pine trees |
+| Swamp | `crates/presentation/assets/icons/terrain/Swamp.png` | Murky water pool with reeds |
+| Desert | `crates/presentation/assets/icons/terrain/Desert.png` | Sun over a dune with a cactus |
+| Tundra | `crates/presentation/assets/icons/terrain/Tundra.png` | Snowfield with a bare shrub and snowflake |
+| Grassland | `crates/presentation/assets/icons/terrain/Grassland.png` | Tufts of grass blades |
