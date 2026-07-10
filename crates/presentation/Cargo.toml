@@ -39,3 +39,8 @@ bevy = { version = "=0.18.1", default-features = false, features = [
     "experimental_bevy_ui_widgets",
     "ui_picking",
 ] }
+
+[dev-dependencies]
+# Font-coverage fitness test: parses the bundled UI font's cmap to verify
+# every non-ASCII character in a presentation string literal has a glyph.
+ttf-parser = "0.25"

@@ -87,9 +87,17 @@ impl FromWorld for Theme {
         };
         Theme {
             fonts: FontHandles {
-                regular: load_font(&mut fonts, "SourceSerif4-Regular.ttf"),
-                semibold: load_font(&mut fonts, "SourceSerif4-Semibold.ttf"),
-                italic: load_font(&mut fonts, "SourceSerif4-It.ttf"),
+                // Jersey 15 (OFL) — the pixel-art UI font, used everywhere.
+                // Chosen over cuter pixel faces (Pixelify Sans) because its
+                // digits stay unambiguous at ledger sizes (5 vs S, C vs O).
+                // Single-cut family: the semibold and italic slots reuse it
+                // (hierarchy comes from size + gold), and the bundled TTF is
+                // patched with pixel ▲▼✕✓ glyphs by
+                // `assets-src/fonts/patch_glyphs.py`. Blackletter stays for
+                // the newspaper masthead flavor.
+                regular: load_font(&mut fonts, "Jersey15-Regular.ttf"),
+                semibold: load_font(&mut fonts, "Jersey15-Regular.ttf"),
+                italic: load_font(&mut fonts, "Jersey15-Regular.ttf"),
                 blackletter: load_font(&mut fonts, "UnifrakturCook-Bold.ttf"),
             },
         }
@@ -118,6 +126,9 @@ fn load_font(fonts: &mut Assets<Font>, file: &str) -> Handle<Font> {
     Handle::default()
 }
 
+/// Flat fill color per terrain. The pixel-art ground textures are derived
+/// from these values (`assets-src/icons/pixel-src/ground.py`, `BASES`) —
+/// when tweaking a color here, regenerate the textures to match.
 pub fn terrain_color(terrain: &str) -> Color {
     match terrain {
         "Grassland" => Color::srgb_u8(0xa8, 0xb8, 0x60),
