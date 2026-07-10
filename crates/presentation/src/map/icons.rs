@@ -1,9 +1,25 @@
 //! Map icon assets: the 64×64 PNGs under `crates/presentation/assets/icons/`
 //! (see `assets-src/icons/MANIFEST.md`), preloaded once at startup.
 
-use bevy::image::{ImageLoaderSettings, ImageSampler};
+use bevy::image::{
+    ImageAddressMode, ImageFilterMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor,
+};
 use bevy::prelude::*;
 use std::collections::HashMap;
+
+/// The repeating ground textures the map renderer expects under
+/// `icons/ground/` — every terrain type plus the sea. A missing entry is
+/// not fatal (tiles fall back to flat fills) but is warned about loudly.
+pub const GROUND_TEXTURES: [&str; 8] = [
+    "Grassland",
+    "Hills",
+    "Forest",
+    "Mountain",
+    "Desert",
+    "Swamp",
+    "Tundra",
+    "Sea",
+];
 
 /// `(group, name)` → image handle, e.g. `("commodities", "Coal")`.
 #[derive(Resource, Default)]
@@ -16,6 +32,18 @@ impl IconAssets {
         self.icons
             .get(&(group.to_string(), name.to_string()))
             .cloned()
+    }
+
+    /// Test-only builder: register `(group, name)` keys with default
+    /// (unloaded) handles so lookup-driven logic can be exercised.
+    #[cfg(test)]
+    pub fn for_test(entries: &[(&str, &str)]) -> Self {
+        Self {
+            icons: entries
+                .iter()
+                .map(|(group, name)| ((group.to_string(), name.to_string()), Handle::default()))
+                .collect(),
+        }
     }
 }
 
@@ -61,12 +89,26 @@ pub fn load_icons(mut commands: Commands, asset_server: Res<AssetServer>) {
                 let relative = format!("icons/{group_name}/{stem}.png");
                 // Icons are pixel art: sample with nearest-neighbor so the
                 // pixels stay crisp at any map zoom instead of blurring.
+                // Ground textures additionally repeat: the map tiles them
+                // across merged meshes with world-space UVs.
+                let sampler = if group_name == "ground" {
+                    ImageSampler::Descriptor(ImageSamplerDescriptor {
+                        address_mode_u: ImageAddressMode::Repeat,
+                        address_mode_v: ImageAddressMode::Repeat,
+                        mag_filter: ImageFilterMode::Nearest,
+                        min_filter: ImageFilterMode::Nearest,
+                        mipmap_filter: ImageFilterMode::Nearest,
+                        ..ImageSamplerDescriptor::default()
+                    })
+                } else {
+                    ImageSampler::nearest()
+                };
                 icons.insert(
                     (group_name.clone(), stem.to_string()),
                     asset_server.load_with_settings(
                         relative,
-                        |settings: &mut ImageLoaderSettings| {
-                            settings.sampler = ImageSampler::nearest();
+                        move |settings: &mut ImageLoaderSettings| {
+                            settings.sampler = sampler.clone();
                         },
                     ),
                 );
@@ -78,6 +120,11 @@ pub fn load_icons(mut commands: Commands, asset_server: Res<AssetServer>) {
             "no map icons found under {} — markers will be missing",
             root.display()
         );
+    }
+    for name in GROUND_TEXTURES {
+        if !icons.contains_key(&("ground".to_string(), name.to_string())) {
+            warn!("ground texture icons/ground/{name}.png missing — those tiles render flat fills");
+        }
     }
     commands.insert_resource(IconAssets { icons });
 }

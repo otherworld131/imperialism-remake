@@ -1,7 +1,7 @@
 //! Pointy-top hex math and mesh construction.
 
 use bevy::asset::RenderAssetUsages;
-use bevy::mesh::{Indices, PrimitiveTopology};
+use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
 
 /// Outer radius of a hex tile in world units.
@@ -108,6 +108,23 @@ pub fn merged_hex_mesh(centers: &[Vec2], radius: f32) -> Mesh {
     .with_inserted_indices(Indices::U32(indices))
 }
 
+/// Rewrite a mesh's UVs so a repeating texture is sampled in world space:
+/// one texture repeat per `period` world units, with the same origin for
+/// every mesh. Adjacent meshes (tile fills, coast strips) therefore sample
+/// one continuous pattern — no per-hex seams or misaligned pixels.
+pub fn apply_world_uvs(mesh: &mut Mesh, period: f32) {
+    let Some(VertexAttributeValues::Float32x3(positions)) =
+        mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+    else {
+        return;
+    };
+    let uvs: Vec<[f32; 2]> = positions
+        .iter()
+        .map(|p| [p[0] / period, -p[1] / period])
+        .collect();
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+}
+
 /// Hexagonal ring outline (hover/selection markers).
 pub fn pointy_hex_ring_mesh(outer_radius: f32, inner_radius: f32) -> Mesh {
     let mut positions = Vec::with_capacity(12);
@@ -157,6 +174,28 @@ mod tests {
             for r in -10..40 {
                 assert_eq!(world_to_hex(hex_to_world(q, r)), (q, r));
             }
+        }
+    }
+
+    #[test]
+    fn apply_world_uvs_derives_uvs_from_positions() {
+        let period = 36.0;
+        let mut mesh = merged_hex_mesh(&[Vec2::new(48.0, -96.0), Vec2::new(-12.5, 7.0)], HEX_SIZE);
+        apply_world_uvs(&mut mesh, period);
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("positions missing");
+        };
+        let Some(VertexAttributeValues::Float32x2(uvs)) = mesh.attribute(Mesh::ATTRIBUTE_UV_0)
+        else {
+            panic!("uvs missing");
+        };
+        assert_eq!(positions.len(), uvs.len());
+        for (p, uv) in positions.iter().zip(uvs) {
+            // World-aligned: u tracks +x, v tracks -y (texture v grows down).
+            assert!((uv[0] - p[0] / period).abs() < 1e-6);
+            assert!((uv[1] - -p[1] / period).abs() < 1e-6);
         }
     }
 }

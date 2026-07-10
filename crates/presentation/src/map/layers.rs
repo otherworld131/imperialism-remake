@@ -7,6 +7,7 @@
 //! Styling constants mirror `web/src/components/HexMap.tsx`; React sizes are
 //! authored against hex 18 and scaled by `REACT_SCALE` here.
 
+use bevy::math::Affine2;
 use bevy::prelude::*;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -25,6 +26,11 @@ use crate::theme;
 
 /// World units per React canvas unit (hex 24 vs hex 18).
 pub const REACT_SCALE: f32 = HEX_SIZE / 18.0;
+
+/// World-space repeat period of the pixel-art ground textures. Matches the
+/// texel density of the 64px terrain motif sprites drawn at 1.5 hexes, so
+/// ground and motif pixels are the same size on screen.
+pub const GROUND_TEX_WORLD: f32 = HEX_SIZE * 1.5;
 
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub enum MapMode {
@@ -252,6 +258,49 @@ pub fn tile_fill_color(tile: &MapTile, mode: MapMode, fill_map: &HashMap<String,
     }
 }
 
+/// Fill spec for one tile: a multiplier color plus an optional repeating
+/// pixel-art ground texture (keyed by terrain name for mesh grouping).
+/// Terrain mode samples ground textures for land, the sea is textured in
+/// every mode, and the remaining modes keep their flat data-driven fills.
+pub fn tile_fill_spec(
+    tile: &MapTile,
+    mode: MapMode,
+    fill_map: &HashMap<String, Color>,
+    icons: &IconAssets,
+) -> (Color, Option<(String, Handle<Image>)>) {
+    let ground = if tile.is_sea() {
+        icons.get("ground", "Sea").map(|h| ("Sea".to_string(), h))
+    } else if mode == MapMode::Terrain {
+        icons
+            .get("ground", &tile.terrain)
+            .map(|h| (tile.terrain.clone(), h))
+    } else {
+        None
+    };
+    match ground {
+        Some(texture) => {
+            let color = if tile.is_sea() || tile.owner_color.is_empty() {
+                Color::WHITE
+            } else {
+                // Ownership tint: multiply the texture by white nudged
+                // toward the nation color, mirroring the flat-fill amounts.
+                let amount = if tile.is_incorporated_minor {
+                    0.10
+                } else {
+                    0.15
+                };
+                theme::terrain_nation_tint(
+                    Color::WHITE,
+                    theme::nation_color(&tile.owner_color),
+                    amount,
+                )
+            };
+            (color, Some(texture))
+        }
+        None => (tile_fill_color(tile, mode, fill_map), None),
+    }
+}
+
 fn color_key(color: Color) -> u32 {
     let c = color.to_srgba().to_u8_array();
     u32::from_be_bytes(c)
@@ -275,7 +324,7 @@ pub fn rebuild_layers(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     icons: Res<IconAssets>,
-    wrap_roots: Query<Entity, With<WrapRoot>>,
+    wrap_roots: Query<(Entity, &Transform), With<WrapRoot>>,
     layers: Query<Entity, With<StaticLayer>>,
     mut built: Local<Option<StaticKey>>,
     mut rebuild_count: Local<u32>,
@@ -322,21 +371,42 @@ pub fn rebuild_layers(
     };
     commands.insert_resource(bounds);
 
-    let roots: Vec<Entity> = if wrap_roots.is_empty() {
+    let roots: Vec<(Entity, f32)> = if wrap_roots.is_empty() {
         [-1.0f32, 0.0, 1.0]
             .into_iter()
             .map(|offset| {
-                commands
+                let x = offset * bounds.width_px;
+                let entity = commands
                     .spawn((
                         WrapRoot,
-                        Transform::from_xyz(offset * bounds.width_px, 0.0, 0.0),
+                        Transform::from_xyz(x, 0.0, 0.0),
                         Visibility::default(),
                     ))
-                    .id()
+                    .id();
+                (entity, x)
             })
             .collect()
     } else {
-        wrap_roots.iter().collect()
+        // Re-anchor existing roots to the current map width: a new game or
+        // load can change `width_px`, and both the wrap-copy placement and
+        // the textured UV phase shift below must follow it. Sort by the old
+        // x so each root keeps its -1/0/+1 slot.
+        let mut existing: Vec<(Entity, f32)> = wrap_roots
+            .iter()
+            .map(|(entity, transform)| (entity, transform.translation.x))
+            .collect();
+        existing.sort_by(|a, b| a.1.total_cmp(&b.1));
+        existing
+            .into_iter()
+            .zip([-1.0f32, 0.0, 1.0])
+            .map(|((entity, _), offset)| {
+                let x = offset * bounds.width_px;
+                commands
+                    .entity(entity)
+                    .insert(Transform::from_xyz(x, 0.0, 0.0));
+                (entity, x)
+            })
+            .collect()
     };
 
     let mut classify_elapsed = None;
@@ -350,20 +420,47 @@ pub fn rebuild_layers(
         return;
     };
 
-    // Shared spawner: one mesh+material, three wrap copies.
+    // Shared spawner: one mesh+material, three wrap copies. A ground
+    // texture switches the mesh to world-aligned UVs so the repeating
+    // pixel pattern flows continuously across hexes and strips.
     let spawn_mesh = |commands: &mut Commands,
                       meshes: &mut Assets<Mesh>,
                       materials: &mut Assets<ColorMaterial>,
-                      mesh: Mesh,
+                      mut mesh: Mesh,
                       color: Color,
+                      texture: Option<Handle<Image>>,
                       z: f32,
                       gate: Option<LodGate>| {
+        if texture.is_some() {
+            geometry::apply_world_uvs(&mut mesh, GROUND_TEX_WORLD);
+        }
         let mesh = meshes.add(mesh);
-        let material = materials.add(color);
-        for &root in &roots {
+        // Flat fills share one material across the three wrap copies.
+        // Textured fills need one material per copy: the copies translate
+        // a shared mesh whose UVs were baked from untranslated positions,
+        // so each copy shifts the texture phase by its world offset to
+        // keep the pattern continuous across the wrap seam.
+        let flat_material = if texture.is_none() {
+            Some(materials.add(color))
+        } else {
+            None
+        };
+        for &(root, root_x) in &roots {
+            let material = match &flat_material {
+                Some(handle) => handle.clone(),
+                None => materials.add(ColorMaterial {
+                    color,
+                    texture: texture.clone(),
+                    uv_transform: Affine2::from_translation(Vec2::new(
+                        root_x / GROUND_TEX_WORLD,
+                        0.0,
+                    )),
+                    ..default()
+                }),
+            };
             let mut entity = commands.spawn((
                 Mesh2d(mesh.clone()),
-                MeshMaterial2d(material.clone()),
+                MeshMaterial2d(material),
                 Transform::from_xyz(0.0, 0.0, z),
                 StaticLayer,
                 ChildOf(root),
@@ -376,25 +473,32 @@ pub fn rebuild_layers(
 
     let fill_map = nation_fill_map(*mode, &vms);
 
-    // ── Pass 1: tile fills, grouped per color ───────────────────────────
-    let mut fill_groups: BTreeMap<u32, (Color, Vec<Vec2>)> = BTreeMap::new();
+    // ── Pass 1: tile fills, grouped per (ground texture, color) ─────────
+    type FillGroup = (Color, Option<Handle<Image>>, Vec<Vec2>);
+    let mut fill_groups: BTreeMap<(String, u32), FillGroup> = BTreeMap::new();
     for tile in tiles {
-        let color = tile_fill_color(tile, *mode, &fill_map);
+        let (color, texture) = tile_fill_spec(tile, *mode, &fill_map, &icons);
+        let (tex_key, handle) = match texture {
+            Some((key, handle)) => (key, Some(handle)),
+            None => (String::new(), None),
+        };
         fill_groups
-            .entry(color_key(color))
-            .or_insert_with(|| (color, Vec::new()))
-            .1
+            .entry((tex_key, color_key(color)))
+            .or_insert_with(|| (color, handle, Vec::new()))
+            .2
             .push(geometry::hex_to_world(tile.q, tile.r));
     }
-    // Slight overdraw hides hairline seams between adjacent hexes.
+    // Slight overdraw hides hairline seams between adjacent hexes (with
+    // world-aligned textures the overlap samples identical pixels anyway).
     let radius = HEX_SIZE + 0.45;
-    for (_, (color, centers)) in fill_groups {
+    for (_, (color, texture, centers)) in fill_groups {
         spawn_mesh(
             &mut commands,
             &mut meshes,
             &mut materials,
             geometry::merged_hex_mesh(&centers, radius),
             color,
+            texture,
             0.0,
             None,
         );
@@ -415,7 +519,7 @@ pub fn rebuild_layers(
                 continue;
             };
             let p = geometry::hex_to_world(tile.q, tile.r);
-            for &root in &roots {
+            for &(root, _) in &roots {
                 commands.spawn((
                     Sprite {
                         image: image.clone(),
@@ -438,16 +542,22 @@ pub fn rebuild_layers(
     // inward. Result: fills meet exactly on the smoothed border like the
     // web's clipped-canvas rendering.
     if settings.organic_borders {
-        let mut strip_builders: BTreeMap<u32, (Color, MeshBuilder2d)> = BTreeMap::new();
-        let sea_color = theme::terrain_color("Sea");
+        type StripGroup = (Color, Option<Handle<Image>>, MeshBuilder2d);
+        let mut strip_builders: BTreeMap<(String, u32), StripGroup> = BTreeMap::new();
+        // Off-map water (no neighbor tile) matches the sea fill: textured
+        // pixel water when the ground texture is loaded, flat color if not.
+        let sea_spec = match icons.get("ground", "Sea") {
+            Some(handle) => (Color::WHITE, Some(("Sea".to_string(), handle))),
+            None => (theme::terrain_color("Sea"), None),
+        };
         let mut add_strips = |strips: &[borders::FillStrip]| {
             for strip in strips {
-                let tile_color = tile_fill_color(&tiles[strip.tile_idx], *mode, &fill_map);
-                let other_color = match strip.neighbor_idx {
-                    Some(ni) => tile_fill_color(&tiles[ni], *mode, &fill_map),
-                    None => sea_color,
+                let tile_spec = tile_fill_spec(&tiles[strip.tile_idx], *mode, &fill_map, &icons);
+                let other_spec = match strip.neighbor_idx {
+                    Some(ni) => tile_fill_spec(&tiles[ni], *mode, &fill_map, &icons),
+                    None => sea_spec.clone(),
                 };
-                if tile_color == other_color {
+                if tile_spec == other_spec {
                     continue;
                 }
                 let n = Vec2::new(strip.normal[0] as f32, strip.normal[1] as f32);
@@ -471,21 +581,22 @@ pub fn rebuild_layers(
                         p.y = -p.y;
                     }
                 }
-                strip_builders
-                    .entry(color_key(tile_color))
-                    .or_insert_with(|| (tile_color, MeshBuilder2d::default()))
-                    .1
-                    .add_ribbon(&base_rail, &out_rail);
-                strip_builders
-                    .entry(color_key(other_color))
-                    .or_insert_with(|| (other_color, MeshBuilder2d::default()))
-                    .1
-                    .add_ribbon(&base_rail, &in_rail);
+                for ((color, texture), out) in [(tile_spec, &out_rail), (other_spec, &in_rail)] {
+                    let (tex_key, handle) = match texture {
+                        Some((key, handle)) => (key, Some(handle)),
+                        None => (String::new(), None),
+                    };
+                    strip_builders
+                        .entry((tex_key, color_key(color)))
+                        .or_insert_with(|| (color, handle, MeshBuilder2d::default()))
+                        .2
+                        .add_ribbon(&base_rail, out);
+                }
             }
         };
         add_strips(&map_borders.coast_strips);
         add_strips(&map_borders.country_strips);
-        for (_, (color, builder)) in strip_builders {
+        for (_, (color, texture, builder)) in strip_builders {
             if !builder.is_empty() {
                 spawn_mesh(
                     &mut commands,
@@ -493,6 +604,7 @@ pub fn rebuild_layers(
                     &mut materials,
                     builder.build(),
                     color,
+                    texture,
                     0.2,
                     None,
                 );
@@ -514,6 +626,7 @@ pub fn rebuild_layers(
                 &mut materials,
                 geometry::merged_hex_mesh(&fogged, radius),
                 Color::srgba(0.5, 0.5, 0.5, 0.35),
+                None,
                 0.4,
                 None,
             );
@@ -539,6 +652,7 @@ pub fn rebuild_layers(
             &mut materials,
             geometry::merged_hex_mesh(&centers, HEX_SIZE),
             Color::srgba(20.0 / 255.0, 70.0 / 255.0, 130.0 / 255.0, 0.12),
+            None,
             0.5,
             None,
         );
@@ -572,6 +686,7 @@ pub fn rebuild_layers(
                 &mut materials,
                 builder.build(),
                 Color::srgba(0.0, 40.0 / 255.0, 100.0 / 255.0, 0.45),
+                None,
                 0.55,
                 None,
             );
@@ -591,6 +706,7 @@ pub fn rebuild_layers(
                 &mut materials,
                 builder.build(),
                 Color::srgba(0.0, 0.0, 0.0, 0.08),
+                None,
                 0.6,
                 Some(LodGate::Grid),
             );
@@ -628,6 +744,7 @@ pub fn rebuild_layers(
                 &mut materials,
                 builder.build(),
                 Color::srgba(20.0 / 255.0, 15.0 / 255.0, 10.0 / 255.0, 0.5),
+                None,
                 0.7,
                 Some(LodGate::PastLabels),
             );
@@ -643,6 +760,7 @@ pub fn rebuild_layers(
                 &mut materials,
                 country.build(),
                 Color::srgba(10.0 / 255.0, 5.0 / 255.0, 0.0, 0.9),
+                None,
                 0.8,
                 None,
             );
@@ -655,6 +773,7 @@ pub fn rebuild_layers(
                 &mut materials,
                 coast.build(),
                 Color::srgba(10.0 / 255.0, 5.0 / 255.0, 0.0, 0.85),
+                None,
                 0.9,
                 None,
             );
@@ -668,6 +787,7 @@ pub fn rebuild_layers(
                 &mut materials,
                 country.build(),
                 Color::srgba(10.0 / 255.0, 5.0 / 255.0, 0.0, 0.9),
+                None,
                 0.8,
                 None,
             );
@@ -710,6 +830,7 @@ pub fn rebuild_layers(
                 &mut materials,
                 builder.build(),
                 Color::srgba(68.0 / 255.0, 140.0 / 255.0, 220.0 / 255.0, 0.95),
+                None,
                 1.0,
                 None,
             );
@@ -756,6 +877,7 @@ pub fn rebuild_layers(
                 &mut materials,
                 builder.build(),
                 Color::srgba(100.0 / 255.0, 60.0 / 255.0, 20.0 / 255.0, 0.8),
+                None,
                 1.1,
                 Some(LodGate::Infra),
             );
@@ -782,6 +904,7 @@ pub fn rebuild_layers(
                 &mut materials,
                 dots.build(),
                 Color::srgba(1.0, 1.0, 1.0, 0.7),
+                None,
                 1.4,
                 None,
             );
@@ -791,6 +914,7 @@ pub fn rebuild_layers(
                 &mut materials,
                 outlines.build(),
                 Color::srgba(0.0, 0.0, 0.0, 0.4),
+                None,
                 1.41,
                 None,
             );
@@ -968,5 +1092,209 @@ fn place_ring<F: bevy::ecs::query::QueryFilter>(
             *visibility = Visibility::Visible;
         }
         None => *visibility = Visibility::Hidden,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tile(terrain: &str, owner_color: &str) -> MapTile {
+        MapTile {
+            q: 0,
+            r: 0,
+            map_width: 10,
+            map_height: 10,
+            terrain: terrain.to_string(),
+            owner: String::new(),
+            owner_color: owner_color.to_string(),
+            nation_id: 0,
+            province: String::new(),
+            province_id: None,
+            is_capital: false,
+            is_country_capital: false,
+            is_minor: false,
+            is_incorporated_minor: false,
+            incorporated_nation_id: None,
+            is_anarchic: false,
+            is_prospected: false,
+            resource: None,
+            resource_hidden: false,
+            improvement_level: 0,
+            max_improvement_level: 0,
+            has_railroad: false,
+            has_depot: false,
+            has_port: false,
+            has_fort: false,
+            has_river: false,
+            fort_level: 0,
+            port_blockaded: false,
+            army_unit_count: 0,
+            army_firepower: 0.0,
+            army_composition: None,
+            naval_ship_count: 0,
+            naval_firepower: 0,
+            civilian_on_tile: None,
+            visible: true,
+            visual_group: None,
+        }
+    }
+
+    fn icons_with_ground() -> IconAssets {
+        IconAssets::for_test(&crate::map::icons::GROUND_TEXTURES.map(|name| ("ground", name)))
+    }
+
+    #[test]
+    fn terrain_mode_land_uses_ground_texture_with_white_tint() {
+        let (color, texture) = tile_fill_spec(
+            &tile("Grassland", ""),
+            MapMode::Terrain,
+            &HashMap::new(),
+            &icons_with_ground(),
+        );
+        let (key, _) = texture.expect("grassland ground texture");
+        assert_eq!(key, "Grassland");
+        assert_eq!(color, Color::WHITE);
+    }
+
+    #[test]
+    fn terrain_mode_owned_land_tints_the_texture() {
+        let (color, texture) = tile_fill_spec(
+            &tile("Forest", "Red"),
+            MapMode::Terrain,
+            &HashMap::new(),
+            &icons_with_ground(),
+        );
+        assert_eq!(texture.expect("forest ground texture").0, "Forest");
+        assert_ne!(color, Color::WHITE, "nation tint must survive texturing");
+    }
+
+    #[test]
+    fn sea_is_textured_in_every_mode() {
+        for mode in MapMode::ALL {
+            let (color, texture) = tile_fill_spec(
+                &tile("Sea", ""),
+                mode,
+                &HashMap::new(),
+                &icons_with_ground(),
+            );
+            assert_eq!(texture.expect("sea texture").0, "Sea", "mode {mode:?}");
+            assert_eq!(color, Color::WHITE, "mode {mode:?}");
+        }
+    }
+
+    #[test]
+    fn political_mode_land_stays_flat() {
+        let (color, texture) = tile_fill_spec(
+            &tile("Grassland", ""),
+            MapMode::Political,
+            &HashMap::new(),
+            &icons_with_ground(),
+        );
+        assert!(texture.is_none(), "political land must not be textured");
+        assert_eq!(color, theme::terrain_color("Grassland"));
+    }
+
+    /// Regression (review F-005/F-008): wrap roots are created once and
+    /// reused, so a rebuild for a map of a different width must re-anchor
+    /// them — and the textured materials' UV phase shifts must follow,
+    /// since both derive from the roots' world x.
+    #[test]
+    fn wrap_roots_follow_map_width_changes() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>();
+        app.init_resource::<Assets<ColorMaterial>>();
+        app.init_resource::<ViewModels>();
+        app.init_resource::<MapMode>();
+        app.init_resource::<RenderSettings>();
+        app.init_resource::<BordersCache>();
+        app.insert_resource(icons_with_ground());
+        app.add_systems(Update, rebuild_layers);
+
+        let set_map = |app: &mut App, map_width: i32, version: u64| {
+            let mut tiles = vec![tile("Grassland", ""), tile("Sea", "")];
+            tiles[1].q = 1;
+            for t in &mut tiles {
+                t.map_width = map_width;
+            }
+            let mut vms = app.world_mut().resource_mut::<ViewModels>();
+            vms.map = Some(tiles);
+            vms.version = version;
+        };
+        let root_xs = |app: &mut App| -> Vec<f32> {
+            let mut xs: Vec<f32> = app
+                .world_mut()
+                .query_filtered::<&Transform, With<WrapRoot>>()
+                .iter(app.world())
+                .map(|t| t.translation.x)
+                .collect();
+            xs.sort_by(f32::total_cmp);
+            xs
+        };
+        // Distinct UV phase offsets of the textured materials referenced by
+        // the *live* static-layer entities (stale assets from despawned
+        // layers may linger in Assets, so go through the entities).
+        let texture_phases = |app: &mut App| -> Vec<f32> {
+            let handles: Vec<Handle<ColorMaterial>> = app
+                .world_mut()
+                .query_filtered::<&MeshMaterial2d<ColorMaterial>, With<StaticLayer>>()
+                .iter(app.world())
+                .map(|m| m.0.clone())
+                .collect();
+            let materials = app.world().resource::<Assets<ColorMaterial>>();
+            let mut phases: Vec<f32> = handles
+                .iter()
+                .filter_map(|h| materials.get(h))
+                .filter(|m| m.texture.is_some())
+                .map(|m| m.uv_transform.translation.x)
+                .collect();
+            phases.sort_by(f32::total_cmp);
+            phases.dedup();
+            phases
+        };
+        let expected_phases =
+            |width: f32| vec![-width / GROUND_TEX_WORLD, 0.0, width / GROUND_TEX_WORLD];
+
+        set_map(&mut app, 10, 1);
+        app.update();
+        let width_a = geometry::world_width_px(10);
+        assert_eq!(root_xs(&mut app), vec![-width_a, 0.0, width_a]);
+        assert_eq!(texture_phases(&mut app), expected_phases(width_a));
+
+        set_map(&mut app, 20, 2);
+        app.update();
+        let width_b = geometry::world_width_px(20);
+        assert_eq!(
+            root_xs(&mut app),
+            vec![-width_b, 0.0, width_b],
+            "roots must re-anchor to the new map width"
+        );
+        assert_eq!(
+            texture_phases(&mut app),
+            expected_phases(width_b),
+            "textured UV phase shifts must follow the new map width"
+        );
+    }
+
+    #[test]
+    fn missing_ground_texture_falls_back_to_flat_fill() {
+        let no_icons = IconAssets::for_test(&[]);
+        let (land_color, land_texture) = tile_fill_spec(
+            &tile("Desert", ""),
+            MapMode::Terrain,
+            &HashMap::new(),
+            &no_icons,
+        );
+        assert!(land_texture.is_none());
+        assert_eq!(land_color, theme::terrain_color("Desert"));
+
+        let (sea_color, sea_texture) = tile_fill_spec(
+            &tile("Sea", ""),
+            MapMode::Political,
+            &HashMap::new(),
+            &no_icons,
+        );
+        assert!(sea_texture.is_none());
+        assert_eq!(sea_color, theme::terrain_color("Sea"));
     }
 }
