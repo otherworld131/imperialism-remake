@@ -14,6 +14,7 @@ use crate::game::resources::{
 };
 use crate::game::selection;
 use crate::game::turn_runner::{self, ActiveSkip, ActiveTurn, BusyProgress};
+use crate::intro;
 use crate::map::camera;
 use crate::map::icons;
 use crate::map::layers::{self, BordersCache, MapMode};
@@ -1161,7 +1162,11 @@ pub fn run_game() {
     let m10 = std::env::var("M10_DEBUG").is_ok();
     let screenshot = std::env::var("MAP_SCREENSHOT").is_ok();
     let perf_stats = std::env::var("PERF_STATS").as_deref() == Ok("1");
-    let skip_setup = human || observer_shortcut || (screenshot && !m10);
+    // INTRO_DEBUG=1 keeps the title splash even under MAP_SCREENSHOT so it
+    // can be captured like any other screen. It scopes to the screenshot
+    // shortcut only — HUMAN_GAME / OBSERVER_GAME fast boots are unaffected.
+    let intro_debug = std::env::var("INTRO_DEBUG").as_deref() == Ok("1");
+    let skip_setup = human || observer_shortcut || (screenshot && !m10 && !intro_debug);
 
     let (initial_state, session) = if skip_setup {
         let env_dim = |key: &str, default: i32| -> i32 {
@@ -1184,8 +1189,12 @@ pub fn run_game() {
             );
         }
         (AppState::InGame, Some(Session::from_game(game)))
-    } else {
+    } else if m10 {
+        // The M10 setup-flow driver scripts clicks against the setup UI —
+        // it must land there directly, not on the title splash.
         (AppState::Setup, None)
+    } else {
+        (AppState::Intro, None)
     };
     let meta = session
         .as_ref()
@@ -1297,6 +1306,15 @@ pub fn run_game() {
                 map_hud::spawn_busy_overlay,
                 setup::ui::init_setup,
             ),
+        )
+        // Title splash: shown before setup, dismissed by any input. The
+        // spawn runs in Update (guarded, once) rather than OnEnter — the
+        // initial state transition precedes Startup's asset loading.
+        .add_systems(OnExit(AppState::Intro), intro::cleanup_intro)
+        .add_systems(
+            Update,
+            (intro::setup_intro, intro::intro_input, intro::blink_prompt)
+                .run_if(in_state(AppState::Intro)),
         )
         // The in-game HUD chrome exists only once a game starts.
         .add_systems(

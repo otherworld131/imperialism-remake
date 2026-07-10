@@ -43,7 +43,8 @@ fn main() {
             .strip_prefix(&src_root)
             .expect("svg under source root");
         let out_path = out_root.join(rel.with_extension("png"));
-        match rasterize(svg_path, &out_path) {
+        let native = rel.starts_with("splash");
+        match rasterize(svg_path, &out_path, native) {
             Ok(()) => {
                 written += 1;
                 let group = rel
@@ -88,17 +89,25 @@ fn collect_svgs(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Rasterize one SVG to a 64x64 transparent-background PNG, then verify the
-/// written file decodes back to the expected dimensions.
-fn rasterize(svg_path: &Path, out_path: &Path) -> Result<(), String> {
+/// Rasterize one SVG to a transparent-background PNG, then verify the
+/// written file decodes back to the expected dimensions. Icons render at
+/// 64x64; the `splash/` group renders at the SVG's native pixel grid
+/// (one output pixel per authored pixel — the game upscales with
+/// nearest-neighbor at draw time).
+fn rasterize(svg_path: &Path, out_path: &Path, native: bool) -> Result<(), String> {
     let data = std::fs::read(svg_path).map_err(|e| format!("read: {e}"))?;
     let tree = usvg::Tree::from_data(&data, &usvg::Options::default())
         .map_err(|e| format!("parse: {e}"))?;
 
-    let mut pixmap = tiny_skia::Pixmap::new(SIZE, SIZE).ok_or("pixmap alloc")?;
     let size = tree.size();
+    let (out_w, out_h) = if native {
+        (size.width().round() as u32, size.height().round() as u32)
+    } else {
+        (SIZE, SIZE)
+    };
+    let mut pixmap = tiny_skia::Pixmap::new(out_w, out_h).ok_or("pixmap alloc")?;
     let transform =
-        tiny_skia::Transform::from_scale(SIZE as f32 / size.width(), SIZE as f32 / size.height());
+        tiny_skia::Transform::from_scale(out_w as f32 / size.width(), out_h as f32 / size.height());
     resvg::render(&tree, transform, &mut pixmap.as_mut());
 
     if let Some(parent) = out_path.parent() {
@@ -108,12 +117,12 @@ fn rasterize(svg_path: &Path, out_path: &Path) -> Result<(), String> {
         .save_png(out_path)
         .map_err(|e| format!("write png: {e}"))?;
 
-    // Verification pass: the PNG on disk must decode to a 64x64 image.
+    // Verification pass: the PNG on disk must decode at the expected size.
     let bytes = std::fs::read(out_path).map_err(|e| format!("re-read: {e}"))?;
     let decoded = tiny_skia::Pixmap::decode_png(&bytes).map_err(|e| format!("decode: {e}"))?;
-    if decoded.width() != SIZE || decoded.height() != SIZE {
+    if decoded.width() != out_w || decoded.height() != out_h {
         return Err(format!(
-            "decoded size {}x{}, expected {SIZE}x{SIZE}",
+            "decoded size {}x{}, expected {out_w}x{out_h}",
             decoded.width(),
             decoded.height()
         ));

@@ -7,7 +7,9 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ground
 import pixelkit
+import splash
 import sprites
 import sprites2
 import sprites3
@@ -16,7 +18,14 @@ import sprites4
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
 ALL = dict(sprites.BATCH1)
-for batch in (sprites.WORK_FRAMES, sprites2.BATCH2, sprites3.BATCH3, sprites4.BATCH4):
+for batch in (
+    sprites.WORK_FRAMES,
+    sprites2.BATCH2,
+    sprites3.BATCH3,
+    sprites4.BATCH4,
+    ground.GROUND,
+    splash.SPLASH,
+):
     ALL.update(dict(batch))
 
 for name, fn in sorted(ALL.items()):

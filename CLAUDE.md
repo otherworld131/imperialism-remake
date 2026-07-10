@@ -206,6 +206,7 @@ cargo run --release --features gui --bin imperialism-gui
 | `WIDGET_GALLERY=1` | Overlay the debug widget gallery |
 | `PERF_STATS=1` | FPS diagnostics + automated perf run (end turn, zoom-out pan, frame-pacing summary, exit) |
 | `MAP_SCREENSHOT=<path>` | Capture the window after settling, then exit (`MAP_DEBUG_MODE`, `MAP_DEBUG_ZOOM`, `MAP_DEBUG_FOG`, `MAP_DEBUG_STRAIGHT`, `MAP_SCREENSHOT_FRAME` tweak the shot) |
+| `INTRO_DEBUG=1` | Keep the title splash under `MAP_SCREENSHOT` (which otherwise skips straight into a game) so the intro screen can be captured |
 | `M6_DEBUG`…`M10_DEBUG` | Scripted interaction drivers (units/trade/diplomacy/battles/setup flows) for screenshot verification — see `crates/presentation/src/app.rs` |
 
 Linux/Wayland users can opt into the native Wayland backend with

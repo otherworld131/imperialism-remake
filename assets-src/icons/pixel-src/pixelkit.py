@@ -31,12 +31,14 @@ PAL = {
 
 
 class Canvas:
-    def __init__(self, size=SIZE):
+    def __init__(self, size=SIZE, height=None):
         self.size = size
-        self.g = [[None] * size for _ in range(size)]
+        self.w = size
+        self.h = height if height is not None else size
+        self.g = [[None] * self.w for _ in range(self.h)]
 
     def px(self, x, y, c):
-        if 0 <= x < self.size and 0 <= y < self.size:
+        if 0 <= x < self.w and 0 <= y < self.h:
             self.g[y][x] = c
 
     def hline(self, x0, x1, y, c):
@@ -83,12 +85,12 @@ class Canvas:
     def outline_silhouette(self, c="outline"):
         """1px outline around every non-transparent region (drawn outside)."""
         add = []
-        for y in range(self.size):
-            for x in range(self.size):
+        for y in range(self.h):
+            for x in range(self.w):
                 if self.g[y][x] is None:
                     for dx, dy in ((1,0),(-1,0),(0,1),(0,-1)):
                         nx, ny = x + dx, y + dy
-                        if 0 <= nx < self.size and 0 <= ny < self.size \
+                        if 0 <= nx < self.w and 0 <= ny < self.h \
                                 and self.g[ny][nx] not in (None, c):
                             add.append((x, y)); break
         for x, y in add:
@@ -97,33 +99,33 @@ class Canvas:
 
 def to_svg(canvas):
     """Emit pixel-rect SVG, horizontal runs merged. viewBox matches grid."""
-    s = canvas.size
+    w, h = canvas.w, canvas.h
     rows = []
-    for y in range(s):
+    for y in range(h):
         x = 0
-        while x < s:
+        while x < w:
             c = canvas.g[y][x]
             if c is None:
                 x += 1; continue
             x0 = x
-            while x < s and canvas.g[y][x] == c:
+            while x < w and canvas.g[y][x] == c:
                 x += 1
             rows.append(f'<rect x="{x0}" y="{y}" width="{x - x0}" height="1" fill="{PAL[c]}"/>')
     body = "\n".join(rows)
-    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {s} {s}" '
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" '
             f'shape-rendering="crispEdges">\n{body}\n</svg>\n')
 
 
 def to_png(canvas, path, scale=2):
-    s = canvas.size
-    im = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-    for y in range(s):
-        for x in range(s):
+    w, h = canvas.w, canvas.h
+    im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    for y in range(h):
+        for x in range(w):
             c = canvas.g[y][x]
             if c is not None:
-                h = PAL[c].lstrip("#")
-                im.putpixel((x, y), tuple(int(h[i:i+2], 16) for i in (0, 2, 4)) + (255,))
-    im = im.resize((s * scale, s * scale), Image.NEAREST)
+                hx = PAL[c].lstrip("#")
+                im.putpixel((x, y), tuple(int(hx[i:i+2], 16) for i in (0, 2, 4)) + (255,))
+    im = im.resize((w * scale, h * scale), Image.NEAREST)
     im.save(path)
     return im
 

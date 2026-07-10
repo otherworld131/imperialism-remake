@@ -165,3 +165,32 @@ each tile reads as art (mountains, forest, …) rather than a flat tint.
 | Desert | `crates/presentation/assets/icons/terrain/Desert.png` | Sun over a dune with a cactus |
 | Tundra | `crates/presentation/assets/icons/terrain/Tundra.png` | Snowfield with a bare shrub and snowflake |
 | Grassland | `crates/presentation/assets/icons/terrain/Grassland.png` | Tufts of grass blades |
+
+## ground/ (8)
+
+Seamlessly tileable ground textures (authored in
+`pixel-src/ground.py`), repeated across the merged tile-fill meshes with
+world-aligned UVs. Terrain map mode uses them for land; the sea texture is
+used in every map mode. Unlike the icon groups these fill all 32×32 pixels
+— edit them only with tileability in mind (every motif wraps at the edges).
+
+| Name | Output | Pattern |
+|------|--------|---------|
+| Grassland | `crates/presentation/assets/icons/ground/Grassland.png` | Meadow green, grass tufts, sparse straw flowers |
+| Hills | `crates/presentation/assets/icons/ground/Hills.png` | Tan folds with diagonal contour dashes |
+| Forest | `crates/presentation/assets/icons/ground/Forest.png` | Deep green with underbrush clumps |
+| Mountain | `crates/presentation/assets/icons/ground/Mountain.png` | Grey scree, crag dashes, snow flecks |
+| Desert | `crates/presentation/assets/icons/ground/Desert.png` | Sand with wind-combed ripple dashes |
+| Swamp | `crates/presentation/assets/icons/ground/Swamp.png` | Murk green with glinting pools |
+| Tundra | `crates/presentation/assets/icons/ground/Tundra.png` | Pale frost with snow drifts |
+| Sea | `crates/presentation/assets/icons/ground/Sea.png` | Calm blue with staggered wave crests |
+
+## splash/ (1)
+
+Full-scene pixel art (authored in `pixel-src/splash.py`). Unlike the icon
+groups, gen_assets rasterizes this group at the SVG's **native pixel grid**
+(no 64×64 downscale); the game upscales with nearest-neighbor at draw time.
+
+| Name | Output | Scene |
+|------|--------|-------|
+| Title | `crates/presentation/assets/icons/splash/Title.png` | 320×180 dawn landscape for the title screen: sun over the sea, mountains, hill farms, brick mill, steam locomotive, three-mast merchantman. Title/prompt text is engine-side (pixel font), not baked in. |

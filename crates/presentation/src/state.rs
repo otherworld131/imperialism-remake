@@ -3,12 +3,14 @@
 
 use bevy::prelude::*;
 
-/// Top-level app mode: the game-setup flow (config → preview → capital) or
-/// a live game. [`Screen`] only matters while `InGame`; during `Setup` it
-/// stays on the default `Map` so the preview map renders underneath the
-/// setup chrome.
+/// Top-level app mode: the title splash, the game-setup flow (config →
+/// preview → capital), or a live game. [`Screen`] only matters while
+/// `InGame`; during `Setup` it stays on the default `Map` so the preview
+/// map renders underneath the setup chrome. Debug shortcuts that skip
+/// setup also skip `Intro` and boot straight into `InGame`.
 #[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum AppState {
+    Intro,
     #[default]
     Setup,
     InGame,

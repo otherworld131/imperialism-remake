@@ -6,6 +6,7 @@
 
 pub mod app;
 pub mod game;
+pub mod intro;
 pub mod map;
 pub mod screens;
 pub mod setup;
