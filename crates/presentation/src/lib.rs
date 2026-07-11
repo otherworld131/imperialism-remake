@@ -12,6 +12,7 @@ pub mod screens;
 pub mod setup;
 pub mod state;
 pub mod theme;
+pub mod ui_scale;
 pub mod widgets;
 
 pub use app::run_game;

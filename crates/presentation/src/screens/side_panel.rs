@@ -16,7 +16,7 @@ use crate::screens::panels;
 use crate::theme::{self, Theme};
 use crate::widgets::{
     self, CheckboxProps, CheckboxToggled, DropdownChanged, DropdownOpenUp, DropdownProps,
-    ScrollProps, UiDropdown,
+    ScrollProps, SliderCommitted, UiDropdown,
 };
 
 pub const PANEL_WIDTH: f32 = 280.0;
@@ -32,6 +32,10 @@ pub struct NationsSection;
 
 #[derive(Component)]
 pub struct MapModeDropdown;
+
+/// The "UI size" interface-scale slider in the UI section.
+#[derive(Component)]
+pub struct UiScaleSlider;
 
 #[derive(Component, Clone, Copy, Debug)]
 pub enum ToggleKind {
@@ -54,6 +58,7 @@ pub fn setup_side_panel(
     theme: Res<Theme>,
     settings: Res<RenderSettings>,
     news_debug: Res<NewsDebugSettings>,
+    ui_scale: Res<bevy::ui::UiScale>,
 ) {
     // ── Right-hand panel ─────────────────────────────────────────────────
     commands
@@ -133,6 +138,43 @@ pub fn setup_side_panel(
                     (ToggleKind::ShowArmies, "Show armies", settings.show_armies),
                 ];
                 spawn_toggles(content, &theme, &ui_toggles);
+
+                // Interface scale (web parity: the side-panel font slider).
+                content
+                    .spawn(Node {
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(8.0),
+                        margin: UiRect::vertical(Val::Px(4.0)),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        row.spawn((
+                            Text::new("UI size"),
+                            theme.font(12.0),
+                            TextColor(theme::TEXT),
+                        ));
+                        let slider = widgets::spawn_slider(
+                            row,
+                            &theme,
+                            widgets::SliderProps {
+                                min: crate::ui_scale::MIN_SCALE,
+                                max: crate::ui_scale::MAX_SCALE,
+                                step: 0.05,
+                                value: ui_scale.0,
+                                width: Val::Px(130.0),
+                                format: Some(std::sync::Arc::new(|v: f32| {
+                                    format!("{:.0}%", v * 100.0)
+                                })),
+                                ..default()
+                            },
+                        );
+                        row.commands().entity(slider).insert((
+                            UiScaleSlider,
+                            widgets::TooltipText(
+                                "Interface text & icon scale (also Ctrl + / Ctrl - / Ctrl 0 on any screen)".into(),
+                            ),
+                        ));
+                    });
 
                 section_title(content, &theme, "Debug");
                 let debug_toggles = [
@@ -253,6 +295,46 @@ fn spawn_toggles(
             },
         );
         parent.commands().entity(checkbox).insert(*kind);
+    }
+}
+
+/// Apply commits from the "UI size" slider to the global interface scale.
+pub fn handle_ui_scale_slider(
+    mut commits: MessageReader<SliderCommitted>,
+    sliders: Query<(), With<UiScaleSlider>>,
+    mut ui_scale: ResMut<bevy::ui::UiScale>,
+) {
+    for commit in commits.read() {
+        if sliders.get(commit.entity).is_ok() {
+            crate::ui_scale::apply_scale(&mut ui_scale, commit.value);
+        }
+    }
+}
+
+/// Reverse sync: when the scale changes elsewhere (Ctrl+/-/0 hotkeys), push
+/// the new value into the slider so its thumb and label stay truthful.
+pub fn sync_ui_scale_slider(
+    ui_scale: Res<bevy::ui::UiScale>,
+    mut commands: Commands,
+    mut sliders: Query<
+        (
+            Entity,
+            &bevy::ui_widgets::SliderValue,
+            &mut widgets::UiSliderDrag,
+        ),
+        With<UiScaleSlider>,
+    >,
+) {
+    if !ui_scale.is_changed() {
+        return;
+    }
+    for (entity, value, mut drag) in &mut sliders {
+        if !drag.dragging && (value.0 - ui_scale.0).abs() > 0.001 {
+            commands
+                .entity(entity)
+                .insert(bevy::ui_widgets::SliderValue(ui_scale.0));
+            drag.value = ui_scale.0;
+        }
     }
 }
 

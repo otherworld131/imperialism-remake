@@ -1,0 +1,86 @@
+//! Persistent interface scale: one multiplier applied through Bevy's global
+//! [`UiScale`] resource, so every UI panel, text run, and icon grows
+//! together (the map itself is world-space and scales with camera zoom).
+//! Mirrors the web frontend's side-panel font-size slider.
+//!
+//! Adjustable from the side panel's "UI" section and via Ctrl+`+` /
+//! Ctrl+`-` / Ctrl+`0` on any screen. The value persists to
+//! `./settings.json` next to `./saves/`.
+
+use bevy::prelude::*;
+use bevy::ui::UiScale;
+use serde::{Deserialize, Serialize};
+
+pub const MIN_SCALE: f32 = 0.8;
+pub const MAX_SCALE: f32 = 1.75;
+/// Fresh-install default: deliberately above 1.0 — the UI was authored
+/// small against a 1280×720 window and reads tiny on modern displays.
+pub const DEFAULT_SCALE: f32 = 1.25;
+const HOTKEY_STEP: f32 = 0.1;
+const SETTINGS_FILE: &str = "settings.json";
+
+/// On-disk shape of `./settings.json`. Unknown fields are round-tripped so
+/// a scale change never erases settings written by newer code.
+#[derive(Serialize, Deserialize, Default)]
+struct PersistedSettings {
+    ui_scale: Option<f32>,
+    #[serde(flatten)]
+    other: serde_json::Map<String, serde_json::Value>,
+}
+
+pub fn load_ui_scale() -> f32 {
+    std::fs::read_to_string(SETTINGS_FILE)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<PersistedSettings>(&raw).ok())
+        .and_then(|settings| settings.ui_scale)
+        .map_or(DEFAULT_SCALE, |scale| scale.clamp(MIN_SCALE, MAX_SCALE))
+}
+
+fn save_ui_scale(scale: f32) {
+    // Read-modify-write so future settings fields survive a scale change.
+    let mut settings = std::fs::read_to_string(SETTINGS_FILE)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<PersistedSettings>(&raw).ok())
+        .unwrap_or_default();
+    settings.ui_scale = Some(scale);
+    match serde_json::to_string_pretty(&settings) {
+        Ok(json) => {
+            if let Err(err) = std::fs::write(SETTINGS_FILE, json) {
+                warn!("failed to persist {SETTINGS_FILE}: {err}");
+            }
+        }
+        Err(err) => warn!("failed to serialize settings: {err}"),
+    }
+}
+
+/// Set, clamp, and persist a new scale.
+pub fn apply_scale(ui_scale: &mut UiScale, scale: f32) {
+    let scale = (scale * 100.0).round() / 100.0;
+    let scale = scale.clamp(MIN_SCALE, MAX_SCALE);
+    if (ui_scale.0 - scale).abs() > f32::EPSILON {
+        ui_scale.0 = scale;
+        save_ui_scale(scale);
+    }
+}
+
+/// Ctrl+`+` / Ctrl+`-` step the interface scale, Ctrl+`0` resets it —
+/// available on every screen (browser-style zoom keys).
+pub fn ui_scale_hotkeys(
+    keys: Res<ButtonInput<KeyCode>>,
+    focus: Res<bevy::input_focus::InputFocus>,
+    mut ui_scale: ResMut<UiScale>,
+) {
+    if focus.0.is_some()
+        || !(keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight))
+    {
+        return;
+    }
+    let current = ui_scale.0;
+    if keys.just_pressed(KeyCode::Equal) || keys.just_pressed(KeyCode::NumpadAdd) {
+        apply_scale(&mut ui_scale, current + HOTKEY_STEP);
+    } else if keys.just_pressed(KeyCode::Minus) || keys.just_pressed(KeyCode::NumpadSubtract) {
+        apply_scale(&mut ui_scale, current - HOTKEY_STEP);
+    } else if keys.just_pressed(KeyCode::Digit0) || keys.just_pressed(KeyCode::Numpad0) {
+        apply_scale(&mut ui_scale, DEFAULT_SCALE);
+    }
+}

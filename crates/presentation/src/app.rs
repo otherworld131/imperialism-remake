@@ -1235,6 +1235,9 @@ pub fn run_game() {
             .add_systems(Update, gallery::gallery_interactions);
     }
     app.insert_state(initial_state)
+        // Persisted interface scale (side-panel slider + Ctrl+/-/0).
+        .insert_resource(bevy::ui::UiScale(crate::ui_scale::load_ui_scale()))
+        .add_systems(Update, crate::ui_scale::ui_scale_hotkeys)
         .init_state::<TurnPhase>()
         .init_state::<Screen>()
         .init_resource::<industry::IndustryUi>()
@@ -1313,7 +1316,13 @@ pub fn run_game() {
         .add_systems(OnExit(AppState::Intro), intro::cleanup_intro)
         .add_systems(
             Update,
-            (intro::setup_intro, intro::intro_input, intro::blink_prompt)
+            (
+                intro::setup_intro,
+                // Ordered before the modal kit's Esc handling so one key
+                // press never both closes the Load dialog and quits.
+                intro::intro_input.before(widgets::modal::esc_pops_top_modal),
+                intro::intro_menu,
+            )
                 .run_if(in_state(AppState::Intro)),
         )
         // The in-game HUD chrome exists only once a game starts.
@@ -1567,6 +1576,8 @@ pub fn run_game() {
                 map_hud::update_mode_display,
                 map_hud::sync_viewpoint_dropdown,
                 side_panel::handle_toggles,
+                side_panel::handle_ui_scale_slider,
+                side_panel::sync_ui_scale_slider,
                 side_panel::handle_mode_dropdown,
                 side_panel::sync_mode_dropdown,
                 side_panel::update_selected_info,

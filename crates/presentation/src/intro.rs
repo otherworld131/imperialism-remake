@@ -1,22 +1,29 @@
 //! Title screen: the full-screen pixel-art splash (`icons/splash/Title.png`,
-//! 320×180 upscaled with nearest-neighbor) with the game title and a
-//! "press any key" prompt. Shown as [`AppState::Intro`] before the setup
-//! flow; any key or mouse button continues to [`AppState::Setup`]. Debug
+//! 320×180 upscaled with nearest-neighbor) with the game title and a main
+//! menu (New Game / Load Game / Quit). Shown as [`AppState::Intro`] before
+//! the setup flow. Enter is a New Game shortcut, Escape quits. Debug
 //! shortcuts that skip setup (`HUMAN_GAME`, `OBSERVER_GAME`,
 //! `MAP_SCREENSHOT`) boot straight into a game and never enter it.
 
 use bevy::prelude::*;
 
 use crate::map::icons::IconAssets;
+use crate::screens::saveload;
 use crate::state::AppState;
 use crate::theme::{self, Theme};
+use crate::widgets::{self, ButtonActivated, ButtonProps, ModalStack};
 
 #[derive(Component)]
 pub struct IntroRoot;
 
-/// The blinking "press any key" line.
 #[derive(Component)]
-pub struct IntroPrompt;
+pub struct IntroNewGameBtn;
+
+#[derive(Component)]
+pub struct IntroLoadBtn;
+
+#[derive(Component)]
+pub struct IntroQuitBtn;
 
 /// Spawn the intro UI on the first `Update` frame of the `Intro` state —
 /// not `OnEnter`: the initial state transition fires before `Startup`, so
@@ -70,44 +77,92 @@ pub fn setup_intro(
                 color: Color::srgba(0.0, 0.0, 0.0, 0.6),
             },
         ));
-        // Spacer pushes the prompt to the lower part of the screen.
+        // Spacer pushes the menu to the lower part of the screen.
         parent.spawn(Node {
             flex_grow: 1.0,
             ..default()
         });
-        parent.spawn((
-            Text::new("Press any key to begin"),
-            theme.font(24.0),
-            TextColor(theme::TEXT),
-            TextShadow {
-                offset: Vec2::splat(2.0),
-                color: Color::srgba(0.0, 0.0, 0.0, 0.7),
-            },
-            Node {
-                margin: UiRect::bottom(Val::Percent(3.0)),
-                ..default()
-            },
-            IntroPrompt,
-        ));
+        // Main menu on a dim plate so the buttons read over the artwork.
+        parent
+            .spawn((
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Stretch,
+                    row_gap: Val::Px(10.0),
+                    padding: UiRect::all(Val::Px(14.0)),
+                    margin: UiRect::bottom(Val::Percent(4.0)),
+                    border_radius: BorderRadius::all(Val::Px(4.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.05, 0.05, 0.1, 0.55)),
+            ))
+            .with_children(|menu| {
+                for (label, width) in [("New Game", 220.0), ("Load Game", 220.0), ("Quit", 220.0)] {
+                    let button = widgets::spawn_button(
+                        menu,
+                        &theme,
+                        ButtonProps {
+                            label: label.into(),
+                            width: Some(Val::Px(width)),
+                            font_size: 18.0,
+                            ..default()
+                        },
+                    );
+                    let mut commands = menu.commands();
+                    let mut entity = commands.entity(button);
+                    match label {
+                        "New Game" => entity.insert(IntroNewGameBtn),
+                        "Load Game" => entity.insert(IntroLoadBtn),
+                        _ => entity.insert(IntroQuitBtn),
+                    };
+                }
+            });
     });
 }
 
-/// Gentle blink on the prompt line.
-pub fn blink_prompt(time: Res<Time>, mut prompts: Query<&mut TextColor, With<IntroPrompt>>) {
-    let alpha = 0.55 + 0.45 * (time.elapsed_secs() * 2.4).sin();
-    for mut color in &mut prompts {
-        color.0 = color.0.with_alpha(alpha.clamp(0.0, 1.0));
+/// Menu clicks: New Game / Load Game (opens the shared load modal over the
+/// setup flow) / Quit.
+pub fn intro_menu(
+    mut activations: MessageReader<ButtonActivated>,
+    new_game: Query<(), With<IntroNewGameBtn>>,
+    load: Query<(), With<IntroLoadBtn>>,
+    quit: Query<(), With<IntroQuitBtn>>,
+    mut commands: Commands,
+    mut stack: ResMut<ModalStack>,
+    theme: Res<Theme>,
+    mut next_state: ResMut<NextState<AppState>>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    for ButtonActivated(entity) in activations.read() {
+        if new_game.get(*entity).is_ok() {
+            next_state.set(AppState::Setup);
+        } else if load.get(*entity).is_ok() {
+            // Stay on the title screen: the modal's confirm path drives the
+            // async load job, which installs the session and switches to
+            // InGame by itself. Cancelling the modal returns to the menu.
+            saveload::open_load_modal(&mut commands, &mut stack, &theme);
+        } else if quit.get(*entity).is_ok() {
+            exit.write(AppExit::Success);
+        }
     }
 }
 
-/// Any key or mouse button dismisses the intro.
+/// Keyboard shortcuts: Enter starts a new game, Escape quits. Inert while
+/// a modal (the Load Game dialog) is open — Escape then belongs to the
+/// modal kit's close-top-modal handling, not to app exit.
 pub fn intro_input(
     keys: Res<ButtonInput<KeyCode>>,
-    mouse: Res<ButtonInput<MouseButton>>,
+    stack: Res<ModalStack>,
     mut next_state: ResMut<NextState<AppState>>,
+    mut exit: MessageWriter<AppExit>,
 ) {
-    if keys.get_just_pressed().next().is_some() || mouse.get_just_pressed().next().is_some() {
+    if !stack.is_empty() {
+        return;
+    }
+    if keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::NumpadEnter) {
         next_state.set(AppState::Setup);
+    } else if keys.just_pressed(KeyCode::Escape) {
+        exit.write(AppExit::Success);
     }
 }
 
