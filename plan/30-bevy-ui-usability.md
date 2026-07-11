@@ -1,0 +1,257 @@
+# 30 — Bevy UI Usability Improvements
+
+Source: full-screen usability review of the native Bevy GUI (2026-07-11),
+one screenshot per screen at the 125% default interface scale, after the
+pixel-art map/font/title-screen work landed. Focus: interface usability —
+the screens work but read as "messy to use".
+
+Conventions for this file: items are grouped by priority (P1 = biggest
+usability wins, P3 = polish). Every item names the primary files and a
+verification strategy. Screenshot verification uses the existing debug
+hooks (`MAP_SCREENSHOT` + `M6..M10_DEBUG` / `INTRO_DEBUG` scripts — see
+`crates/presentation/src/app.rs`).
+
+**Before/after requirement (mandatory):** every implemented change is
+presented to the user as a *pair* of screenshots — the same screen, same
+debug script, same zoom/scale, captured once from the commit before the
+change ("before") and once after ("after") — so the improvement is
+directly comparable. Capture the "before" shot first (e.g. via
+`git stash` or from the parent commit) and keep both under the task's
+scratch/verification notes until the user has reviewed them.
+
+---
+
+## Cross-cutting principles (apply to every item)
+
+These five findings recur on almost every screen. Individual checklist
+items below reference them as **CC-1..CC-5**.
+
+- **CC-1 Containment.** Logical groups (a production chain, a warehouse
+  section, an army list) must sit inside a visible container — the widget
+  kit's inset panel style (`theme::INSET_BG` + 1px `theme::BORDER`, 4px
+  radius, 8–10px padding) — not float as bare text on the screen
+  background separated only by gold headings.
+- **CC-2 Alarm-color policy.** Red is reserved for "this hurts you next
+  turn" (starvation, bankruptcy, unit loss). Amber/gold for "shortfall you
+  may want to fix". Neutral gray for routine zero/negative numbers (AI
+  treasury deltas, empty allocations on turn 1). Never color a whole row
+  red for a state the player hasn't had a chance to act on yet.
+- **CC-3 Dead ends carry directions.** Every disabled state ("No
+  building", "Not enough arms", "Insufficient resources") gets one
+  actionable hint naming the screen/control that unblocks it, e.g.
+  "Not enough arms — set the Steel→Arms slider in Industry (F3)".
+- **CC-4 No cryptic micro-labels.** Compact indicators (`0/6`, `▼4`,
+  `∞`, `35 (35)`, the Trade "GP" dot) get either a real label, an
+  inline legend, or at minimum a `widgets::TooltipText`. Meaning-bearing
+  ones (shortfall vs. demand) get words, not just symbols.
+- **CC-5 Uniform screen chrome.** One pattern for every full-screen
+  overlay: title left, screen-specific tabs center, "Close (Esc)"
+  top-right, primary action bottom-right. News and Battles currently
+  deviate; Diplomacy is a map mode and exempt.
+
+---
+
+## P1 — Industry screen redesign (`screens/industry.rs`)
+
+The messiest screen: three unbounded text columns, nearly every element in
+a dead state with no guidance, mixed affordances (some chains have
+sliders, some only text).
+
+- [ ] **Production-chain cards.** Each chain (Timber→Lumber,
+  Lumber→Furniture, Coal+Iron→Steel, Steel→Hardware, Steel→Arms,
+  Cotton/Wool→Fabric, Fabric→Clothing, Grain+Fruit+Meat→Canned) becomes a
+  card (CC-1): chain icon(s) + arrow diagram, building status line,
+  output-allocation slider *when a building exists*. Chains without a
+  building render one muted card with the build hint (CC-3), not a
+  heading + two gray lines.
+  - Verify: `M7_DEBUG=industry` screenshot — every chain visually
+    contained; no bare "No building" text outside a card.
+- [ ] **Name the sliders.** The unlabeled sliders (currently only next to
+  Steel→Arms and Canned) get a label ("Output") and the `∞` toggle gets a
+  tooltip ("Unlimited — produce as inputs allow") (CC-4).
+  - Verify: screenshot + `TooltipText` present in code review.
+- [ ] **Collapse Army Recruitment while locked.** Nine rows of "Not
+  enough arms" collapse into one disabled group: header, muted unit list
+  (name + cost only, single line each), and ONE explanation with the
+  unblock hint (CC-3). Expands to full rows once `Arms > 0`.
+  - Verify: `M7_DEBUG=industry` screenshot on turn 1 (collapsed) and a
+    scripted variant after producing arms (expanded).
+- [ ] **Label the header treasury.** `$10000` → "Treasury $10,000"
+  (thousands separator; the Ledger and Tech screens already write it
+  this way).
+  - Verify: screenshot.
+- [ ] **Hide AI aims behind debug.** The green "aim N" annotations in the
+  Warehouse column are AI-target debug data; show them only when the
+  side panel's "Show AI reasoning" (or a dedicated debug toggle) is on.
+  The existing "Debug: show AI targets" checkbox already exists in this
+  screen — respect it for the aim annotations too.
+  - Verify: screenshot with toggle off shows no green aims.
+- [ ] **Warehouse grouping.** Resources / Materials / Goods columns get
+  inset containers (CC-1) and right-aligned counts; keep icons.
+  - Verify: screenshot.
+
+## P1 — Transport screen (`screens/transport.rs`)
+
+- [ ] **Alarm-color pass (CC-2).** Commodity rows are neutral by default;
+  amber border when allocation < food requirement; red ONLY when the
+  projected result is starvation this turn (workers unfed). On turn 1
+  with zero allocations, nothing should be red.
+  - Verify: `M7_DEBUG=transport` screenshot on turn 1 — no red rows.
+- [ ] **"Auto-fill" button.** One click allocates capacity to meet food
+  requirements first (Grain → Fruit → Meat), then remaining capacity by
+  warehouse availability. Lives next to the "Transport Allocation"
+  header. This is the action every player performs manually every game
+  start.
+  - Verify: scripted click (extend `M7_DEBUG=transport` with an
+    `autofill` variant) — allocations non-zero, food requirement met.
+- [ ] **Legible capacity labels (CC-4).** "Capacity: 35 (35)" → "35 of 35
+  cars free"; stepper `0/6` → tooltip "hauling 0 of 6 in warehouse";
+  red `▼4` → amber "4 short" text (or tooltip at minimum).
+  - Verify: screenshot.
+- [ ] **Bigger stepper targets.** +/− buttons to ≥ 26px square at 100%
+  scale; add shift-click = ±5 (document in tooltip).
+  - Verify: screenshot + manual click test.
+- [ ] **Map mode on open.** Opening Transport (F2) switches the map to
+  Terrain mode with `show_transport_network` on, so the rail network the
+  panel talks about is actually visible; restore the previous mode on
+  close.
+  - Verify: `M7_DEBUG=transport` screenshot shows terrain + rails behind
+    the panel.
+
+## P1 — Cross-cutting passes
+
+- [ ] **Red-color audit (CC-2) across all screens.** Ledger AI treasury
+  deltas → neutral; Industry "Not enough arms" → muted gray with amber
+  icon; News "FINANCIAL CRISIS" headlines keep red (correct usage).
+  Centralize the choice: add `theme::{ALARM, WARN, MUTED}` constants and
+  replace ad-hoc `Color::srgb...` reds in screens.
+  - Verify: grep — no per-screen hardcoded alarm reds; screenshots of
+    Ledger + Industry + Transport.
+- [ ] **Dead-end hint audit (CC-3).** Sweep every "No X" / "Not enough X"
+  / "Insufficient X" string in `screens/` and attach the unblock hint.
+  Full list to sweep: industry.rs (buildings, arms, resources),
+  transport.rs, trade.rs (cargo capacity), diplomacy.rs (queued action
+  requirements), battles.rs (empty archive), setup/capital.rs.
+  - Verify: grep for the strings; each has an adjacent hint or tooltip.
+- [ ] **Chrome standardization (CC-5).** News: move "Back to Map" /
+  "Continue" into the standard header ("Close (Esc)" top-right; Continue
+  stays bottom-right as primary). Battles: align its Current/Archive
+  tabs with the tab widget used by Trade/Ledger. Confirm Esc closes
+  every overlay (News currently uses buttons only).
+  - Verify: screenshots of News/Battles/Trade/Ledger headers match.
+
+## P2 — Map screen & side panel (`screens/side_panel.rs`, `map_hud.rs`)
+
+- [ ] **Reorder side panel: Nations above Debug.** Nations is gameplay
+  information; Debug is developer UI. Order: selected-info, legend,
+  player-flow sections, UI section, Nations, Debug.
+  - Verify: `HUMAN_GAME=1` screenshot.
+- [ ] **Collapse Debug by default.** "Debug ▸" disclosure row (persist
+  expanded state in `settings.json` alongside `ui_scale`).
+  - Verify: screenshot — Debug section collapsed on fresh start.
+- [ ] **Selected-info placeholder.** Empty selected-tile section shows
+  muted "Select a hex for details" instead of blank space.
+  - Verify: screenshot before any click.
+- [ ] **Tuck the skip row away.** Skip/Go/Until/Skip-Until collapse into
+  one "Skip…" popover button next to Save/Load (the full row appears
+  only inside the popover). Keeps casual players from parsing dev
+  machinery every session.
+  - Verify: screenshot — top bar shows Save, Load, Skip…, ↻ only.
+
+## P2 — Trade screen (`screens/trade.rs`)
+
+- [ ] **"Minor auto-buy" becomes a checkbox** (it currently reads as a
+  label, state ambiguity) using `widgets::spawn_checkbox`.
+- [ ] **Unify the filter bar.** "Commodities 0/11 ▼", "Resources (11)",
+  "Countries 0/22 ▼", "Great Powers (6)", "Minor Powers (16)" — same
+  widget style (dropdowns), one row, consistent widths; counts formatted
+  the same way.
+- [ ] **Explain the GP column (CC-4)** — header tooltip + replace the dot
+  with a small flag or "GP" badge.
+- [ ] **Sell-slider context.** Show max = current stock in the row label
+  ("Timber ×10 in stock"), so the slider range is meaningful.
+  - Verify (all): `M7_DEBUG=trade` screenshot.
+
+## P2 — Diplomacy screen (`screens/diplomacy.rs`)
+
+- [ ] **Disable action buttons until a nation is selected**; enable per
+  eligibility (e.g. Break Treaty only with an existing treaty). Disabled
+  buttons keep tooltips explaining why (CC-3).
+- [ ] **Label the standing bar** — "Standing with <Nation>" once selected;
+  hide it before selection.
+- [ ] **Diplomacy-specific side panel.** While in Diplomacy mode, hide the
+  generic UI/Debug toggle sections; show only the legend + relation
+  details for the hovered/selected nation.
+  - Verify (all): `M8_DEBUG=diplomacy` screenshot; a `diploselect`
+    script variant that selects a nation first.
+
+## P2 — Tech screen (`screens/tech.rs`)
+
+- [ ] **Show the full tech timeline.** All techs — available, adopted, and
+  future/locked (grayed, with availability year and cost) — grouped by
+  category or decade, so the screen is a planning view instead of two
+  rows in a void.
+- [ ] **Rename "Free" → "Adopt (free)"**; paid ones "Adopt ($N)".
+  - Verify: `M8_DEBUG=tech` screenshot shows ≥ the full 1815–1915 tech
+    list with locked entries.
+
+## P2 — Setup flow (`setup/ui.rs`, `setup/capital.rs`)
+
+- [ ] **Capital suggestions must be distinguishable.** Rows currently
+  repeat one town name ("Kiotdargrad ×4"). Add a per-row detail —
+  compass direction from province center + coastal/inland + the yield
+  split ("Grain 6 · Fruit 4 · Livestock 2") — and: hovering a row
+  highlights the hex on the map; clicking pans to and selects it.
+  - Verify: `M10_DEBUG=capital` screenshot; rows visibly distinct.
+- [ ] **Group the preview sliders.** "World shape" (Land amount, Sea ring,
+  Coastline falloff, River sources) and "Terrain mix" (the 7 biomes).
+  Terrain-mix sliders show a live sum indicator (they are normalized —
+  make that visible).
+- [ ] **Label the header zoom buttons** (+/−) with tooltips; switch the
+  Terrain/Political text pair to the tab widget.
+  - Verify: `M10_DEBUG=preview` screenshot.
+- [ ] **Rename the "NOI" difficulty** to a player-facing name (e.g.
+  "Brutal") — codebase jargon leaking into the UI.
+  - Verify: `M10_DEBUG=config` screenshot.
+
+## P3 — Remaining polish
+
+- [ ] **Title screen "Continue" button** above New Game: loads the newest
+  file in `./saves/` directly; hidden when no saves exist.
+  (`intro.rs`; reuse `setup::jobs::start_load`.)
+  - Verify: `INTRO_DEBUG=1` screenshot with and without a saves dir.
+- [ ] **News: coalesce repeated headlines.** N identical "X held back from
+  war with Y" / "FINANCIAL CRISIS: …" lines merge into one summary line
+  ("5 nations face bankruptcy") with the detail list behind an expander
+  or tooltip. This is a view-model-level grouping in `screens/news.rs`.
+  - Verify: `M9_DEBUG=news` screenshot — no more than one line per event
+    type per turn.
+- [ ] **News: label or drop the colored edge bars** on headlines
+  (currently unexplained red/blue/black); label the empty top-right
+  search box ("Filter…" placeholder).
+- [ ] **Battles: minimap name clipping** ("CET…") — shrink label font or
+  clamp label position inside the minimap bounds; add a one-line legend
+  for unit strength bars ("bar = remaining strength") and rank stars.
+  - Verify: `M9_DEBUG=battles` screenshot.
+- [ ] **Ledger: zebra rows + neutral deltas** (part of the CC-2 audit);
+  slightly larger text in the expanded player cash-flow detail.
+  - Verify: `M8_DEBUG=ledger` screenshot.
+- [ ] **Setup config: two-column layout** so Nations count/sliders sit
+  above the fold at 720p.
+  - Verify: `M10_DEBUG=config` screenshot — no scrollbar at 1280×720
+    default window, or Nations visible without scrolling.
+
+---
+
+## Suggested execution order
+
+1. P1 Industry + P1 Transport (most-used screens, biggest mess)
+2. P1 cross-cutting passes (color audit, dead-end hints, chrome)
+3. P2 map side panel + skip row
+4. P2 Trade / Diplomacy / Tech / Setup
+5. P3 polish batch
+
+Each numbered group is one PR-sized task; run `/adversarial-review` per
+group per the project workflow, update this file's checkboxes as items
+land, and deliver the mandatory before/after screenshot pair for every
+change (see conventions above).

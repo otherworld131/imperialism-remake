@@ -327,6 +327,7 @@ All implementation checklists live in `plan/`:
 | 27 | [Build, CI/CD & Release](./plan/27-build-release.md) | Delivery |
 | 28 | [Documentation](./plan/28-documentation.md) | Delivery |
 | 29 | [Web Frontend: UI, Accessibility & Localization](./plan/29-web-frontend.md) | Presentation |
+| 30 | [Bevy UI Usability Improvements](./plan/30-bevy-ui-usability.md) | Presentation |
 
 ## Project Management
 
