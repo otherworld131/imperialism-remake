@@ -116,6 +116,7 @@ pub fn open_save_modal(
                 width: Val::Percent(100.0),
                 max_len: 48,
                 value: default_name.to_string(),
+                ..default()
             },
         );
         content.commands().entity(input).insert(SaveNameInput);

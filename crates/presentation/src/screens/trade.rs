@@ -90,9 +90,9 @@ pub struct MarketTableAnchor;
 #[derive(Component)]
 pub struct TradeCloseButton;
 
-/// Toggle button: clicking queues `SetAutoTradeWithMinors(enable)`.
+/// Checkbox: toggling queues `SetAutoTradeWithMinors`.
 #[derive(Component)]
-pub struct AutoTradeToggle(pub bool);
+pub struct AutoTradeCheckbox;
 
 #[derive(Component)]
 pub struct SubsidyButton {
@@ -578,17 +578,31 @@ pub fn update_trade_static(
             })
             .with_children(|row| {
                 spawn_icon(row, icons, "ships", "Trader", 16.0);
+                // CC-3: a full hold is a dead end — say what unblocks it.
+                let full = trade.remaining_cargo == 0 && trade.total_cargo > 0;
                 row.spawn((
-                    Text::new(format!("Cargo: {used} / {}", trade.total_cargo)),
+                    Text::new(if full {
+                        format!("Cargo: {used} / {} — full", trade.total_cargo)
+                    } else {
+                        format!("Cargo: {used} / {}", trade.total_cargo)
+                    }),
                     theme.font(13.0),
-                    TextColor(theme::TEXT),
+                    TextColor(if full { theme::WARN } else { theme::TEXT }),
                 ));
             })
             .id();
+        let cargo_tooltip = if trade.remaining_cargo == 0 && trade.total_cargo > 0 {
+            format!(
+                "{tooltip}. Hold is full — build more merchant ships under \
+                 Naval Construction (Industry F3) to trade more per turn."
+            )
+        } else {
+            tooltip
+        };
         stats
             .commands()
             .entity(cargo)
-            .insert((TooltipText(tooltip), Interaction::default()));
+            .insert((TooltipText(cargo_tooltip), Interaction::default()));
 
         header_stat(
             stats,
@@ -824,30 +838,21 @@ fn build_sell_column(
             theme.font_bold(15.0),
             TextColor(theme::GOLD),
         ));
-        let enabled = trade.auto_trade_with_minors;
-        let toggle = widgets::spawn_button(
+        let checkbox = widgets::spawn_checkbox(
             row,
             theme,
-            ButtonProps {
-                label: format!("Minor auto-buy: {}", if enabled { "ON" } else { "OFF" }),
-                font_size: 10.5,
+            widgets::CheckboxProps {
+                label: "Minor auto-buy".into(),
+                checked: trade.auto_trade_with_minors,
                 enabled: !observer,
-                auto_label_tint: false,
-                ..default()
             },
         );
-        let mut entity = row.commands_mut().entity(toggle);
-        entity.insert((
-            AutoTradeToggle(!enabled),
+        row.commands_mut().entity(checkbox).insert((
+            AutoTradeCheckbox,
             TooltipText(
-                "When enabled, minor nations may automatically buy your goods each turn".into(),
+                "When checked, minor nations may automatically buy your goods each turn".into(),
             ),
         ));
-        entity.insert(BorderColor::all(if enabled {
-            EXPORT_GREEN
-        } else {
-            IMPORT_RED
-        }));
     });
 
     col.spawn((
@@ -891,9 +896,13 @@ fn build_sell_column(
                 ));
             });
             row.spawn((
-                Text::new(format!("x{}", item.stock)),
+                Text::new(format!("×{}", item.stock)),
                 theme.font(11.5),
                 TextColor(theme::TEXT_DIM),
+                TooltipText(format!(
+                    "{} in stock — the slider sells up to this many",
+                    item.stock
+                )),
                 Node {
                     width: Val::Px(36.0),
                     flex_shrink: 0.0,
@@ -910,6 +919,7 @@ fn build_sell_column(
                     ..default()
                 },
             ));
+            let stock_for_label = item.stock;
             let slider = widgets::spawn_slider(
                 row,
                 theme,
@@ -919,6 +929,7 @@ fn build_sell_column(
                     step: 1.0,
                     value: qty as f32,
                     width: Val::Px(120.0),
+                    format: Some(Arc::new(move |v| format!("{v:.0}/{stock_for_label}"))),
                     ..default()
                 },
             );
@@ -1051,7 +1062,7 @@ fn spawn_chip(
         theme,
         ButtonProps {
             label: format!("{label} ({})", values.len()),
-            font_size: 10.5,
+            font_size: 13.0,
             ..default()
         },
     );
@@ -1320,8 +1331,8 @@ fn build_offers_table(
         }
         4 => {
             cell.spawn((
-                Text::new(if value == "1" { "•" } else { "" }),
-                theme.font(12.5),
+                Text::new(if value == "1" { "GP" } else { "" }),
+                theme.font_bold(10.5),
                 TextColor(theme::GOLD),
             ));
         }
@@ -1353,7 +1364,8 @@ fn build_offers_table(
                 ColumnSpec::new("Seller", 1.8),
                 ColumnSpec::new("Avail", 0.8),
                 ColumnSpec::new("Price", 0.8),
-                ColumnSpec::new("GP", 0.5),
+                ColumnSpec::new("GP", 0.5)
+                    .with_tooltip("Great Power — badge marks trades with the seven major nations"),
                 ColumnSpec::new("", 0.8),
             ],
             sortable: true,
@@ -1430,8 +1442,8 @@ fn build_history_table(
                 }
                 6 => {
                     cell.spawn((
-                        Text::new(if value == "1" { "•" } else { "" }),
-                        theme.font(12.5),
+                        Text::new(if value == "1" { "GP" } else { "" }),
+                        theme.font_bold(10.5),
                         TextColor(theme::GOLD),
                     ));
                 }
@@ -1450,7 +1462,9 @@ fn build_history_table(
                     ColumnSpec::new("Qty", 0.6),
                     ColumnSpec::new("Cost", 1.0),
                     ColumnSpec::new("Partner", 1.6),
-                    ColumnSpec::new("GP", 0.5),
+                    ColumnSpec::new("GP", 0.5).with_tooltip(
+                        "Great Power — badge marks trades with the seven major nations",
+                    ),
                 ],
                 sortable: true,
                 rows,
@@ -1751,7 +1765,6 @@ pub fn handle_trade_buttons(
     mut next_screen: ResMut<NextState<Screen>>,
     buttons: (
         Query<(), With<TradeCloseButton>>,
-        Query<&AutoTradeToggle>,
         Query<&SubsidyButton>,
         Query<&TradeBuyButton>,
         Query<(), With<BuyConfirmButton>>,
@@ -1761,13 +1774,11 @@ pub fn handle_trade_buttons(
     ),
     mut dropdowns: Query<(&TradeFilterDropdown, &FilterValues, &mut UiMultiDropdown)>,
 ) {
-    let (close, auto_trade, subsidy, buy, confirm, cancel, turns, chips) = buttons;
+    let (close, subsidy, buy, confirm, cancel, turns, chips) = buttons;
     for ButtonActivated(entity) in activations.read() {
         let entity = *entity;
         if close.contains(entity) {
             next_screen.set(Screen::Map);
-        } else if let Ok(toggle) = auto_trade.get(entity) {
-            out.write(GameCommand::SetAutoTradeWithMinors { enabled: toggle.0 });
         } else if let Ok(subsidy) = subsidy.get(entity) {
             out.write(GameCommand::SetTradeSubsidy {
                 nation_id: subsidy.nation_id,
@@ -1986,6 +1997,21 @@ pub fn handle_hist_split(
     for toggle in toggles.read() {
         if boxes.contains(toggle.entity) {
             ui.hist_split = toggle.checked;
+        }
+    }
+}
+
+/// "Minor auto-buy" checkbox → queue the auto-trade policy change.
+pub fn handle_auto_trade_checkbox(
+    mut toggles: MessageReader<widgets::CheckboxToggled>,
+    boxes: Query<(), With<AutoTradeCheckbox>>,
+    mut out: MessageWriter<GameCommand>,
+) {
+    for toggle in toggles.read() {
+        if boxes.contains(toggle.entity) {
+            out.write(GameCommand::SetAutoTradeWithMinors {
+                enabled: toggle.checked,
+            });
         }
     }
 }

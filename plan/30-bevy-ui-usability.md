@@ -57,7 +57,7 @@ The messiest screen: three unbounded text columns, nearly every element in
 a dead state with no guidance, mixed affordances (some chains have
 sliders, some only text).
 
-- [ ] **Production-chain cards.** Each chain (Timber→Lumber,
+- [x] **Production-chain cards.** Each chain (Timber→Lumber,
   Lumber→Furniture, Coal+Iron→Steel, Steel→Hardware, Steel→Arms,
   Cotton/Wool→Fabric, Fabric→Clothing, Grain+Fruit+Meat→Canned) becomes a
   card (CC-1): chain icon(s) + arrow diagram, building status line,
@@ -66,51 +66,55 @@ sliders, some only text).
   heading + two gray lines.
   - Verify: `M7_DEBUG=industry` screenshot — every chain visually
     contained; no bare "No building" text outside a card.
-- [ ] **Name the sliders.** The unlabeled sliders (currently only next to
+- [x] **Name the sliders.** The unlabeled sliders (currently only next to
   Steel→Arms and Canned) get a label ("Output") and the `∞` toggle gets a
   tooltip ("Unlimited — produce as inputs allow") (CC-4).
   - Verify: screenshot + `TooltipText` present in code review.
-- [ ] **Collapse Army Recruitment while locked.** Nine rows of "Not
+- [x] **Collapse Army Recruitment while locked.** Nine rows of "Not
   enough arms" collapse into one disabled group: header, muted unit list
   (name + cost only, single line each), and ONE explanation with the
   unblock hint (CC-3). Expands to full rows once `Arms > 0`.
   - Verify: `M7_DEBUG=industry` screenshot on turn 1 (collapsed) and a
-    scripted variant after producing arms (expanded).
-- [ ] **Label the header treasury.** `$10000` → "Treasury $10,000"
+    scripted variant after producing arms (expanded) —
+    `M7_DEBUG=industryarms` buys arms on the market and resolves two
+    turns first.
+- [x] **Label the header treasury.** `$10000` → "Treasury $10,000"
   (thousands separator; the Ledger and Tech screens already write it
   this way).
   - Verify: screenshot.
-- [ ] **Hide AI aims behind debug.** The green "aim N" annotations in the
+- [x] **Hide AI aims behind debug.** The green "aim N" annotations in the
   Warehouse column are AI-target debug data; show them only when the
   existing "Debug: show AI targets" checkbox is on.
   - Verify: screenshot with toggle off shows no green aims.
-- [ ] **Warehouse grouping.** Resources / Materials / Goods columns get
+- [x] **Warehouse grouping.** Resources / Materials / Goods columns get
   inset containers (CC-1) and right-aligned counts; keep icons.
   - Verify: screenshot.
 
 ## P1 — Transport screen (`screens/transport.rs`)
 
-- [ ] **Alarm-color pass (CC-2).** Commodity rows are neutral by default;
+- [x] **Alarm-color pass (CC-2).** Commodity rows are neutral by default;
   amber border when allocation < food requirement; red ONLY when the
-  projected result is starvation this turn (workers unfed). On turn 1
-  with zero allocations, nothing should be red.
+  projected result is starvation this turn (workers unfed — projected
+  from warehouse stock + deliveries + canned-food fallback, mirroring
+  the turn processor's meal logic). On turn 1 with zero allocations,
+  nothing should be red.
   - Verify: `M7_DEBUG=transport` screenshot on turn 1 — no red rows.
-- [ ] **"Auto-fill" button.** One click allocates capacity to meet food
+- [x] **"Auto-fill" button.** One click allocates capacity to meet food
   requirements first (Grain → Fruit → Meat), then remaining capacity by
   warehouse availability. Lives next to the "Transport Allocation"
   header. This is the action every player performs manually every game
   start.
-  - Verify: scripted click (extend `M7_DEBUG=transport` with an
-    `autofill` variant) — allocations non-zero, food requirement met.
-- [ ] **Legible capacity labels (CC-4).**
-  - [ ] "Capacity: 35 (35)" → "35 of 35 cars free".
-  - [ ] Stepper `0/6` → tooltip "hauling 0 of 6 in warehouse".
-  - [ ] Red `▼4` → amber "4 short" text (or tooltip at minimum).
+  - Verify: scripted click (`M7_DEBUG=transportfill`) — allocations
+    non-zero, food requirement met.
+- [x] **Legible capacity labels (CC-4).**
+  - [x] "Capacity: 35 (35)" → "35 of 35 cars free".
+  - [x] Stepper `0/6` → tooltip "hauling 0 of 6 available at your depots".
+  - [x] Red `▼4` → amber "4 short" text (with explanatory tooltip).
   - Verify: screenshot.
-- [ ] **Bigger stepper targets.** +/− buttons to ≥ 26px square at 100%
+- [x] **Bigger stepper targets.** +/− buttons to ≥ 26px square at 100%
   scale; add shift-click = ±5 (document in tooltip).
   - Verify: screenshot + manual click test.
-- [ ] **Map mode on open.** Opening Transport (F2) switches the map to
+- [x] **Map mode on open.** Opening Transport (F2) switches the map to
   Terrain mode with `show_transport_network` on, so the rail network the
   panel talks about is actually visible; restore the previous mode on
   close.
@@ -119,47 +123,47 @@ sliders, some only text).
 
 ## P1 — Cross-cutting passes
 
-- [ ] **Red-color audit (CC-2) across all screens.** Centralize the
+- [x] **Red-color audit (CC-2) across all screens.** Centralize the
   choice: add `theme::{ALARM, WARN, MUTED}` constants and replace ad-hoc
   `Color::srgb...` reds in screens.
-  - [ ] `theme` constants added; screens use them.
-  - [ ] Ledger: AI treasury deltas → neutral.
-  - [ ] Industry: "Not enough arms" → muted gray with amber icon.
-  - [ ] Transport: covered by its alarm-color item (cross-check).
-  - [ ] News: "FINANCIAL CRISIS" stays red (correct usage — confirm).
+  - [x] `theme` constants added; screens use them.
+  - [x] Ledger: AI treasury deltas → neutral.
+  - [x] Industry: "Not enough arms" → muted gray with amber hint.
+  - [x] Transport: covered by its alarm-color item (cross-check).
+  - [x] News: "FINANCIAL CRISIS" stays red (correct usage — confirmed; crisis category color).
   - Verify: grep — no per-screen hardcoded alarm reds; before/after
     screenshots of Ledger + Industry + Transport.
-- [ ] **Dead-end hint audit (CC-3).** Sweep every "No X" / "Not enough X"
+- [x] **Dead-end hint audit (CC-3).** Sweep every "No X" / "Not enough X"
   / "Insufficient X" string in `screens/` and attach the unblock hint.
-  - [ ] `industry.rs` (buildings, arms, resources)
-  - [ ] `transport.rs`
-  - [ ] `trade.rs` (cargo capacity)
-  - [ ] `diplomacy.rs` (queued action requirements)
-  - [ ] `battles.rs` (empty archive)
-  - [ ] `setup/capital.rs`
+  - [x] `industry.rs` (buildings, arms, resources)
+  - [x] `transport.rs`
+  - [x] `trade.rs` (cargo capacity)
+  - [x] `diplomacy.rs` (queued action requirements)
+  - [x] `battles.rs` (empty archive)
+  - [x] `setup/capital.rs` (suggestion rows carry place + yield detail; invalid-tile hint already present)
   - Verify: grep for the strings; each has an adjacent hint or tooltip.
-- [ ] **Chrome standardization (CC-5).**
-  - [ ] News: "Close (Esc)" top-right; Continue stays bottom-right as
+- [x] **Chrome standardization (CC-5).**
+  - [x] News: "Close (Esc)" top-right; Continue stays bottom-right as
     primary; "Back to Map" folds into Close.
-  - [ ] Battles: align Current/Archive with the tab widget used by
+  - [x] Battles: align Current/Archive with the tab widget used by
     Trade/Ledger.
-  - [ ] Esc closes every full-screen overlay (News currently uses
-    buttons only).
+  - [x] Esc closes every full-screen overlay (News included via
+    `Screen::is_full_screen`; verified).
   - Verify: screenshots of News/Battles/Trade/Ledger headers match.
 
 ## P2 — Map screen & side panel (`screens/side_panel.rs`, `map_hud.rs`)
 
-- [ ] **Reorder side panel: Nations above Debug.** Nations is gameplay
+- [x] **Reorder side panel: Nations above Debug.** Nations is gameplay
   information; Debug is developer UI. Order: selected-info, legend,
   player-flow sections, UI section, Nations, Debug.
   - Verify: `HUMAN_GAME=1` screenshot.
-- [ ] **Collapse Debug by default.** "Debug ▸" disclosure row (persist
+- [x] **Collapse Debug by default.** "Debug ▸" disclosure row (persist
   expanded state in `settings.json` alongside `ui_scale`).
   - Verify: screenshot — Debug section collapsed on fresh start.
-- [ ] **Selected-info placeholder.** Empty selected-tile section shows
+- [x] **Selected-info placeholder.** Empty selected-tile section shows
   muted "Select a hex for details" instead of blank space.
   - Verify: screenshot before any click.
-- [ ] **Tuck the skip row away.** Skip/Go/Until/Skip-Until collapse into
+- [x] **Tuck the skip row away.** Skip/Go/Until/Skip-Until collapse into
   one "Skip…" popover button next to Save/Load (the full row appears
   only inside the popover). Keeps casual players from parsing dev
   machinery every session.
@@ -167,26 +171,26 @@ sliders, some only text).
 
 ## P2 — Trade screen (`screens/trade.rs`)
 
-- [ ] **"Minor auto-buy" becomes a checkbox** (it currently reads as a
+- [x] **"Minor auto-buy" becomes a checkbox** (it currently reads as a
   label, state ambiguity) using `widgets::spawn_checkbox`.
-- [ ] **Unify the filter bar.** "Commodities 0/11 ▼", "Resources (11)",
+- [x] **Unify the filter bar.** "Commodities 0/11 ▼", "Resources (11)",
   "Countries 0/22 ▼", "Great Powers (6)", "Minor Powers (16)" — same
   widget style (dropdowns), one row, consistent widths; counts formatted
   the same way.
-- [ ] **Explain the GP column (CC-4)** — header tooltip + replace the dot
+- [x] **Explain the GP column (CC-4)** — header tooltip + replace the dot
   with a small flag or "GP" badge.
-- [ ] **Sell-slider context.** Show max = current stock in the row label
+- [x] **Sell-slider context.** Show max = current stock in the row label
   ("Timber ×10 in stock"), so the slider range is meaningful.
 - Verify (all): `M7_DEBUG=trade` before/after screenshots.
 
 ## P2 — Diplomacy screen (`screens/diplomacy.rs`)
 
-- [ ] **Disable action buttons until a nation is selected**; enable per
+- [x] **Disable action buttons until a nation is selected**; enable per
   eligibility (e.g. Break Treaty only with an existing treaty). Disabled
   buttons keep tooltips explaining why (CC-3).
-- [ ] **Label the standing bar** — "Standing with <Nation>" once selected;
+- [x] **Label the standing bar** — "Standing with <Nation>" once selected;
   hide it before selection.
-- [ ] **Diplomacy-specific side panel.** While in Diplomacy mode, hide the
+- [x] **Diplomacy-specific side panel.** While in Diplomacy mode, hide the
   generic UI/Debug toggle sections; show only the legend + relation
   details for the hovered/selected nation.
 - Verify (all): `M8_DEBUG=diplomacy` screenshot; a `diploselect` script
@@ -194,62 +198,63 @@ sliders, some only text).
 
 ## P2 — Tech screen (`screens/tech.rs`)
 
-- [ ] **Show the full tech timeline.** All techs — available, adopted, and
+- [x] **Show the full tech timeline.** All techs — available, adopted, and
   future/locked (grayed, with availability year and cost) — grouped by
   category or decade, so the screen is a planning view instead of two
   rows in a void.
-- [ ] **Rename "Free" → "Adopt (free)"**; paid ones "Adopt ($N)".
+- [x] **Rename "Free" → "Adopt (free)"**; paid ones "Adopt ($N)".
 - Verify: `M8_DEBUG=tech` screenshot shows the full 1815–1915 tech list
   with locked entries.
 
 ## P2 — Setup flow (`setup/ui.rs`, `setup/capital.rs`)
 
-- [ ] **Capital suggestions must be distinguishable.** Rows currently
+- [x] **Capital suggestions must be distinguishable.** Rows currently
   repeat one town name ("Kiotdargrad ×4").
-  - [ ] Per-row detail: compass direction from province center +
+  - [x] Per-row detail: compass direction from province center +
     coastal/inland + the yield split ("Grain 6 · Fruit 4 · Livestock 2").
-  - [ ] Hovering a row highlights the hex on the map.
-  - [ ] Clicking a row pans to and selects the hex.
+  - [x] Hovering a row highlights the hex on the map.
+  - [x] Clicking a row pans to and selects the hex.
   - Verify: `M10_DEBUG=capital` screenshot; rows visibly distinct.
-- [ ] **Group the preview sliders.**
-  - [ ] "World shape" group: Land amount, Sea ring, Coastline falloff,
+- [x] **Group the preview sliders.**
+  - [x] "World shape" group: Land amount, Sea ring, Coastline falloff,
     River sources.
-  - [ ] "Terrain mix" group: the 7 biomes, with a live sum indicator
-    (they are normalized — make that visible).
+  - [x] "Terrain mix" group: the 7 biomes, with a live sum indicator
+    (they are normalized — make that visible). Cluster knobs grouped
+    under "Clustering".
   - Verify: `M10_DEBUG=preview` screenshot.
-- [ ] **Label the header zoom buttons** (+/−) with tooltips; switch the
+- [x] **Label the header zoom buttons** (+/−) with tooltips; switch the
   Terrain/Political text pair to the tab widget.
   - Verify: `M10_DEBUG=preview` screenshot.
-- [ ] **Rename the "NOI" difficulty** to a player-facing name (e.g.
+- [x] **Rename the "NOI" difficulty** to a player-facing name (e.g.
   "Brutal") — codebase jargon leaking into the UI.
   - Verify: `M10_DEBUG=config` screenshot.
 
 ## P3 — Remaining polish
 
-- [ ] **Title screen "Continue" button** above New Game: loads the newest
+- [x] **Title screen "Continue" button** above New Game: loads the newest
   file in `./saves/` directly; hidden when no saves exist.
   (`intro.rs`; reuse `setup::jobs::start_load`.)
   - Verify: `INTRO_DEBUG=1` screenshot with and without a saves dir.
-- [ ] **News: coalesce repeated headlines.** N identical "X held back from
+- [x] **News: coalesce repeated headlines.** N identical "X held back from
   war with Y" / "FINANCIAL CRISIS: …" lines merge into one summary line
   ("5 nations face bankruptcy") with the detail list behind an expander
   or tooltip. This is a view-model-level grouping in `screens/news.rs`.
   - Verify: `M9_DEBUG=news` screenshot — no more than one line per event
     type per turn.
-- [ ] **News: label or drop the colored edge bars** on headlines
+- [x] **News: label the colored edge bars** (category tooltip) on headlines
   (currently unexplained red/blue/black); label the empty top-right
   search box ("Filter…" placeholder).
   - Verify: `M9_DEBUG=news` screenshot.
-- [ ] **Battles polish.**
-  - [ ] Minimap name clipping ("CET…") — shrink label font or clamp
+- [x] **Battles polish.**
+  - [x] Minimap name clipping ("CET…") — shrink label font or clamp
     label position inside the minimap bounds.
-  - [ ] One-line legend for unit strength bars ("bar = remaining
+  - [x] One-line legend for unit strength bars ("bar = remaining
     strength") and rank stars.
   - Verify: `M9_DEBUG=battles` screenshot.
-- [ ] **Ledger: zebra rows + neutral deltas** (part of the CC-2 audit);
+- [x] **Ledger: zebra rows + neutral deltas** (part of the CC-2 audit);
   slightly larger text in the expanded player cash-flow detail.
   - Verify: `M8_DEBUG=ledger` screenshot.
-- [ ] **Setup config: two-column layout** so Nations count/sliders sit
+- [x] **Setup config: two-column layout** so Nations count/sliders sit
   above the fold at 720p.
   - Verify: `M10_DEBUG=config` screenshot — no scrollbar at 1280×720
     default window, or Nations visible without scrolling.
@@ -263,10 +268,10 @@ project workflow: run `/adversarial-review` per group, check off the
 items above as they land, and deliver the mandatory before/after
 screenshot pair for every change.
 
-- [ ] **Group 1** — P1 Industry + P1 Transport (most-used screens,
+- [x] **Group 1** — P1 Industry + P1 Transport (most-used screens,
   biggest mess)
-- [ ] **Group 2** — P1 cross-cutting passes (color audit, dead-end
+- [x] **Group 2** — P1 cross-cutting passes (color audit, dead-end
   hints, chrome)
-- [ ] **Group 3** — P2 map side panel + skip row
-- [ ] **Group 4** — P2 Trade / Diplomacy / Tech / Setup
-- [ ] **Group 5** — P3 polish batch
+- [x] **Group 3** — P2 map side panel + skip row
+- [x] **Group 4** — P2 Trade / Diplomacy / Tech / Setup
+- [x] **Group 5** — P3 polish batch

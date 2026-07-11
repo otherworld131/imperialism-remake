@@ -502,6 +502,8 @@ pub struct TransportVm {
     pub demand: Vec<TransportDemandVm>,
     #[serde(default)]
     pub food_requirement: Option<FoodRequirementVm>,
+    #[serde(default)]
+    pub starvation: Option<StarvationVm>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -522,6 +524,17 @@ pub struct TransportDeliveryVm {
 pub struct TransportDemandVm {
     pub resource: String,
     pub demand: u32,
+}
+
+/// Per-slot food shortfall projected by the application layer (stock minus
+/// queued sell orders, plus this turn's deliveries; canned food covers the
+/// rest). `workers_unfed > 0` means starvation this turn.
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct StarvationVm {
+    pub grain_short: u32,
+    pub fruit_short: u32,
+    pub meat_short: u32,
+    pub workers_unfed: u32,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -754,6 +767,10 @@ pub struct TechScreenVm {
     pub researched: Vec<TechResearchedVm>,
     pub pending: Option<TechPendingVm>,
     pub treasury: i64,
+    /// Every tech in the tree ordered by availability year (adopted,
+    /// available, and future/locked alike).
+    #[serde(default)]
+    pub timeline: Vec<TechAvailableVm>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

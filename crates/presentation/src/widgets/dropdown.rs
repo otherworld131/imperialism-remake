@@ -199,7 +199,12 @@ pub fn spawn_multi_dropdown(
 
 fn multi_header_label(label: &str, selected: &[bool]) -> String {
     let count = selected.iter().filter(|s| **s).count();
-    format!("{label}: {count}/{}  ▼", selected.len())
+    if count == 0 {
+        // 0 selected = no filter: say so instead of a cryptic "0/11".
+        format!("{label} (all)  ▼",)
+    } else {
+        format!("{label} ({count} of {})  ▼", selected.len())
+    }
 }
 
 // ── Behavior ────────────────────────────────────────────────────────

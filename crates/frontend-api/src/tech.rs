@@ -158,11 +158,35 @@ pub fn get_tech_screen_data(game: &GameState) -> Result<serde_json::Value, ApiEr
         })
     });
 
+    // Full timeline: every tech in the tree, ordered by availability year,
+    // so the screen can show adopted / available / future in one view.
+    let mut all: Vec<&domain::tech::tree::Technology> =
+        game.game_data.tech_tree.all_techs().iter().collect();
+    all.sort_by(|a, b| {
+        a.earliest_year
+            .cmp(&b.earliest_year)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    let timeline: Vec<serde_json::Value> = all
+        .iter()
+        .map(|t| {
+            serde_json::json!({
+                "id": t.id.0,
+                "name": t.name,
+                "cost": t.cost.as_dollars(),
+                "earliest_year": t.earliest_year,
+                "latest_year": t.latest_year,
+                "description": tech_description(&t.effects),
+            })
+        })
+        .collect();
+
     let result = serde_json::json!({
         "available": available,
         "researched": researched,
         "pending": pending,
         "treasury": treasury,
+        "timeline": timeline,
     });
     Ok(result)
 }

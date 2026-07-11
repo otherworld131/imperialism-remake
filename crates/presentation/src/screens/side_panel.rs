@@ -37,6 +37,33 @@ pub struct MapModeDropdown;
 #[derive(Component)]
 pub struct UiScaleSlider;
 
+/// "Debug ▸ / ▾" disclosure row; developer toggles stay collapsed for
+/// casual players. State persists to `settings.json`.
+#[derive(Component)]
+pub struct DebugDisclosureButton;
+
+/// Label inside the disclosure button (arrow flips with state).
+#[derive(Component)]
+pub struct DebugDisclosureLabel;
+
+/// Container holding the debug toggles; `Display` follows the state.
+#[derive(Component)]
+pub struct DebugSectionBody;
+
+/// Generic side-panel sections hidden while the Diplomacy screen is open
+/// (it shows only the legend + relation details).
+#[derive(Component)]
+pub struct GenericPanelSection;
+
+#[derive(Resource)]
+pub struct DebugPanelExpanded(pub bool);
+
+impl Default for DebugPanelExpanded {
+    fn default() -> Self {
+        Self(crate::ui_scale::load_debug_expanded())
+    }
+}
+
 #[derive(Component, Clone, Copy, Debug)]
 pub enum ToggleKind {
     OrganicBorders,
@@ -59,6 +86,7 @@ pub fn setup_side_panel(
     settings: Res<RenderSettings>,
     news_debug: Res<NewsDebugSettings>,
     ui_scale: Res<bevy::ui::UiScale>,
+    debug_expanded: Res<DebugPanelExpanded>,
 ) {
     // ── Right-hand panel ─────────────────────────────────────────────────
     commands
@@ -113,6 +141,16 @@ pub fn setup_side_panel(
                 content.spawn((panel_section(), panels::CivilianPanelSection));
                 content.spawn((panel_section(), panels::NavalPanelSection));
 
+                content
+                    .spawn((
+                        Node {
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(2.0),
+                            ..default()
+                        },
+                        GenericPanelSection,
+                    ))
+                    .with_children(|content| {
                 section_title(content, &theme, "UI");
                 let ui_toggles = [
                     (
@@ -176,46 +214,7 @@ pub fn setup_side_panel(
                         ));
                     });
 
-                section_title(content, &theme, "Debug");
-                let debug_toggles = [
-                    (
-                        ToggleKind::ShowHiddenResources,
-                        "Show hidden resources",
-                        settings.show_hidden_resources,
-                    ),
-                    (
-                        ToggleKind::ShowAiCivilians,
-                        "Show AI civilians",
-                        settings.show_ai_civilians,
-                    ),
-                    (
-                        ToggleKind::DisableFog,
-                        "Disable fog of war",
-                        settings.disable_fog,
-                    ),
-                    (
-                        ToggleKind::ShowAiReasoning,
-                        "Show AI reasoning",
-                        news_debug.show_ai_reasoning,
-                    ),
-                    (
-                        ToggleKind::ShowAiNonActions,
-                        "Show AI non-actions",
-                        news_debug.show_ai_non_actions,
-                    ),
-                    (
-                        ToggleKind::ShowRetreatDebug,
-                        "Battle retreat math",
-                        news_debug.show_retreat_debug,
-                    ),
-                    (
-                        ToggleKind::ShowBattleFirepower,
-                        "Battle firepower detail",
-                        news_debug.show_battle_firepower,
-                    ),
-                ];
-                spawn_toggles(content, &theme, &debug_toggles);
-
+                // Nations (gameplay info) sits above Debug (developer UI).
                 section_title(content, &theme, "Nations");
                 content.spawn((
                     Node {
@@ -225,6 +224,88 @@ pub fn setup_side_panel(
                     },
                     NationsSection,
                 ));
+
+                // Debug: collapsed disclosure row by default.
+                let expanded = debug_expanded.0;
+                let disclosure = widgets::spawn_button(
+                    content,
+                    &theme,
+                    widgets::ButtonProps {
+                        label: debug_disclosure_label(expanded),
+                        font_size: 13.0,
+                        flat: true,
+                        auto_label_tint: false,
+                        ..default()
+                    },
+                );
+                {
+                    let mut commands = content.commands();
+                    let mut entity = commands.entity(disclosure);
+                    entity.insert((
+                        DebugDisclosureButton,
+                        widgets::TooltipText("Developer toggles (fog, AI internals)".into()),
+                        Node {
+                            margin: UiRect::top(Val::Px(10.0)),
+                            padding: UiRect::horizontal(Val::Px(0.0)),
+                            ..default()
+                        },
+                    ));
+                }
+                content
+                    .spawn((
+                        Node {
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(2.0),
+                            display: if expanded {
+                                Display::Flex
+                            } else {
+                                Display::None
+                            },
+                            ..default()
+                        },
+                        DebugSectionBody,
+                    ))
+                    .with_children(|body| {
+                        let debug_toggles = [
+                            (
+                                ToggleKind::ShowHiddenResources,
+                                "Show hidden resources",
+                                settings.show_hidden_resources,
+                            ),
+                            (
+                                ToggleKind::ShowAiCivilians,
+                                "Show AI civilians",
+                                settings.show_ai_civilians,
+                            ),
+                            (
+                                ToggleKind::DisableFog,
+                                "Disable fog of war",
+                                settings.disable_fog,
+                            ),
+                            (
+                                ToggleKind::ShowAiReasoning,
+                                "Show AI reasoning",
+                                news_debug.show_ai_reasoning,
+                            ),
+                            (
+                                ToggleKind::ShowAiNonActions,
+                                "Show AI non-actions",
+                                news_debug.show_ai_non_actions,
+                            ),
+                            (
+                                ToggleKind::ShowRetreatDebug,
+                                "Battle retreat math",
+                                news_debug.show_retreat_debug,
+                            ),
+                            (
+                                ToggleKind::ShowBattleFirepower,
+                                "Battle firepower detail",
+                                news_debug.show_battle_firepower,
+                            ),
+                        ];
+                        spawn_toggles(body, &theme, &debug_toggles);
+                    });
+                    });
             });
         });
 
@@ -295,6 +376,60 @@ fn spawn_toggles(
             },
         );
         parent.commands().entity(checkbox).insert(*kind);
+    }
+}
+
+/// Hide the generic UI/Nations/Debug sections while Diplomacy is open.
+pub fn sync_side_panel_for_diplomacy(
+    screen: Res<State<crate::state::Screen>>,
+    mut sections: Query<&mut Node, With<GenericPanelSection>>,
+) {
+    if !screen.is_changed() {
+        return;
+    }
+    let hide = *screen.get() == crate::state::Screen::Diplomacy;
+    for mut node in &mut sections {
+        node.display = if hide { Display::None } else { Display::Flex };
+    }
+}
+
+fn debug_disclosure_label(expanded: bool) -> String {
+    // Only ▲/▼ exist in the patched pixel font (▸/▾ would render as tofu);
+    // ▼ = closed matches the dropdown headers.
+    if expanded {
+        "Debug ▲".to_string()
+    } else {
+        "Debug ▼".to_string()
+    }
+}
+
+/// Toggle the Debug disclosure: flip the body's `Display`, relabel the
+/// arrow, and persist the state to `settings.json`.
+pub fn handle_debug_disclosure(
+    mut activations: MessageReader<widgets::ButtonActivated>,
+    buttons: Query<&Children, With<DebugDisclosureButton>>,
+    mut state: ResMut<DebugPanelExpanded>,
+    mut bodies: Query<&mut Node, With<DebugSectionBody>>,
+    mut labels: Query<&mut Text>,
+) {
+    for widgets::ButtonActivated(entity) in activations.read() {
+        let Ok(children) = buttons.get(*entity) else {
+            continue;
+        };
+        state.0 = !state.0;
+        crate::ui_scale::save_debug_expanded(state.0);
+        for mut node in &mut bodies {
+            node.display = if state.0 {
+                Display::Flex
+            } else {
+                Display::None
+            };
+        }
+        for child in children {
+            if let Ok(mut text) = labels.get_mut(*child) {
+                **text = debug_disclosure_label(state.0);
+            }
+        }
     }
 }
 
@@ -434,7 +569,7 @@ pub fn update_selected_info(
 
     if tile.is_none() && marker.is_none() {
         commands.spawn((
-            Text::new("Click to pin; hover a hex for a tooltip"),
+            Text::new("Select a hex for details — hover for a quick tooltip"),
             theme.font_italic(12.0),
             TextColor(theme::TEXT_DIM),
             ChildOf(section),

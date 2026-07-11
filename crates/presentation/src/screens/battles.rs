@@ -52,8 +52,10 @@ pub struct BattlesRoot;
 #[derive(Component)]
 pub struct BattlesContent;
 
+/// Marker on the Current/Archive tab-widget group (CC-5: same tab widget
+/// as Trade/Ledger).
 #[derive(Component)]
-pub struct BattlesModeTab(pub bool);
+pub struct BattlesModeTabs;
 
 #[derive(Component)]
 pub struct BattlesArchiveTurnButton(pub u32);
@@ -114,25 +116,35 @@ pub fn ensure_battle_archive(
 
 // ── Interactions ─────────────────────────────────────────────────────────
 
+pub fn handle_battles_tabs(
+    mut changes: MessageReader<widgets::TabChanged>,
+    tabs: Query<(), With<BattlesModeTabs>>,
+    archive: Res<BattleArchive>,
+    mut ui: ResMut<BattlesUi>,
+) {
+    for change in changes.read() {
+        if !tabs.contains(change.group) {
+            continue;
+        }
+        ui.archive_mode = change.index == 1;
+        ui.selected = 0;
+        if ui.archive_mode && ui.selected_turn.is_none() {
+            // Auto-select the most recent archived turn (web parity).
+            ui.selected_turn = archive.turns.iter().map(|t| t.turn).max();
+        }
+    }
+}
+
 pub fn handle_battles_buttons(
     mut activations: MessageReader<ButtonActivated>,
-    mode_tabs: Query<&BattlesModeTab>,
     archive_turns: Query<&BattlesArchiveTurnButton>,
     rows: Query<&BattlesRowButton>,
     closes: Query<(), With<BattlesCloseButton>>,
-    archive: Res<BattleArchive>,
     mut ui: ResMut<BattlesUi>,
     mut next_screen: ResMut<NextState<Screen>>,
 ) {
     for ButtonActivated(entity) in activations.read() {
-        if let Ok(tab) = mode_tabs.get(*entity) {
-            ui.archive_mode = tab.0;
-            ui.selected = 0;
-            if tab.0 && ui.selected_turn.is_none() {
-                // Auto-select the most recent archived turn (web parity).
-                ui.selected_turn = archive.turns.iter().map(|t| t.turn).max();
-            }
-        } else if let Ok(turn) = archive_turns.get(*entity) {
+        if let Ok(turn) = archive_turns.get(*entity) {
             ui.selected_turn = Some(turn.0);
             ui.selected = 0;
         } else if let Ok(row) = rows.get(*entity) {
@@ -234,25 +246,25 @@ pub fn update_battles(
                     flex_grow: 1.0,
                     ..default()
                 });
-                for (archive_tab, label) in [(false, "Current"), (true, "Archive")] {
-                    let active = archive_tab == ui.archive_mode;
-                    let button = widgets::spawn_button(
-                        header,
-                        &theme,
-                        ButtonProps {
-                            label: if active {
-                                format!("▶ {label}")
-                            } else {
-                                label.to_string()
-                            },
-                            font_size: 13.0,
-                            ..default()
-                        },
-                    );
-                    header
-                        .commands()
-                        .entity(button)
-                        .insert(BattlesModeTab(archive_tab));
+                let tabs = widgets::spawn_tabs(
+                    header,
+                    &theme,
+                    &["Current", "Archive"],
+                    usize::from(ui.archive_mode),
+                );
+                let mut header_commands = header.commands();
+                header_commands.entity(tabs.root).insert((
+                    BattlesModeTabs,
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        ..default()
+                    },
+                ));
+                for panel in &tabs.panels {
+                    header_commands.entity(*panel).insert(Node {
+                        display: Display::None,
+                        ..default()
+                    });
                 }
                 let close = widgets::spawn_button(
                     header,
@@ -298,7 +310,10 @@ pub fn update_battles(
                         ));
                         if archive.turns.is_empty() {
                             sidebar.spawn((
-                                Text::new("No battles in history yet."),
+                                Text::new(
+                                    "No battles in history yet — each End Turn's \
+                                     battles are archived here.",
+                                ),
                                 theme.font_italic(12.0),
                                 TextColor(theme::TEXT_DIM),
                             ));
@@ -663,8 +678,19 @@ fn spawn_minimap(
         ))
         .with_children(|map| {
             for label in &labels {
-                let font_size = ((label.size as f32).sqrt() * 3.0).clamp(11.0, 22.0);
-                map_label(map, theme, &label.name.to_uppercase(), label.pos, font_size);
+                let font_size = ((label.size as f32).sqrt() * 3.0).clamp(10.0, 18.0);
+                let name = label.name.to_uppercase();
+                // Clamp the label center so the rendered text stays inside
+                // the clipped minimap frame instead of getting cut mid-word.
+                let half_text = name.chars().count() as f32 * font_size * 0.30;
+                let pos = Vec2::new(
+                    label.pos.x.clamp(
+                        half_text.min(MAP_W / 2.0),
+                        (MAP_W - half_text).max(MAP_W / 2.0),
+                    ),
+                    label.pos.y.clamp(12.0, MAP_H - 12.0),
+                );
+                map_label(map, theme, &name, pos, font_size);
             }
         });
 }
@@ -840,6 +866,16 @@ fn land_battle_details(
 
             // Forces.
             section(details, theme, "FORCES", |body, theme| {
+                // One-line legend for the per-unit indicators (CC-4).
+                body.spawn((
+                    Text::new("bar = remaining strength · ★ = medals (veterancy)"),
+                    theme.font_italic(10.5),
+                    TextColor(theme::TEXT_DIM),
+                    Node {
+                        margin: UiRect::bottom(Val::Px(4.0)),
+                        ..default()
+                    },
+                ));
                 body.spawn(Node {
                     flex_direction: FlexDirection::Row,
                     column_gap: Val::Px(24.0),

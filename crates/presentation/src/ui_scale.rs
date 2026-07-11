@@ -24,26 +24,21 @@ const SETTINGS_FILE: &str = "settings.json";
 #[derive(Serialize, Deserialize, Default)]
 struct PersistedSettings {
     ui_scale: Option<f32>,
+    /// Side-panel "Debug" disclosure state (collapsed by default).
+    debug_panel_expanded: Option<bool>,
     #[serde(flatten)]
     other: serde_json::Map<String, serde_json::Value>,
 }
 
-pub fn load_ui_scale() -> f32 {
+fn read_settings() -> PersistedSettings {
     std::fs::read_to_string(SETTINGS_FILE)
         .ok()
         .and_then(|raw| serde_json::from_str::<PersistedSettings>(&raw).ok())
-        .and_then(|settings| settings.ui_scale)
-        .map_or(DEFAULT_SCALE, |scale| scale.clamp(MIN_SCALE, MAX_SCALE))
+        .unwrap_or_default()
 }
 
-fn save_ui_scale(scale: f32) {
-    // Read-modify-write so future settings fields survive a scale change.
-    let mut settings = std::fs::read_to_string(SETTINGS_FILE)
-        .ok()
-        .and_then(|raw| serde_json::from_str::<PersistedSettings>(&raw).ok())
-        .unwrap_or_default();
-    settings.ui_scale = Some(scale);
-    match serde_json::to_string_pretty(&settings) {
+fn write_settings(settings: &PersistedSettings) {
+    match serde_json::to_string_pretty(settings) {
         Ok(json) => {
             if let Err(err) = std::fs::write(SETTINGS_FILE, json) {
                 warn!("failed to persist {SETTINGS_FILE}: {err}");
@@ -51,6 +46,30 @@ fn save_ui_scale(scale: f32) {
         }
         Err(err) => warn!("failed to serialize settings: {err}"),
     }
+}
+
+/// Whether the side panel's Debug section starts expanded (default: no).
+pub fn load_debug_expanded() -> bool {
+    read_settings().debug_panel_expanded.unwrap_or(false)
+}
+
+pub fn save_debug_expanded(expanded: bool) {
+    let mut settings = read_settings();
+    settings.debug_panel_expanded = Some(expanded);
+    write_settings(&settings);
+}
+
+pub fn load_ui_scale() -> f32 {
+    read_settings()
+        .ui_scale
+        .map_or(DEFAULT_SCALE, |scale| scale.clamp(MIN_SCALE, MAX_SCALE))
+}
+
+fn save_ui_scale(scale: f32) {
+    // Read-modify-write so future settings fields survive a scale change.
+    let mut settings = read_settings();
+    settings.ui_scale = Some(scale);
+    write_settings(&settings);
 }
 
 /// Set, clamp, and persist a new scale.

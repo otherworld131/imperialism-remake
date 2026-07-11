@@ -90,7 +90,9 @@ pub fn invalid_target_reason(
             } else if rel.has_consulate || rel.has_embassy {
                 Some(format!("{name} already has a consulate."))
             } else {
-                Some(format!("Cannot build consulate with {name}."))
+                Some(format!(
+                    "Cannot build consulate with {name} — check your treasury."
+                ))
             }
         }
         QueuedDiplomacyAction::Embassy => {
@@ -103,7 +105,9 @@ pub fn invalid_target_reason(
                     "Need a consulate with {name} before opening an embassy."
                 ))
             } else {
-                Some(format!("Cannot build embassy with {name}."))
+                Some(format!(
+                    "Cannot build embassy with {name} — check your treasury."
+                ))
             }
         }
         QueuedDiplomacyAction::Nap => {
@@ -116,7 +120,9 @@ pub fn invalid_target_reason(
             } else if rel.at_war {
                 Some(format!("At war with {name} — make peace first."))
             } else {
-                Some(format!("Cannot propose NAP to {name}."))
+                Some(format!(
+                    "Cannot propose NAP to {name} — improve relations first (grants help)."
+                ))
             }
         }
         QueuedDiplomacyAction::Alliance => {
@@ -129,7 +135,9 @@ pub fn invalid_target_reason(
             } else if rel.at_war {
                 Some(format!("At war with {name} — make peace first."))
             } else {
-                Some(format!("Cannot propose alliance to {name}."))
+                Some(format!(
+                    "Cannot propose alliance to {name} — improve relations first (grants help)."
+                ))
             }
         }
         QueuedDiplomacyAction::Peace => {
@@ -147,7 +155,9 @@ pub fn invalid_target_reason(
             if a.can_send_grant {
                 None
             } else {
-                Some(format!("Cannot send grant to {name} right now."))
+                Some(format!(
+                    "Cannot send grant to {name} right now — check your treasury."
+                ))
             }
         }
         QueuedDiplomacyAction::BreakTreaty { treaty_type } => {
@@ -163,7 +173,9 @@ pub fn invalid_target_reason(
             } else if rel.at_war {
                 Some(format!("Already at war with {name}."))
             } else {
-                Some(format!("Cannot declare war on {name}."))
+                Some(format!(
+                    "Cannot declare war on {name} — break existing treaties first."
+                ))
             }
         }
     }
@@ -384,15 +396,6 @@ pub fn update_diplomacy_bar(
     let observer = meta.observer;
     let rel = focus.and_then(|id| screen.relation(id));
 
-    let standing = screen.player_standing;
-    let standing_color = if standing > 60 {
-        STANDING_GREEN
-    } else if standing > 30 {
-        STANDING_AMBER
-    } else {
-        STANDING_RED
-    };
-
     commands.entity(content).with_children(|bar| {
         // ── Top row: standing + focused nation + queued banner ─────────
         bar.spawn(Node {
@@ -403,47 +406,59 @@ pub fn update_diplomacy_bar(
             ..default()
         })
         .with_children(|row| {
-            // Player standing bar.
-            row.spawn(Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(8.0),
-                min_width: Val::Px(220.0),
-                ..default()
-            })
-            .with_children(|group| {
-                group.spawn((
-                    Text::new("Player Standing"),
-                    theme.font(12.5),
-                    TextColor(theme::TEXT_DIM),
-                ));
-                group
-                    .spawn((
-                        Node {
-                            width: Val::Px(90.0),
-                            height: Val::Px(8.0),
-                            border_radius: BorderRadius::all(Val::Px(4.0)),
-                            ..default()
-                        },
-                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.1)),
-                    ))
-                    .with_children(|track| {
-                        track.spawn((
+            // Standing with the focused nation; hidden until one is
+            // focused so an unlabeled bar never floats in the corner.
+            if let Some(rel) = rel {
+                let score = rel.score;
+                let percent = ((score + 100) as f32 / 2.0).clamp(0.0, 100.0);
+                let standing_color = if score > 20 {
+                    STANDING_GREEN
+                } else if score >= -20 {
+                    STANDING_AMBER
+                } else {
+                    STANDING_RED
+                };
+                row.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(8.0),
+                    min_width: Val::Px(220.0),
+                    ..default()
+                })
+                .with_children(|group| {
+                    group.spawn((
+                        Text::new(format!("Standing with {}", rel.nation_name)),
+                        theme.font(12.5),
+                        TextColor(theme::TEXT_DIM),
+                    ));
+                    group
+                        .spawn((
                             Node {
-                                width: Val::Percent(standing.clamp(0, 100) as f32),
-                                height: Val::Percent(100.0),
+                                width: Val::Px(90.0),
+                                height: Val::Px(8.0),
                                 border_radius: BorderRadius::all(Val::Px(4.0)),
                                 ..default()
                             },
-                            BackgroundColor(standing_color),
-                        ));
-                    });
-                group.spawn((
-                    Text::new(format!("{standing}")),
-                    theme.font_bold(13.0),
-                    TextColor(standing_color),
-                ));
-            });
+                            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.1)),
+                        ))
+                        .with_children(|track| {
+                            track.spawn((
+                                Node {
+                                    width: Val::Percent(percent),
+                                    height: Val::Percent(100.0),
+                                    border_radius: BorderRadius::all(Val::Px(4.0)),
+                                    ..default()
+                                },
+                                BackgroundColor(standing_color),
+                            ));
+                        });
+                    group.spawn((
+                        Text::new(format!("{score}")),
+                        theme.font_bold(13.0),
+                        TextColor(standing_color),
+                    ));
+                });
+            }
 
             // Focused nation card / hint.
             match rel {
@@ -586,9 +601,20 @@ pub fn update_diplomacy_bar(
         if !observer {
             let is_anarchy = rel.map(|r| r.is_in_anarchy).unwrap_or(false);
             let a = rel.map(|r| &r.actions);
-            // Web parity: with no focused nation every button stays
-            // enabled so the player can arm first, then pick a target.
-            let enabled = |can: Option<bool>| !is_anarchy && can.unwrap_or(true);
+            // Buttons stay disabled until a nation is focused, then enable
+            // per that nation's eligibility (CC-3: tooltips say why not).
+            let enabled = |can: Option<bool>| !is_anarchy && can.unwrap_or(false);
+            let tooltip_for = |action: &QueuedDiplomacyAction| -> String {
+                match invalid_target_reason(
+                    action,
+                    focus,
+                    meta.player_nation,
+                    vms.diplomacy_screen.as_ref(),
+                ) {
+                    Some(reason) => reason,
+                    None => "Click to arm, then click the target nation on the map".into(),
+                }
+            };
 
             bar.spawn(Node {
                 flex_direction: FlexDirection::Row,
@@ -604,6 +630,7 @@ pub fn update_diplomacy_bar(
                                      label: &str,
                                      enabled: bool,
                                      active: bool,
+                                     tooltip: String,
                                      marker: DiploArmButton| {
                     let button = widgets::spawn_button(
                         row,
@@ -619,7 +646,9 @@ pub fn update_diplomacy_bar(
                             ..default()
                         },
                     );
-                    row.commands().entity(button).insert(marker);
+                    row.commands()
+                        .entity(button)
+                        .insert((marker, TooltipText(tooltip)));
                     // Append the diplomacy icon inside the button.
                     row.commands().entity(button).with_children(|inner| {
                         spawn_icon(inner, icons, "diplomacy", icon, 15.0);
@@ -633,6 +662,7 @@ pub fn update_diplomacy_bar(
                     "Consulate",
                     enabled(a.map(|a| a.can_build_consulate)),
                     ui.queued == Some(QueuedDiplomacyAction::Consulate),
+                    tooltip_for(&QueuedDiplomacyAction::Consulate),
                     DiploArmButton(QueuedDiplomacyAction::Consulate),
                 );
                 action_button(
@@ -641,6 +671,7 @@ pub fn update_diplomacy_bar(
                     "Embassy",
                     enabled(a.map(|a| a.can_build_embassy)),
                     ui.queued == Some(QueuedDiplomacyAction::Embassy),
+                    tooltip_for(&QueuedDiplomacyAction::Embassy),
                     DiploArmButton(QueuedDiplomacyAction::Embassy),
                 );
                 action_button(
@@ -649,6 +680,7 @@ pub fn update_diplomacy_bar(
                     "Propose NAP",
                     enabled(a.map(|a| a.can_propose_nap)),
                     ui.queued == Some(QueuedDiplomacyAction::Nap),
+                    tooltip_for(&QueuedDiplomacyAction::Nap),
                     DiploArmButton(QueuedDiplomacyAction::Nap),
                 );
                 action_button(
@@ -657,6 +689,7 @@ pub fn update_diplomacy_bar(
                     "Propose Alliance",
                     enabled(a.map(|a| a.can_propose_alliance)),
                     ui.queued == Some(QueuedDiplomacyAction::Alliance),
+                    tooltip_for(&QueuedDiplomacyAction::Alliance),
                     DiploArmButton(QueuedDiplomacyAction::Alliance),
                 );
                 action_button(
@@ -665,6 +698,7 @@ pub fn update_diplomacy_bar(
                     "Propose Peace",
                     enabled(a.map(|a| a.can_propose_peace)),
                     ui.queued == Some(QueuedDiplomacyAction::Peace),
+                    tooltip_for(&QueuedDiplomacyAction::Peace),
                     DiploArmButton(QueuedDiplomacyAction::Peace),
                 );
 
@@ -685,9 +719,10 @@ pub fn update_diplomacy_bar(
                         ..default()
                     },
                 );
-                row.commands()
-                    .entity(grant)
-                    .insert(DiploToggleButton::GrantPicker);
+                row.commands().entity(grant).insert((
+                    DiploToggleButton::GrantPicker,
+                    TooltipText(tooltip_for(&QueuedDiplomacyAction::Grant { amount: 500 })),
+                ));
                 row.commands().entity(grant).with_children(|inner| {
                     spawn_icon(inner, icons, "diplomacy", "Grant", 15.0);
                 });
@@ -708,9 +743,16 @@ pub fn update_diplomacy_bar(
                         ..default()
                     },
                 );
+                let break_tooltip = match (focus, a) {
+                    (None, _) => tooltip_for(&QueuedDiplomacyAction::War),
+                    (Some(_), Some(a)) if !a.can_break_treaty => rel
+                        .map(|r| format!("No active treaty with {} to break.", r.nation_name))
+                        .unwrap_or_else(|| "No treaty to break.".into()),
+                    _ => "Pick which treaty to break".into(),
+                };
                 row.commands()
                     .entity(break_button)
-                    .insert(DiploToggleButton::BreakPicker);
+                    .insert((DiploToggleButton::BreakPicker, TooltipText(break_tooltip)));
                 row.commands().entity(break_button).with_children(|inner| {
                     spawn_icon(inner, icons, "diplomacy", "BreakTreaty", 15.0);
                 });
@@ -761,9 +803,10 @@ pub fn update_diplomacy_bar(
                             ..default()
                         },
                     );
-                    row.commands()
-                        .entity(war)
-                        .insert(DiploToggleButton::WarConfirm);
+                    row.commands().entity(war).insert((
+                        DiploToggleButton::WarConfirm,
+                        TooltipText(tooltip_for(&QueuedDiplomacyAction::War)),
+                    ));
                     row.commands().entity(war).with_children(|inner| {
                         spawn_icon(inner, icons, "diplomacy", "War", 15.0);
                     });

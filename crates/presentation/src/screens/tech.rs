@@ -242,9 +242,18 @@ pub fn update_tech(
         let available_ids: std::collections::HashSet<u32> =
             tech.available.iter().map(|t| t.id).collect();
 
-        if tech.available.is_empty() && tech.researched.is_empty() {
+        // The full 1815–1915 timeline: adopted, available, and future techs
+        // grouped by decade, so the screen is a planning view. Older saves
+        // without the timeline field fall back to the available list.
+        let timeline: Vec<&crate::game::vm::TechAvailableVm> = if tech.timeline.is_empty() {
+            tech.available.iter().collect()
+        } else {
+            tech.timeline.iter().collect()
+        };
+
+        if timeline.is_empty() {
             content.spawn((
-                Text::new("No technologies available this year."),
+                Text::new("No technologies in this scenario."),
                 theme.font_italic(12.5),
                 TextColor(DIM),
                 Node {
@@ -255,10 +264,29 @@ pub fn update_tech(
             ));
         }
 
-        // Available techs (researched ones dim with ✓ year; queued row
-        // highlighted).
-        for entry in &tech.available {
+        let mut last_decade: Option<i32> = None;
+        for entry in timeline {
+            let decade = entry.earliest_year / 10 * 10;
+            if last_decade != Some(decade) {
+                last_decade = Some(decade);
+                content.spawn((
+                    Text::new(format!("{decade}s")),
+                    theme.font_bold(13.0),
+                    TextColor(theme::GOLD),
+                    Node {
+                        margin: UiRect::new(
+                            Val::Px(0.0),
+                            Val::Px(0.0),
+                            Val::Px(10.0),
+                            Val::Px(2.0),
+                        ),
+                        ..default()
+                    },
+                ));
+            }
+
             let researched_year = researched_years.get(&entry.id).copied();
+            let is_available = available_ids.contains(&entry.id);
             let is_queued = tech
                 .pending
                 .as_ref()
@@ -266,6 +294,7 @@ pub fn update_tech(
             let can_afford = tech.treasury >= entry.cost;
             let year_range = (entry.latest_year < 9999)
                 .then(|| format!("{}–{}", entry.earliest_year, entry.latest_year));
+            let locked = researched_year.is_none() && !is_available;
 
             tech_row(
                 content,
@@ -274,10 +303,31 @@ pub fn update_tech(
                 year_range.as_deref(),
                 &entry.description,
                 if is_queued { Some(QUEUED_BG) } else { None },
-                researched_year.is_some(),
+                researched_year.is_some() || locked,
                 |cell, theme| {
                     if let Some(year) = researched_year {
                         researched_chip(cell, theme, year);
+                    } else if locked {
+                        // Future/locked: availability year + cost, grayed.
+                        let label = if entry.cost > 0 {
+                            format!(
+                                "from {} · ${}",
+                                entry.earliest_year,
+                                fmt_thousands(entry.cost)
+                            )
+                        } else {
+                            format!("from {}", entry.earliest_year)
+                        };
+                        cell.spawn((
+                            Text::new(label),
+                            theme.font(12.0),
+                            TextColor(DIM),
+                            TooltipText(format!(
+                                "Not yet available — unlocks from {} once its \
+                                 prerequisites are researched",
+                                entry.earliest_year
+                            )),
+                        ));
                     } else if is_queued {
                         cell.spawn((
                             Text::new("Queued ✓"),
@@ -291,9 +341,9 @@ pub fn update_tech(
                             theme,
                             ButtonProps {
                                 label: if entry.cost > 0 {
-                                    format!("${}", fmt_thousands(entry.cost))
+                                    format!("Adopt (${})", fmt_thousands(entry.cost))
                                 } else {
-                                    "Free".into()
+                                    "Adopt (free)".into()
                                 },
                                 font_size: 13.0,
                                 enabled,
@@ -318,27 +368,6 @@ pub fn update_tech(
                                 .insert(BorderColor::all(Color::srgb_u8(0x4a, 0x70, 0x30)));
                         }
                     }
-                },
-            );
-        }
-
-        // Historic researched techs no longer in the available window.
-        for entry in tech
-            .researched
-            .iter()
-            .filter(|t| !available_ids.contains(&t.id))
-        {
-            let year = entry.year;
-            tech_row(
-                content,
-                &theme,
-                &entry.name,
-                None,
-                &entry.description,
-                None,
-                true,
-                |cell, theme| {
-                    researched_chip(cell, theme, year);
                 },
             );
         }

@@ -14,7 +14,9 @@ use crate::game::commands::GameCommand;
 use crate::game::resources::{GameMeta, ViewModels};
 use crate::game::vm::{BuildableEntryVm, IndustryVm};
 use crate::map::icons::IconAssets;
-use crate::screens::common::{icon_label, section_title, spawn_icon, split_camel, unit_icon_name};
+use crate::screens::common::{
+    fmt_thousands, icon_label, inset_panel, section_title, spawn_icon, split_camel, unit_icon_name,
+};
 use crate::theme::{self, Theme};
 use crate::widgets::{
     self, ButtonActivated, ButtonProps, CheckboxProps, CheckboxToggled, SliderCommitted,
@@ -22,7 +24,6 @@ use crate::widgets::{
 };
 
 const COMMITTED_BLUE: Color = Color::srgb_u8(0x6a, 0xb0, 0xd4);
-const WARN_RED: Color = Color::srgb_u8(0xaa, 0x66, 0x66);
 const TARGET_BEHIND: Color = Color::srgb_u8(0xd9, 0x7a, 0x4a);
 const TARGET_MET: Color = Color::srgb_u8(0x66, 0xaa, 0x88);
 
@@ -57,15 +58,10 @@ pub struct ExpandButton(pub String);
 pub struct ShowTargetsCheckbox;
 
 /// Screen-local UI state (web `showTargets` localStorage toggle).
-#[derive(Resource)]
+/// AI-target debug data stays hidden until explicitly enabled.
+#[derive(Resource, Default)]
 pub struct IndustryUi {
     pub show_targets: bool,
-}
-
-impl Default for IndustryUi {
-    fn default() -> Self {
-        Self { show_targets: true }
-    }
 }
 
 // ── Lifecycle ────────────────────────────────────────────────────────────
@@ -140,7 +136,7 @@ pub fn update_industry(
                 ));
                 if let Some(buildable) = buildable {
                     row.spawn((
-                        Text::new(format!("${}", buildable.treasury)),
+                        Text::new(format!("Treasury ${}", fmt_thousands(buildable.treasury))),
                         theme.font_bold(14.0),
                         TextColor(theme::GOLD),
                     ));
@@ -176,7 +172,7 @@ pub fn update_industry(
             .with_children(|columns| {
                 columns
                     .spawn(column_node())
-                    .with_children(|col| column_production(col, &theme, industry, observer));
+                    .with_children(|col| column_production(col, &theme, icons, industry, observer));
                 columns.spawn(column_node()).with_children(|col| {
                     column_buildings_warehouse(
                         col, &theme, icons, industry, &committed, &ui, observer,
@@ -204,6 +200,7 @@ fn column_node() -> Node {
 fn column_production(
     col: &mut ChildSpawnerCommands,
     theme: &Theme,
+    icons: Option<&IconAssets>,
     industry: &IndustryVm,
     observer: bool,
 ) {
@@ -212,11 +209,13 @@ fn column_production(
 
     // Timber.
     chain_heading(col, theme, "Timber");
-    chain_slider_row(
+    chain_card(
         col,
         theme,
+        icons,
         observer,
         "Timber → Lumber",
+        "Lumber",
         pf.timber_chain.mill_cap,
         pf.timber_chain.mill_max_output,
         target(industry, "timber_mill"),
@@ -228,11 +227,13 @@ fn column_production(
             step: "mill",
         },
     );
-    chain_slider_row(
+    chain_card(
         col,
         theme,
+        icons,
         observer,
         "Lumber → Furniture",
+        "Furniture",
         pf.timber_chain.factory_cap,
         pf.timber_chain.factory_max_output,
         target(industry, "lumber_factory"),
@@ -245,11 +246,13 @@ fn column_production(
         },
     );
     if pf.paper_chain.factory_cap > 0 {
-        chain_slider_row(
+        chain_card(
             col,
             theme,
+            icons,
             observer,
-            "Timber → Paper",
+            "Lumber → Paper",
+            "Paper",
             pf.paper_chain.factory_cap,
             pf.paper_chain.factory_max_output,
             target(industry, "paper_factory"),
@@ -265,11 +268,13 @@ fn column_production(
 
     // Metal.
     chain_heading(col, theme, "Metal");
-    chain_slider_row(
+    chain_card(
         col,
         theme,
+        icons,
         observer,
         "Coal+Iron → Steel",
+        "Steel",
         pf.metal_chain.mill_cap,
         pf.metal_chain.mill_max_output,
         target(industry, "metal_mill"),
@@ -284,11 +289,13 @@ fn column_production(
             step: "mill",
         },
     );
-    chain_slider_row(
+    chain_card(
         col,
         theme,
+        icons,
         observer,
         "Steel → Hardware",
+        "Hardware",
         pf.metal_chain.factory_cap,
         pf.metal_chain.factory_max_output,
         target(industry, "steel_factory"),
@@ -300,32 +307,34 @@ fn column_production(
             step: "factory",
         },
     );
-    if pf.arms_chain.armory_cap > 0 {
-        chain_slider_row(
-            col,
-            theme,
-            observer,
-            "Steel → Arms",
-            pf.arms_chain.armory_cap,
-            pf.arms_chain.armory_max_output,
-            target(industry, "armory"),
-            pf.arms_chain.armory_output,
-            &[(pf.arms_chain.armory_committed_steel, "Steel")],
-            pf.arms_chain.armory_labor,
-            IndustryAction::Chain {
-                chain: "arms",
-                step: "armory",
-            },
-        );
-    }
+    chain_card(
+        col,
+        theme,
+        icons,
+        observer,
+        "Steel → Arms",
+        "Arms",
+        pf.arms_chain.armory_cap,
+        pf.arms_chain.armory_max_output,
+        target(industry, "armory"),
+        pf.arms_chain.armory_output,
+        &[(pf.arms_chain.armory_committed_steel, "Steel")],
+        pf.arms_chain.armory_labor,
+        IndustryAction::Chain {
+            chain: "arms",
+            step: "armory",
+        },
+    );
 
     // Textile.
     chain_heading(col, theme, "Textile");
-    chain_slider_row(
+    chain_card(
         col,
         theme,
+        icons,
         observer,
         "Cotton/Wool → Fabric",
+        "Fabric",
         pf.textile_chain.mill_cap,
         pf.textile_chain.mill_max_output,
         target(industry, "textile_mill"),
@@ -340,11 +349,13 @@ fn column_production(
             step: "mill",
         },
     );
-    chain_slider_row(
+    chain_card(
         col,
         theme,
+        icons,
         observer,
         "Fabric → Clothing",
+        "Clothing",
         pf.textile_chain.factory_cap,
         pf.textile_chain.factory_max_output,
         target(industry, "garment_factory"),
@@ -358,30 +369,30 @@ fn column_production(
     );
 
     // Food.
-    if pf.food_chain.factory_cap > 0 {
-        chain_heading(col, theme, "Food");
-        chain_slider_row(
-            col,
-            theme,
-            observer,
-            "Grain+Fruit+Meat → Canned",
-            pf.food_chain.factory_cap,
-            pf.food_chain.factory_max_output,
-            target(industry, "canned_food_factory"),
-            pf.food_chain.factory_output,
-            &[
-                (pf.food_chain.factory_committed_grain, "Grain"),
-                (pf.food_chain.factory_committed_fruit, "Fruit"),
-                (pf.food_chain.factory_committed_fish, "Fish"),
-                (pf.food_chain.factory_committed_livestock, "Livestock"),
-            ],
-            pf.food_chain.factory_labor,
-            IndustryAction::Chain {
-                chain: "food",
-                step: "factory",
-            },
-        );
-    }
+    chain_heading(col, theme, "Food");
+    chain_card(
+        col,
+        theme,
+        icons,
+        observer,
+        "Grain+Fruit+Meat → Canned",
+        "CannedFood",
+        pf.food_chain.factory_cap,
+        pf.food_chain.factory_max_output,
+        target(industry, "canned_food_factory"),
+        pf.food_chain.factory_output,
+        &[
+            (pf.food_chain.factory_committed_grain, "Grain"),
+            (pf.food_chain.factory_committed_fruit, "Fruit"),
+            (pf.food_chain.factory_committed_fish, "Fish"),
+            (pf.food_chain.factory_committed_livestock, "Livestock"),
+        ],
+        pf.food_chain.factory_labor,
+        IndustryAction::Chain {
+            chain: "food",
+            step: "factory",
+        },
+    );
 
     // Labor.
     section_title(col, theme, "Labor");
@@ -470,9 +481,9 @@ fn column_production(
     );
     if pending.to_trained > 0 && paper < pending.to_trained * costs.to_trained_paper {
         col.spawn((
-            Text::new("need more paper"),
+            Text::new("Need more paper — queue Lumber → Paper output above"),
             theme.font(10.0),
-            TextColor(WARN_RED),
+            TextColor(theme::WARN),
         ));
     }
     education_row(
@@ -516,9 +527,9 @@ fn column_production(
         );
     } else {
         col.spawn((
-            Text::new("Need canned food, clothing, and immigration slots this turn"),
+            Text::new("Needs canned food (Food chain), clothing (Textile chain), and open slots"),
             theme.font(10.0),
-            TextColor(WARN_RED),
+            TextColor(theme::MUTED),
         ));
     }
 }
@@ -543,13 +554,18 @@ fn chain_heading(col: &mut ChildSpawnerCommands, theme: &Theme, label: &str) {
     ));
 }
 
-/// One production step: label + committed-inputs/forecast summary on the
-/// first line, target slider (with the ∞ notch = unlimited) on the second.
-fn chain_slider_row(
+/// One production step as an inset card (CC-1): icon arrow-diagram + name
+/// on the first line, building status on the second, labeled "Output"
+/// target slider (with the ∞ notch = unlimited) on the third. Steps without
+/// a building render one muted card with the unblock hint (CC-3).
+#[allow(clippy::too_many_arguments)]
+fn chain_card(
     col: &mut ChildSpawnerCommands,
     theme: &Theme,
+    icons: Option<&IconAssets>,
     observer: bool,
     label: &str,
+    output_icon: &str,
     cap: u32,
     max_output: u32,
     target: u32,
@@ -558,27 +574,7 @@ fn chain_slider_row(
     labor: u32,
     action: IndustryAction,
 ) {
-    if cap == 0 {
-        col.spawn(Node {
-            flex_direction: FlexDirection::Column,
-            margin: UiRect::bottom(Val::Px(6.0)),
-            padding: UiRect::left(Val::Px(4.0)),
-            ..default()
-        })
-        .with_children(|row| {
-            row.spawn((
-                Text::new(label.to_string()),
-                theme.font(11.0),
-                TextColor(theme::TEXT_DIM),
-            ));
-            row.spawn((
-                Text::new("No building"),
-                theme.font_italic(10.0),
-                TextColor(theme::TEXT_DIM),
-            ));
-        });
-        return;
-    }
+    let built = cap > 0;
 
     let mut parts: Vec<String> = inputs
         .iter()
@@ -594,28 +590,34 @@ fn chain_slider_row(
         format!("{} → {output}", parts.join(" + "))
     };
 
-    let effective_cap = cap.min(max_output);
-    col.spawn(Node {
-        flex_direction: FlexDirection::Column,
-        margin: UiRect::bottom(Val::Px(6.0)),
-        padding: UiRect::left(Val::Px(4.0)),
-        row_gap: Val::Px(1.0),
-        ..default()
-    })
-    .with_children(|block| {
-        block
-            .spawn(Node {
+    col.spawn(inset_panel()).with_children(|card| {
+        card.spawn(Node {
+            flex_direction: FlexDirection::Row,
+            justify_content: JustifyContent::SpaceBetween,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(6.0),
+            ..default()
+        })
+        .with_children(|line| {
+            line.spawn(Node {
                 flex_direction: FlexDirection::Row,
-                justify_content: JustifyContent::SpaceBetween,
-                column_gap: Val::Px(6.0),
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(3.0),
                 ..default()
             })
-            .with_children(|line| {
-                line.spawn((
-                    Text::new(label.to_string()),
-                    theme.font(11.0),
-                    TextColor(theme::TEXT),
+            .with_children(|diagram| {
+                for (_, name) in inputs {
+                    spawn_icon(diagram, icons, "commodities", name, 13.0);
+                }
+                diagram.spawn((Text::new("→"), theme.font(11.0), TextColor(theme::TEXT_DIM)));
+                spawn_icon(diagram, icons, "commodities", output_icon, 13.0);
+                diagram.spawn((
+                    Text::new(format!("  {label}")),
+                    theme.font(11.5),
+                    TextColor(if built { theme::TEXT } else { theme::TEXT_DIM }),
                 ));
+            });
+            if built {
                 line.spawn((
                     Text::new(summary),
                     theme.font(11.0),
@@ -625,31 +627,77 @@ fn chain_slider_row(
                         theme::TEXT_DIM
                     }),
                 ));
-            });
-        let value = if target == UNLIMITED {
-            effective_cap as f32 + 1.0
-        } else {
-            target.min(effective_cap) as f32
-        };
-        let cap_for_label = effective_cap;
-        let slider = widgets::spawn_slider(
-            block,
-            theme,
-            SliderProps {
-                min: 0.0,
-                max: effective_cap as f32,
-                step: 1.0,
-                value,
-                unlimited: true,
-                width: Val::Px(150.0),
-                format: Some(Arc::new(move |v| format!("{v:.0}/{cap_for_label}"))),
-            },
-        );
-        let mut entity = block.commands_mut().entity(slider);
-        entity.insert(action);
-        if observer {
-            entity.insert(InteractionDisabled);
+            }
+        });
+
+        if !built {
+            // Honest dead-end: player nations currently have no way to
+            // construct missing mills/factories (starting buildings depend
+            // on difficulty), so don't send players hunting for one.
+            card.spawn((
+                Text::new("No building — this industry hasn't been developed yet"),
+                theme.font_italic(10.0),
+                TextColor(theme::TEXT_DIM),
+            ));
+            return;
         }
+
+        let effective_cap = cap.min(max_output);
+        let status = if max_output < cap {
+            format!("Capacity {cap} · inputs limit output to {max_output}")
+        } else {
+            format!("Capacity {cap}")
+        };
+        card.spawn((
+            Text::new(status),
+            theme.font(10.0),
+            TextColor(theme::TEXT_DIM),
+        ));
+
+        card.spawn(Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(6.0),
+            ..default()
+        })
+        .with_children(|slider_row| {
+            slider_row.spawn((
+                Text::new("Output"),
+                theme.font(10.5),
+                TextColor(theme::TEXT_DIM),
+            ));
+            let value = if target == UNLIMITED {
+                effective_cap as f32 + 1.0
+            } else {
+                target.min(effective_cap) as f32
+            };
+            let cap_for_label = effective_cap;
+            let slider = widgets::spawn_slider(
+                slider_row,
+                theme,
+                SliderProps {
+                    min: 0.0,
+                    max: effective_cap as f32,
+                    step: 1.0,
+                    value,
+                    unlimited: true,
+                    width: Val::Px(130.0),
+                    format: Some(Arc::new(move |v| format!("{v:.0}/{cap_for_label}"))),
+                },
+            );
+            let mut entity = slider_row.commands_mut().entity(slider);
+            entity.insert((
+                action,
+                TooltipText(
+                    "Caps this step's output per turn. The far-right ∞ notch means \
+                     unlimited — produce as inputs allow."
+                        .into(),
+                ),
+            ));
+            if observer {
+                entity.insert(InteractionDisabled);
+            }
+        });
     });
 }
 
@@ -904,15 +952,6 @@ fn warehouse_group(
     committed: &HashMap<String, u32>,
     show_targets: bool,
 ) {
-    parent.spawn((
-        Text::new(title.to_uppercase()),
-        theme.font(9.5),
-        TextColor(theme::TEXT_DIM),
-        Node {
-            margin: UiRect::vertical(Val::Px(3.0)),
-            ..default()
-        },
-    ));
     let mut keys: Vec<&String> = stock
         .iter()
         .filter(|(_, v)| **v > 0)
@@ -926,55 +965,98 @@ fn warehouse_group(
         }
     }
     keys.sort();
-    for key in keys {
-        let total = stock.get(key).copied().unwrap_or(0);
-        let used = committed.get(key).copied().unwrap_or(0);
-        let free = total.saturating_sub(used);
-        let target = targets.get(key).copied().unwrap_or(0);
-        parent
-            .spawn(Node {
+    // CC-1: each warehouse section sits in its own inset container, with
+    // counts right-aligned.
+    parent.spawn(inset_panel()).with_children(|card| {
+        card.spawn((
+            Text::new(title.to_uppercase()),
+            theme.font(9.5),
+            TextColor(theme::TEXT_DIM),
+            Node {
+                margin: UiRect::bottom(Val::Px(2.0)),
+                ..default()
+            },
+        ));
+        if keys.is_empty() {
+            card.spawn((
+                Text::new("Empty"),
+                theme.font_italic(10.5),
+                TextColor(theme::TEXT_DIM),
+            ));
+        }
+        for key in keys {
+            let total = stock.get(key).copied().unwrap_or(0);
+            let used = committed.get(key).copied().unwrap_or(0);
+            let free = total.saturating_sub(used);
+            let target = targets.get(key).copied().unwrap_or(0);
+            card.spawn(Node {
                 flex_direction: FlexDirection::Row,
+                justify_content: JustifyContent::SpaceBetween,
                 align_items: AlignItems::Center,
-                column_gap: Val::Px(4.0),
+                column_gap: Val::Px(6.0),
                 margin: UiRect::bottom(Val::Px(1.0)),
                 ..default()
             })
             .with_children(|row| {
-                spawn_icon(row, icons, "commodities", key, 13.0);
-                row.spawn((
-                    Text::new(format!("{}:", split_camel(key))),
-                    theme.font(12.0),
-                    TextColor(theme::TEXT),
-                ));
-                row.spawn((
-                    Text::new(format!("{free}")),
-                    theme.font_bold(12.0),
-                    TextColor(if free < total {
-                        COMMITTED_BLUE
-                    } else {
-                        theme::GOLD
-                    }),
-                ));
+                row.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(4.0),
+                    ..default()
+                })
+                .with_children(|left| {
+                    spawn_icon(left, icons, "commodities", key, 13.0);
+                    left.spawn((
+                        Text::new(split_camel(key)),
+                        theme.font(12.0),
+                        TextColor(theme::TEXT),
+                    ));
+                });
+                let counts = row
+                    .spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(4.0),
+                        ..default()
+                    })
+                    .with_children(|right| {
+                        if show_targets && target > 0 {
+                            right.spawn((
+                                Text::new(format!("aim {target}")),
+                                theme.font(10.0),
+                                TextColor(if total < target {
+                                    TARGET_BEHIND
+                                } else {
+                                    TARGET_MET
+                                }),
+                            ));
+                        }
+                        if used > 0 {
+                            right.spawn((
+                                Text::new(format!("({total})")),
+                                theme.font(10.0),
+                                TextColor(theme::TEXT_DIM),
+                            ));
+                        }
+                        right.spawn((
+                            Text::new(format!("{free}")),
+                            theme.font_bold(12.0),
+                            TextColor(if free < total {
+                                COMMITTED_BLUE
+                            } else {
+                                theme::GOLD
+                            }),
+                        ));
+                    })
+                    .id();
                 if used > 0 {
-                    row.spawn((
-                        Text::new(format!("({total})")),
-                        theme.font(10.0),
-                        TextColor(theme::TEXT_DIM),
-                    ));
-                }
-                if show_targets && target > 0 {
-                    row.spawn((
-                        Text::new(format!("· aim {target}")),
-                        theme.font(10.0),
-                        TextColor(if total < target {
-                            TARGET_BEHIND
-                        } else {
-                            TARGET_MET
-                        }),
-                    ));
+                    row.commands().entity(counts).insert(TooltipText(format!(
+                        "{free} free of {total} in stock — {used} committed to queued orders"
+                    )));
                 }
             });
-    }
+        }
+    });
 }
 
 /// Warehouse amounts committed by queued production / training /
@@ -1063,40 +1145,104 @@ fn column_logistics_builds(
         return;
     };
 
-    // Army recruitment.
+    // Army recruitment. While nothing is recruitable the nine "Not enough
+    // arms" rows collapse into one muted group with a single unblock hint
+    // (CC-3); it expands to full rows as soon as any unit can be queued.
     let army: Vec<&BuildableEntryVm> = buildable.army.iter().filter(|b| b.tech_met).collect();
     if !army.is_empty() {
         section_title(col, theme, "Army Recruitment");
-        for entry in army {
-            let queued = industry
-                .pending_army_recruits
-                .iter()
-                .filter(|s| **s == entry.unit_type)
-                .count() as u32;
-            let mut sublabel = format!("${}", entry.cost.unwrap_or(0));
-            if let Some(arms) = entry.arms_required.filter(|a| *a > 0) {
-                sublabel.push_str(&format!(" +{arms}A"));
-            }
-            let icon = unit_icon_name(entry.category.as_deref().unwrap_or(""));
-            build_row(
-                col,
-                theme,
-                icons,
-                "units",
-                icon,
-                &split_camel(&entry.unit_type),
-                &sublabel,
-                entry.max_count,
-                queued,
-                entry.tech_met,
-                if entry.max_count == 0 {
-                    Some(entry.reason.clone().unwrap_or("Cannot recruit".into()))
+        let queued_any = army
+            .iter()
+            .any(|entry| industry.pending_army_recruits.contains(&entry.unit_type));
+        let locked = army.iter().all(|entry| entry.max_count == 0) && !queued_any;
+        if locked {
+            col.spawn(inset_panel()).with_children(|card| {
+                for entry in &army {
+                    let mut sublabel = format!("${}", entry.cost.unwrap_or(0));
+                    if let Some(arms) = entry.arms_required.filter(|a| *a > 0) {
+                        sublabel.push_str(&format!(" + {arms} Arms"));
+                    }
+                    card.spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        justify_content: JustifyContent::SpaceBetween,
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(6.0),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        row.spawn(Node {
+                            flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::Center,
+                            column_gap: Val::Px(4.0),
+                            ..default()
+                        })
+                        .with_children(|left| {
+                            let icon = unit_icon_name(entry.category.as_deref().unwrap_or(""));
+                            spawn_icon(left, icons, "units", icon, 14.0);
+                            left.spawn((
+                                Text::new(split_camel(&entry.unit_type)),
+                                theme.font(11.5),
+                                TextColor(theme::TEXT_DIM),
+                            ));
+                        });
+                        row.spawn((
+                            Text::new(sublabel),
+                            theme.font(10.0),
+                            TextColor(theme::TEXT_DIM),
+                        ));
+                    });
+                }
+                let hint = if buildable.arms == 0 {
+                    "Not enough arms — set the Steel → Arms output slider under \
+                     Production Chains, or buy Arms on the Trade screen (F5)"
                 } else {
-                    None
-                },
-                IndustryAction::Recruit(entry.unit_type.clone()),
-                observer,
-            );
+                    "Cannot recruit right now — check your treasury and arms stock"
+                };
+                card.spawn((
+                    Text::new(hint),
+                    theme.font_italic(10.5),
+                    TextColor(theme::WARN),
+                    Node {
+                        margin: UiRect::top(Val::Px(4.0)),
+                        ..default()
+                    },
+                ));
+            });
+        } else {
+            for entry in army {
+                let queued = industry
+                    .pending_army_recruits
+                    .iter()
+                    .filter(|s| **s == entry.unit_type)
+                    .count() as u32;
+                let mut sublabel = format!("${}", entry.cost.unwrap_or(0));
+                if let Some(arms) = entry.arms_required.filter(|a| *a > 0) {
+                    sublabel.push_str(&format!(" +{arms}A"));
+                }
+                let icon = unit_icon_name(entry.category.as_deref().unwrap_or(""));
+                build_row(
+                    col,
+                    theme,
+                    icons,
+                    "units",
+                    icon,
+                    &split_camel(&entry.unit_type),
+                    &sublabel,
+                    None,
+                    entry.max_count,
+                    queued,
+                    entry.tech_met,
+                    if entry.max_count == 0 {
+                        Some(reason_with_hint(
+                            entry.reason.clone().unwrap_or("Cannot recruit".into()),
+                        ))
+                    } else {
+                        None
+                    },
+                    IndustryAction::Recruit(entry.unit_type.clone()),
+                    observer,
+                );
+            }
         }
     }
 
@@ -1143,10 +1289,20 @@ fn column_logistics_builds(
                 let reason = if !entry.tech_met {
                     Some(entry.reason.clone().unwrap_or("Tech required".into()))
                 } else if entry.max_count == 0 {
-                    Some("Insufficient resources".to_string())
+                    Some(reason_with_hint("Insufficient resources".to_string()))
                 } else {
                     None
                 };
+                let cost_tooltip = entry.resources_needed.as_ref().map(|needs| {
+                    format!(
+                        "Needs: {}",
+                        needs
+                            .iter()
+                            .map(|(k, v)| format!("{v} {}", split_camel(k)))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                });
                 build_row(
                     col,
                     theme,
@@ -1155,6 +1311,7 @@ fn column_logistics_builds(
                     &entry.unit_type,
                     &split_camel(&entry.unit_type),
                     &sublabel,
+                    cost_tooltip,
                     entry.max_count,
                     queued,
                     entry.tech_met,
@@ -1184,14 +1341,14 @@ fn column_logistics_builds(
                 format!("${}", entry.cost.unwrap_or(0))
             };
             let reason = if entry.max_count == 0 {
-                Some(
+                Some(reason_with_hint(
                     if expert {
                         "Need expert workers"
                     } else {
                         "Cannot afford"
                     }
                     .to_string(),
-                )
+                ))
             } else {
                 None
             };
@@ -1203,6 +1360,7 @@ fn column_logistics_builds(
                 &entry.unit_type,
                 &entry.unit_type,
                 &sublabel,
+                None,
                 entry.max_count,
                 pending,
                 entry.tech_met,
@@ -1214,8 +1372,27 @@ fn column_logistics_builds(
     }
 }
 
+/// CC-3: append the unblock hint for a known disabled reason.
+fn reason_with_hint(reason: String) -> String {
+    let lower = reason.to_lowercase();
+    if lower.contains("arms") {
+        format!("{reason} — set the Steel → Arms output slider under Production Chains")
+    } else if lower.contains("horses") {
+        format!("{reason} — buy Horses on the Trade screen (F5)")
+    } else if lower.contains("expert") {
+        format!("{reason} — train experts under Education")
+    } else if lower.contains("afford") {
+        format!("{reason} — treasury too low this turn")
+    } else if lower.contains("resources") {
+        format!("{reason} — produce the needed materials in your industry")
+    } else {
+        reason
+    }
+}
+
 /// Recruit/ship/hire row: icon + name + cost sublabel, with either a
 /// queue slider or a greyed disabled-reason line (web `ShipBuildRow`).
+#[allow(clippy::too_many_arguments)]
 fn build_row(
     col: &mut ChildSpawnerCommands,
     theme: &Theme,
@@ -1224,6 +1401,7 @@ fn build_row(
     icon_name: &str,
     label: &str,
     sublabel: &str,
+    sublabel_tooltip: Option<String>,
     max_count: u32,
     queued: u32,
     tech_met: bool,
@@ -1265,11 +1443,14 @@ fn build_row(
                         theme::TEXT_DIM
                     }),
                 ));
-                line.spawn((
+                let mut sub = line.spawn((
                     Text::new(sublabel.to_string()),
                     theme.font(10.0),
                     TextColor(theme::TEXT_DIM),
                 ));
+                if let Some(tooltip) = sublabel_tooltip {
+                    sub.insert(TooltipText(tooltip));
+                }
             });
             if show_slider {
                 let max = max_count.max(queued);
@@ -1298,7 +1479,7 @@ fn build_row(
                     entity.insert(InteractionDisabled);
                 }
             } else if let Some(reason) = reason {
-                body.spawn((Text::new(reason), theme.font(10.0), TextColor(WARN_RED)));
+                body.spawn((Text::new(reason), theme.font(10.0), TextColor(theme::MUTED)));
             }
         });
     });

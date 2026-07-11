@@ -251,7 +251,7 @@ impl TerrainField {
 pub struct SetupConfig {
     /// `None` = Random Map.
     pub scenario: Option<String>,
-    /// 0 Introductory … 4 NOI.
+    /// 0 Introductory … 4 Brutal.
     pub difficulty: u8,
     /// Raw map-key input; empty = the "imperialism" default seed.
     pub map_key: String,
@@ -305,7 +305,7 @@ impl SetupConfig {
     }
 }
 
-pub const DIFFICULTIES: [&str; 5] = ["Introductory", "Easy", "Normal", "Hard", "NOI"];
+pub const DIFFICULTIES: [&str; 5] = ["Introductory", "Easy", "Normal", "Hard", "Brutal"];
 
 pub const SIZE_PRESETS: [(&str, i32, i32); 3] = [
     ("Small (60×40)", 60, 40),

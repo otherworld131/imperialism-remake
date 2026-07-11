@@ -157,7 +157,7 @@ pub fn enter_news(
         .id();
 
     commands.entity(root).with_children(|panel| {
-        // Masthead.
+        // Masthead, with the uniform "Close (Esc)" top-right (CC-5).
         panel
             .spawn((
                 Node {
@@ -181,6 +181,25 @@ pub fn enter_news(
                     TextColor(PAPER_DIM),
                     NewsDateText,
                 ));
+                masthead
+                    .spawn(Node {
+                        position_type: PositionType::Absolute,
+                        top: Val::Px(10.0),
+                        right: Val::Px(16.0),
+                        ..default()
+                    })
+                    .with_children(|cell| {
+                        let button = widgets::spawn_button(
+                            cell,
+                            &theme,
+                            ButtonProps {
+                                label: "Close (Esc)".into(),
+                                font_size: 13.0,
+                                ..default()
+                            },
+                        );
+                        cell.commands().entity(button).insert(NewsBackButton);
+                    });
             });
 
         // Toolbar: mode tabs + filters.
@@ -277,6 +296,7 @@ pub fn enter_news(
                                 width: Val::Px(160.0),
                                 max_len: 48,
                                 value: ui.search.clone(),
+                                placeholder: "Filter…".into(),
                             },
                         );
                         filters.commands().entity(search).insert(NewsSearchInput);
@@ -335,12 +355,12 @@ pub fn enter_news(
                     .insert(NewsHeadlines);
             });
 
-        // Footer.
+        // Footer: primary action bottom-right (CC-5).
         panel
             .spawn((
                 Node {
                     flex_direction: FlexDirection::Row,
-                    justify_content: JustifyContent::SpaceBetween,
+                    justify_content: JustifyContent::FlexEnd,
                     align_items: AlignItems::Center,
                     padding: UiRect::axes(Val::Px(24.0), Val::Px(8.0)),
                     border: UiRect::top(Val::Px(2.0)),
@@ -350,16 +370,6 @@ pub fn enter_news(
                 BorderColor::all(PAPER_RULE),
             ))
             .with_children(|footer| {
-                let back = widgets::spawn_button(
-                    footer,
-                    &theme,
-                    ButtonProps {
-                        label: "Back to Map".into(),
-                        font_size: 13.0,
-                        ..default()
-                    },
-                );
-                footer.commands().entity(back).insert(NewsBackButton);
                 let cont = widgets::spawn_button(
                     footer,
                     &theme,
@@ -610,6 +620,7 @@ pub fn update_news_content(
         .filter(|n| n.is_great_power())
         .map(|n| n.name.as_str())
         .collect();
+    let all_nation_names: Vec<&str> = vms.nations.iter().map(|n| n.name.as_str()).collect();
 
     commands.entity(headlines_area).with_children(|area| {
         let pad = Node {
@@ -657,6 +668,7 @@ pub fn update_news_content(
                     PAPER_RULE,
                     &player_news,
                     &[],
+                    &all_nation_names,
                     debug.show_ai_reasoning,
                 );
             }
@@ -668,6 +680,7 @@ pub fn update_news_content(
                     PAPER_DIM,
                     &world_news,
                     &gp_names,
+                    &all_nation_names,
                     debug.show_ai_reasoning,
                 );
             }
@@ -677,6 +690,7 @@ pub fn update_news_content(
 
 /// Section label + two-column headline flow (the web uses CSS multi-columns;
 /// here each section's items split half-and-half across two columns).
+#[allow(clippy::too_many_arguments)]
 fn headline_section(
     parent: &mut ChildSpawnerCommands,
     theme: &Theme,
@@ -684,6 +698,7 @@ fn headline_section(
     label_color: Color,
     headlines: &[&HeadlineVm],
     nation_tags: &[&str],
+    all_nation_names: &[&str],
     show_reasoning: bool,
 ) {
     parent
@@ -711,6 +726,10 @@ fn headline_section(
                         TextColor(label_color),
                     ));
                 });
+            // Coalesce near-identical headlines (same category + same text
+            // once nation names are masked) into one line with the detail
+            // list behind a tooltip.
+            let grouped = coalesce_headlines(headlines, all_nation_names);
             section
                 .spawn(Node {
                     flex_direction: FlexDirection::Row,
@@ -719,8 +738,8 @@ fn headline_section(
                     ..default()
                 })
                 .with_children(|columns| {
-                    let split = headlines.len().div_ceil(2);
-                    for chunk in [&headlines[..split], &headlines[split..]] {
+                    let split = grouped.len().div_ceil(2);
+                    for chunk in [&grouped[..split], &grouped[split..]] {
                         columns
                             .spawn(Node {
                                 flex_direction: FlexDirection::Column,
@@ -731,14 +750,8 @@ fn headline_section(
                                 ..default()
                             })
                             .with_children(|column| {
-                                for headline in chunk {
-                                    headline_row(
-                                        column,
-                                        theme,
-                                        headline,
-                                        nation_tags,
-                                        show_reasoning,
-                                    );
+                                for group in chunk {
+                                    headline_row(column, theme, group, nation_tags, show_reasoning);
                                 }
                             });
                     }
@@ -746,13 +759,62 @@ fn headline_section(
         });
 }
 
+/// One rendered headline: the lead item plus any coalesced repeats.
+struct HeadlineGroup<'a> {
+    lead: &'a HeadlineVm,
+    /// Texts of the coalesced repeats (empty = a normal single headline).
+    others: Vec<&'a str>,
+}
+
+/// Group headlines whose text differs only by nation names, preserving
+/// first-seen order (view-model-level grouping; no more than one line per
+/// event type per turn).
+fn coalesce_headlines<'a>(
+    headlines: &[&'a HeadlineVm],
+    nation_names: &[&str],
+) -> Vec<HeadlineGroup<'a>> {
+    // Ordered placeholders: the first distinct nation in the text becomes
+    // `#1`, the second `#2`, … so templates keep their argument structure
+    // while still merging the "same event, different nations" repeats the
+    // plan calls for.
+    let template = |text: &str| -> String {
+        let mut found: Vec<(usize, &str)> = nation_names
+            .iter()
+            .filter(|name| !name.is_empty())
+            .filter_map(|name| text.find(name).map(|pos| (pos, *name)))
+            .collect();
+        found.sort();
+        let mut masked = text.to_string();
+        for (index, (_, name)) in found.iter().enumerate() {
+            masked = masked.replace(name, &format!("#{}", index + 1));
+        }
+        masked
+    };
+    let mut order: Vec<(String, HeadlineGroup<'a>)> = Vec::new();
+    for headline in headlines {
+        let key = format!("{}|{}", headline.category, template(&headline.text));
+        match order.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, group)) => group.others.push(headline.text.as_str()),
+            None => order.push((
+                key,
+                HeadlineGroup {
+                    lead: headline,
+                    others: Vec::new(),
+                },
+            )),
+        }
+    }
+    order.into_iter().map(|(_, group)| group).collect()
+}
+
 fn headline_row(
     parent: &mut ChildSpawnerCommands,
     theme: &Theme,
-    headline: &HeadlineVm,
+    group: &HeadlineGroup,
     nation_tags: &[&str],
     show_reasoning: bool,
 ) {
+    let headline = group.lead;
     parent
         .spawn((
             Node {
@@ -763,6 +825,8 @@ fn headline_row(
                 ..default()
             },
             BorderColor::all(category_color(&headline.category)),
+            // CC-4: the colored edge bar gets a label.
+            widgets::TooltipText(format!("Category: {}", capitalize(&headline.category))),
         ))
         .with_children(|row| {
             // Nation tag (web `extractNationTag`: first Great Power named in
@@ -782,6 +846,18 @@ fn headline_row(
                 theme.font(13.5),
                 TextColor(PAPER_INK),
             ));
+            if !group.others.is_empty() {
+                row.spawn((
+                    Text::new(format!(
+                        "+{} similar report{}",
+                        group.others.len(),
+                        if group.others.len() == 1 { "" } else { "s" }
+                    )),
+                    theme.font_italic(11.5),
+                    TextColor(PAPER_DIM),
+                    widgets::TooltipText(group.others.join("\n")),
+                ));
+            }
             if show_reasoning && let Some(reason) = headline.reason.as_deref() {
                 row.spawn((
                     Text::new(reason.to_string()),
@@ -790,6 +866,14 @@ fn headline_row(
                 ));
             }
         });
+}
+
+fn capitalize(word: &str) -> String {
+    let mut chars = word.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 // ── Interactions ─────────────────────────────────────────────────────────

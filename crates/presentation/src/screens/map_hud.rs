@@ -83,6 +83,14 @@ pub struct SkipUntilInput;
 #[derive(Component)]
 pub struct SkipUntilBtn;
 
+/// "Skip…" button that opens the skip-controls popover.
+#[derive(Component)]
+pub struct SkipPopoverBtn;
+
+/// Popover holding the full skip row (dev machinery, tucked away).
+#[derive(Component)]
+pub struct SkipPopover;
+
 #[derive(Component)]
 pub struct SaveBtn;
 
@@ -244,70 +252,9 @@ pub fn setup_hud(mut commands: Commands, theme: Res<Theme>) {
                 row.commands().entity(dropdown).insert(ViewpointDropdown);
             });
 
-            bar.spawn((
-                Text::new("Skip"),
-                theme.font(11.0),
-                TextColor(theme::TEXT_DIM),
-            ));
-            let count = widgets::spawn_text_input(
-                bar,
-                &theme,
-                widgets::TextInputProps {
-                    width: Val::Px(46.0),
-                    max_len: 3,
-                    value: "5".into(),
-                },
-            );
-            bar.commands().entity(count).insert(SkipCountInput);
-            let skip = widgets::spawn_button(
-                bar,
-                &theme,
-                ButtonProps {
-                    label: "Go".into(),
-                    font_size: 11.5,
-                    ..default()
-                },
-            );
-            bar.commands().entity(skip).insert((
-                SkipNBtn,
-                widgets::TooltipText("Process N turns (1–500) with progress + cancel".into()),
-            ));
-
-            bar.spawn((
-                Text::new("Until"),
-                theme.font(11.0),
-                TextColor(theme::TEXT_DIM),
-            ));
-            let until = widgets::spawn_text_input(
-                bar,
-                &theme,
-                widgets::TextInputProps {
-                    width: Val::Px(140.0),
-                    max_len: 40,
-                    value: String::new(),
-                },
-            );
-            bar.commands().entity(until).insert(SkipUntilInput);
-            let until_btn = widgets::spawn_button(
-                bar,
-                &theme,
-                ButtonProps {
-                    label: "Skip Until".into(),
-                    font_size: 11.5,
-                    ..default()
-                },
-            );
-            bar.commands().entity(until_btn).insert((
-                SkipUntilBtn,
-                widgets::TooltipText(
-                    "Skip turns until a headline contains this text (case-insensitive)".into(),
-                ),
-            ));
-
             for (label, tooltip) in [
                 ("Save", "Save to ./saves/ (CLI-compatible)"),
                 ("Load", "Load a save from ./saves/"),
-                ("↻", "Restart this map from turn 1"),
             ] {
                 let button = widgets::spawn_button(
                     bar,
@@ -323,10 +270,123 @@ pub fn setup_hud(mut commands: Commands, theme: Res<Theme>) {
                 entity.insert(widgets::TooltipText(tooltip.into()));
                 match label {
                     "Save" => entity.insert(SaveBtn),
-                    "Load" => entity.insert(LoadBtn),
-                    _ => entity.insert(RestartBtn),
+                    _ => entity.insert(LoadBtn),
                 };
             }
+
+            // The skip machinery lives behind one "Skip…" button so casual
+            // players don't parse dev controls every session.
+            let skip_toggle = widgets::spawn_button(
+                bar,
+                &theme,
+                ButtonProps {
+                    label: "Skip…".into(),
+                    font_size: 11.5,
+                    ..default()
+                },
+            );
+            bar.commands().entity(skip_toggle).insert((
+                SkipPopoverBtn,
+                widgets::TooltipText("Fast-forward turns (dev): Skip N / Skip Until".into()),
+            ));
+
+            let restart = widgets::spawn_button(
+                bar,
+                &theme,
+                ButtonProps {
+                    label: "↻".into(),
+                    font_size: 11.5,
+                    ..default()
+                },
+            );
+            bar.commands().entity(restart).insert((
+                RestartBtn,
+                widgets::TooltipText("Restart this map from turn 1".into()),
+            ));
+
+            // Skip popover: the full row appears only here.
+            bar.spawn((
+                SkipPopover,
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(38.0),
+                    left: Val::Px(10.0),
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(8.0),
+                    padding: UiRect::all(Val::Px(8.0)),
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(4.0)),
+                    display: Display::None,
+                    ..default()
+                },
+                BackgroundColor(theme::PANEL_BG_SOLID),
+                BorderColor::all(theme::BORDER),
+                GlobalZIndex(20),
+            ))
+            .with_children(|pop| {
+                pop.spawn((
+                    Text::new("Skip"),
+                    theme.font(11.0),
+                    TextColor(theme::TEXT_DIM),
+                ));
+                let count = widgets::spawn_text_input(
+                    pop,
+                    &theme,
+                    widgets::TextInputProps {
+                        width: Val::Px(46.0),
+                        max_len: 3,
+                        value: "5".into(),
+                        ..default()
+                    },
+                );
+                pop.commands().entity(count).insert(SkipCountInput);
+                let skip = widgets::spawn_button(
+                    pop,
+                    &theme,
+                    ButtonProps {
+                        label: "Go".into(),
+                        font_size: 11.5,
+                        ..default()
+                    },
+                );
+                pop.commands().entity(skip).insert((
+                    SkipNBtn,
+                    widgets::TooltipText("Process N turns (1–500) with progress + cancel".into()),
+                ));
+
+                pop.spawn((
+                    Text::new("Until"),
+                    theme.font(11.0),
+                    TextColor(theme::TEXT_DIM),
+                ));
+                let until = widgets::spawn_text_input(
+                    pop,
+                    &theme,
+                    widgets::TextInputProps {
+                        width: Val::Px(140.0),
+                        max_len: 40,
+                        value: String::new(),
+                        ..default()
+                    },
+                );
+                pop.commands().entity(until).insert(SkipUntilInput);
+                let until_btn = widgets::spawn_button(
+                    pop,
+                    &theme,
+                    ButtonProps {
+                        label: "Skip Until".into(),
+                        font_size: 11.5,
+                        ..default()
+                    },
+                );
+                pop.commands().entity(until_btn).insert((
+                    SkipUntilBtn,
+                    widgets::TooltipText(
+                        "Skip turns until a headline contains this text (case-insensitive)".into(),
+                    ),
+                ));
+            });
         });
 }
 
@@ -609,6 +669,30 @@ pub fn screen_hotkeys(
     if keys.just_pressed(KeyCode::Escape) && modal_stack.is_empty() && screen.get().is_full_screen()
     {
         next_screen.set(Screen::Map);
+    }
+}
+
+/// Toggle the skip popover; running a skip closes it.
+pub fn handle_skip_popover(
+    mut activations: MessageReader<widgets::ButtonActivated>,
+    toggles: Query<(), With<SkipPopoverBtn>>,
+    runs: Query<(), Or<(With<SkipNBtn>, With<SkipUntilBtn>)>>,
+    mut popovers: Query<&mut Node, With<SkipPopover>>,
+) {
+    for widgets::ButtonActivated(entity) in activations.read() {
+        if toggles.contains(*entity) {
+            for mut node in &mut popovers {
+                node.display = if node.display == Display::None {
+                    Display::Flex
+                } else {
+                    Display::None
+                };
+            }
+        } else if runs.contains(*entity) {
+            for mut node in &mut popovers {
+                node.display = Display::None;
+            }
+        }
     }
 }
 

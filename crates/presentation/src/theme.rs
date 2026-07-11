@@ -23,6 +23,15 @@ pub const OVERLAY_BG: Color = Color::srgba(0.05, 0.05, 0.10, 0.62);
 pub const SUCCESS: Color = Color::srgb_u8(0x6a, 0xb0, 0x4c);
 pub const ERROR: Color = Color::srgb_u8(0xc8, 0x4c, 0x3c);
 
+// CC-2 alarm-color policy (plan/30): one palette for every screen.
+/// Red — reserved for "this hurts you next turn" (starvation, bankruptcy,
+/// unit loss). Never color a state the player hasn't had a chance to act on.
+pub const ALARM: Color = Color::srgb_u8(0xe6, 0x44, 0x44);
+/// Amber — a shortfall the player may want to fix.
+pub const WARN: Color = Color::srgb_u8(0xd9, 0x9a, 0x3a);
+/// Neutral gray — routine zero/negative numbers and disabled states.
+pub const MUTED: Color = TEXT_DIM;
+
 /// Handles to the bundled OFL fonts. Each falls back to Bevy's default font
 /// when the TTF is missing on disk, so the app degrades instead of rendering
 /// invisible text.

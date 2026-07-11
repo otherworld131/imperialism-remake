@@ -227,8 +227,9 @@ fn m6_debug_driver(
 
 /// Debug driver for the M7 screens: `M7_DEBUG=<script>` switches screens and
 /// replays interactions so `MAP_SCREENSHOT` captures live state.
-/// Scripts: `industry`, `industrydrag`, `transport`, `trade`, `tradebuy`,
-/// `tradehist`, `trademarket`, `queue`, `queuetrade`, `queueendturn`.
+/// Scripts: `industry`, `industrydrag`, `industryarms`, `transport`,
+/// `transportfill`, `trade`, `tradebuy`, `tradehist`, `trademarket`,
+/// `queue`, `queuetrade`, `queueendturn`.
 fn m7_debug_driver(
     mut frames: Local<u32>,
     phase: Res<State<TurnPhase>>,
@@ -236,6 +237,7 @@ fn m7_debug_driver(
     mut game_commands: MessageWriter<GameCommand>,
     mut activations: MessageWriter<ButtonActivated>,
     buy_buttons: Query<Entity, With<trade::TradeBuyButton>>,
+    autofill_buttons: Query<Entity, With<transport::AutoFillButton>>,
     mut tab_groups: Query<&mut TabGroup>,
     mut chain_sliders: Query<(
         &widgets::UiSlider,
@@ -251,10 +253,23 @@ fn m7_debug_driver(
     }
     *frames += 1;
 
+    // Arms-unlocked Industry variant: resolve two turns so minor-nation
+    // auto-buy stocks some arms, then open the screen (recruitment rows
+    // expand once anything is recruitable).
+    if script == "industryarms" {
+        if *frames == 20 || *frames == 40 {
+            game_commands.write(GameCommand::EndTurn);
+        }
+        if *frames == 70 {
+            next_screen.set(Screen::Industry);
+        }
+        return;
+    }
+
     if *frames == 20 {
         match script.as_str() {
             "industry" | "industrydrag" => next_screen.set(Screen::Industry),
-            "transport" => next_screen.set(Screen::Transport),
+            "transport" | "transportfill" => next_screen.set(Screen::Transport),
             "trade" | "tradebuy" | "tradehist" | "trademarket" => next_screen.set(Screen::Trade),
             "queue" | "queuetrade" | "queueendturn" => {
                 // Queue pending state: a chain target and a sell order.
@@ -313,6 +328,12 @@ fn m7_debug_driver(
     {
         activations.write(ButtonActivated(button));
     }
+    if *frames == 100
+        && script == "transportfill"
+        && let Some(button) = autofill_buttons.iter().next()
+    {
+        activations.write(ButtonActivated(button));
+    }
     // History scripts: run two turns so the archives have data, then open
     // the requested Trade tab. Frames only advance while idle, so the two
     // EndTurns resolve sequentially.
@@ -333,7 +354,7 @@ fn m7_debug_driver(
 
 /// Debug driver for the M8 screens: `M8_DEBUG=<script>` switches screens and
 /// replays interactions so `MAP_SCREENSHOT` captures live state.
-/// Scripts: `diplomacy`, `diploarm`, `diploqueue`, `diploendturn`,
+/// Scripts: `diplomacy`, `diploselect`, `diploarm`, `diploqueue`, `diploendturn`,
 /// `proposal`, `tech`, `techqueue`, `ledger`, `ledgerflow`.
 fn m8_debug_driver(
     mut frames: Local<u32>,
@@ -372,7 +393,7 @@ fn m8_debug_driver(
 
     if *frames == 20 {
         match script.as_str() {
-            "diplomacy" | "diploarm" | "diploqueue" | "diploendturn" => {
+            "diplomacy" | "diploselect" | "diploarm" | "diploqueue" | "diploendturn" => {
                 next_screen.set(Screen::Diplomacy);
             }
             "tech" => next_screen.set(Screen::Tech),
@@ -423,6 +444,20 @@ fn m8_debug_driver(
     }
     if *frames == 50 {
         match script.as_str() {
+            // Select (pin) a foreign Great Power so the bar shows the
+            // labeled standing + per-eligibility buttons.
+            "diploselect" => {
+                if let Some(tiles) = vms.map.as_ref()
+                    && let Some(tile) = tiles.iter().find(|t| {
+                        t.is_country_capital
+                            && !t.is_minor
+                            && t.nation_id >= 0
+                            && t.nation_id != i64::from(meta.player_nation)
+                    })
+                {
+                    clicks.write(MapClick(HoverTarget::Hex(tile.q, tile.r)));
+                }
+            }
             "diploarm" | "diploqueue" | "diploendturn" => {
                 diplo.queued = Some(QueuedDiplomacyAction::Consulate);
             }
@@ -475,7 +510,8 @@ fn m9_debug_driver(
     news_tabs: Query<(Entity, &news::NewsModeTab)>,
     news_turns: Query<(Entity, &news::NewsArchiveTurnButton)>,
     show_map: Query<Entity, With<news::NewsShowMapButton>>,
-    battle_tabs: Query<(Entity, &battles::BattlesModeTab)>,
+    mut battles_ui: ResMut<battles::BattlesUi>,
+    battle_archive: Res<battles::BattleArchive>,
     mut scroll_areas: Query<&mut bevy::ui::ScrollPosition, With<widgets::UiScrollArea>>,
     mut deferred: ResMut<DeferredProposals>,
 ) {
@@ -572,10 +608,13 @@ fn m9_debug_driver(
                 }
                 next_screen.set(Screen::Battles);
             }
-            if *frames == 60
-                && let Some((tab, _)) = battle_tabs.iter().find(|(_, tab)| tab.0)
-            {
-                activations.write(ButtonActivated(tab));
+            if *frames == 60 {
+                // Same effect as clicking the Archive tab.
+                battles_ui.archive_mode = true;
+                battles_ui.selected = 0;
+                if battles_ui.selected_turn.is_none() {
+                    battles_ui.selected_turn = battle_archive.turns.iter().map(|t| t.turn).max();
+                }
             }
         }
         "legend" | "legendflags" => {
@@ -1240,7 +1279,9 @@ pub fn run_game() {
         .add_systems(Update, crate::ui_scale::ui_scale_hotkeys)
         .init_state::<TurnPhase>()
         .init_state::<Screen>()
+        .init_resource::<side_panel::DebugPanelExpanded>()
         .init_resource::<industry::IndustryUi>()
+        .init_resource::<transport::TransportUi>()
         .init_resource::<trade::TradeUi>()
         .init_resource::<DiploUi>()
         .init_resource::<PrevLedger>()
@@ -1394,7 +1435,9 @@ pub fn run_game() {
                     setup::ui::sync_preview_gps,
                     setup::ui::compute_suggestions,
                     setup::ui::capital_hover_preview,
-                    setup::ui::suggestion_row_hover,
+                    setup::ui::suggestion_row_hover.after(picking::pick_hover),
+                    setup::ui::handle_preview_mode_tabs,
+                    setup::ui::sync_preview_mode_tabs,
                     ledger::ensure_flags.run_if(|ui: Res<SetupUi>| ui.preview_dirty),
                     setup::ui::rebuild_config_ui,
                     setup::ui::rebuild_preview_ui,
@@ -1452,6 +1495,7 @@ pub fn run_game() {
                         map_hud::end_turn_button,
                         map_hud::keyboard_commands,
                         map_hud::handle_convenience_buttons,
+                        map_hud::handle_skip_popover,
                         map_hud::handle_viewpoint_dropdown,
                         panels::handle_unit_checkboxes,
                         panels::handle_panel_buttons,
@@ -1464,6 +1508,7 @@ pub fn run_game() {
                         industry::handle_show_targets,
                         transport::handle_transport_buttons,
                         trade::handle_trade_buttons,
+                        trade::handle_auto_trade_checkbox,
                         trade::handle_trade_sliders,
                         trade::handle_trade_filters,
                         trade::handle_hist_split,
@@ -1481,6 +1526,7 @@ pub fn run_game() {
                         news::handle_news_buttons,
                         news::handle_news_filters,
                         battles::handle_battles_buttons,
+                        battles::handle_battles_tabs,
                         legend::handle_legend_buttons,
                     ),
                     commands::apply_command,
@@ -1576,6 +1622,8 @@ pub fn run_game() {
                 map_hud::update_mode_display,
                 map_hud::sync_viewpoint_dropdown,
                 side_panel::handle_toggles,
+                side_panel::handle_debug_disclosure,
+                side_panel::sync_side_panel_for_diplomacy,
                 side_panel::handle_ui_scale_slider,
                 side_panel::sync_ui_scale_slider,
                 side_panel::handle_mode_dropdown,

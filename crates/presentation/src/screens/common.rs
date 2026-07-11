@@ -68,6 +68,26 @@ pub fn spawn_icon(
     }
 }
 
+/// CC-1 inset container: logical groups (a production chain, a warehouse
+/// section, an army list) sit inside a visible panel instead of floating as
+/// bare text on the screen background.
+pub fn inset_panel() -> impl Bundle {
+    (
+        Node {
+            flex_direction: FlexDirection::Column,
+            width: Val::Percent(100.0),
+            padding: UiRect::all(Val::Px(9.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(4.0)),
+            row_gap: Val::Px(3.0),
+            margin: UiRect::bottom(Val::Px(6.0)),
+            ..default()
+        },
+        BackgroundColor(theme::INSET_BG),
+        BorderColor::all(theme::BORDER),
+    )
+}
+
 /// Section header with a hairline top border (web `Section` parity).
 pub fn section_title(parent: &mut ChildSpawnerCommands, theme: &Theme, label: &str) {
     parent

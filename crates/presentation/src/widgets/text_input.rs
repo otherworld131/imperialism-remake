@@ -29,6 +29,10 @@ pub struct UiTextInput {
 #[derive(Component)]
 struct TextBeforeCaret;
 
+/// Dim placeholder text; visible only while the value is empty.
+#[derive(Component)]
+struct PlaceholderNode;
+
 #[derive(Component)]
 struct TextAfterCaret;
 
@@ -46,6 +50,8 @@ pub struct TextInputProps {
     pub width: Val,
     pub max_len: usize,
     pub value: String,
+    /// Dim hint shown while the value is empty (e.g. "Filter…").
+    pub placeholder: String,
 }
 
 impl Default for TextInputProps {
@@ -54,6 +60,7 @@ impl Default for TextInputProps {
             width: Val::Px(220.0),
             max_len: 64,
             value: String::new(),
+            placeholder: String::new(),
         }
     }
 }
@@ -89,6 +96,25 @@ pub fn spawn_text_input(
             Hovered::default(),
         ))
         .with_children(|input| {
+            if !props.placeholder.is_empty() {
+                input.spawn((
+                    Text::new(props.placeholder.clone()),
+                    theme.font(13.0),
+                    TextColor(theme::TEXT_DIM),
+                    PlaceholderNode,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(8.0),
+                        ..default()
+                    },
+                    if value.is_empty() {
+                        Visibility::Inherited
+                    } else {
+                        Visibility::Hidden
+                    },
+                    Pickable::IGNORE,
+                ));
+            }
             input.spawn((
                 Text::new(value),
                 theme.font(13.0),
@@ -240,6 +266,7 @@ fn sync_text_input_visuals(
     mut texts: Query<&mut Text>,
     before: Query<(), With<TextBeforeCaret>>,
     after: Query<(), With<TextAfterCaret>>,
+    mut placeholders: Query<&mut Visibility, With<PlaceholderNode>>,
     mut borders: Query<&mut BorderColor, With<UiTextInput>>,
 ) {
     for (entity, input, children) in &inputs {
@@ -255,6 +282,16 @@ fn sync_text_input_visuals(
         }
         let split = byte_index(&input.value, input.caret);
         for child in children {
+            if let Ok(mut visibility) = placeholders.get_mut(*child) {
+                let target = if input.value.is_empty() && !focused {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                };
+                if *visibility != target {
+                    *visibility = target;
+                }
+            }
             if before.contains(*child) {
                 if let Ok(mut text) = texts.get_mut(*child) {
                     let target = &input.value[..split];

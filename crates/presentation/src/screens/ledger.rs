@@ -419,12 +419,17 @@ fn nation_row(
     cells: Vec<LedgerCell>,
 ) {
     let theme = ctx.theme;
-    let row = spawn_row_node(content, entry);
+    let stripe = ctx
+        .sorted
+        .iter()
+        .position(|e| e.nation_id == entry.nation_id)
+        .is_some_and(|i| i % 2 == 1);
+    let row = spawn_row_node(content, entry, stripe);
     let mut commands = content.commands();
     commands.entity(row).with_children(|cells_out| {
         nation_cell(cells_out, ctx, entry);
         for cell in cells {
-            spawn_value_cell(cells_out, theme, cell);
+            spawn_value_cell(cells_out, theme, cell, entry.is_human);
         }
     });
 }
@@ -490,8 +495,13 @@ fn nation_cell(row: &mut ChildSpawnerCommands, ctx: &LedgerCtx, entry: &GpLedger
     });
 }
 
-/// Clickable (expand/collapse) row node shared by every table.
-fn spawn_row_node(content: &mut ChildSpawnerCommands, entry: &GpLedgerEntryVm) -> Entity {
+/// Clickable (expand/collapse) row node shared by every table; zebra
+/// striping keeps wide rows scannable.
+fn spawn_row_node(
+    content: &mut ChildSpawnerCommands,
+    entry: &GpLedgerEntryVm,
+    stripe: bool,
+) -> Entity {
     content
         .spawn((
             LedgerRowButton(entry.nation_id),
@@ -506,6 +516,8 @@ fn spawn_row_node(content: &mut ChildSpawnerCommands, entry: &GpLedgerEntryVm) -
             BorderColor::all(Color::srgb_u8(0x1e, 0x1e, 0x30)),
             BackgroundColor(if entry.is_human {
                 HUMAN_ROW_BG
+            } else if stripe {
+                Color::srgba(1.0, 1.0, 1.0, 0.025)
             } else {
                 Color::NONE
             }),
@@ -557,7 +569,12 @@ fn fmt_cell(value: i64, money: bool) -> String {
     }
 }
 
-fn spawn_value_cell(row: &mut ChildSpawnerCommands, theme: &Theme, cell: LedgerCell) {
+fn spawn_value_cell(
+    row: &mut ChildSpawnerCommands,
+    theme: &Theme,
+    cell: LedgerCell,
+    is_human: bool,
+) {
     row.spawn((
         Node {
             flex_grow: 1.0,
@@ -591,10 +608,18 @@ fn spawn_value_cell(row: &mut ChildSpawnerCommands, theme: &Theme, cell: LedgerC
             } else {
                 format!("-{}", fmt_cell(-delta, cell.money))
             };
+            // CC-2: AI rows keep neutral deltas — red/green is reserved for
+            // numbers the player owns and can act on.
             out.spawn((
                 Text::new(delta_str),
                 theme.font(10.0),
-                TextColor(if delta > 0 { DELTA_GREEN } else { DELTA_RED }),
+                TextColor(if !is_human {
+                    CELL_GRAY
+                } else if delta > 0 {
+                    DELTA_GREEN
+                } else {
+                    DELTA_RED
+                }),
                 Pickable::IGNORE,
             ));
         }
@@ -745,7 +770,7 @@ fn cash_category_breakdown(
     };
     panel.spawn((
         Text::new("THIS TURN'S CASH FLOW BY CATEGORY"),
-        theme.font(10.5),
+        theme.font(11.5),
         TextColor(Color::srgb_u8(0x88, 0x88, 0x88)),
     ));
     panel
@@ -778,11 +803,11 @@ fn cash_category_breakdown(
                     ..default()
                 })
                 .with_children(|group| {
-                    group.spawn((Text::new(label), theme.font_bold(12.5), TextColor(color)));
+                    group.spawn((Text::new(label), theme.font_bold(13.5), TextColor(color)));
                     if !has_any {
                         group.spawn((
                             Text::new("(none)"),
-                            theme.font(12.5),
+                            theme.font(13.5),
                             TextColor(Color::srgb_u8(0x55, 0x55, 0x55)),
                         ));
                     }
@@ -793,7 +818,7 @@ fn cash_category_breakdown(
                         }
                         group.spawn((
                             Text::new(format!("{category} {sign}${}", fmt_thousands(value))),
-                            theme.font(12.5),
+                            theme.font(13.5),
                             TextColor(category_color(category)),
                         ));
                     }
@@ -809,11 +834,11 @@ fn cash_flow_tab(content: &mut ChildSpawnerCommands, ctx: &LedgerCtx) {
         theme,
         &["Opening", "Closing", "Δ", "Income", "Expense", "Reconcile"],
     );
-    for entry in ctx.sorted {
+    for (index, entry) in ctx.sorted.iter().enumerate() {
         let cf = entry.cash_flow.as_ref();
         // Cash-flow cells render "—" before the first turn; build them as
         // plain rows (no delta chips, web parity).
-        let row = spawn_row_node(content, entry);
+        let row = spawn_row_node(content, entry, index % 2 == 1);
         let mut commands = content.commands();
         commands.entity(row).with_children(|cells| {
             nation_cell(cells, ctx, entry);
@@ -1532,7 +1557,14 @@ fn technology_tab(content: &mut ChildSpawnerCommands, ctx: &LedgerCtx) {
             _ => Vec::new(),
         };
 
-        let row = spawn_row_node(content, entry);
+        let row = spawn_row_node(
+            content,
+            entry,
+            ctx.sorted
+                .iter()
+                .position(|e| e.nation_id == entry.nation_id)
+                .is_some_and(|i| i % 2 == 1),
+        );
         let mut commands = content.commands();
         commands.entity(row).with_children(|cells| {
             nation_cell(cells, ctx, entry);

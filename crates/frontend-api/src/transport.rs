@@ -179,19 +179,57 @@ pub fn get_transport_data(game: &GameState, nation_id: u32) -> Result<serde_json
     // compute_demand_forecast so it disappears cleanly if food_per_worker is
     // disabled in the game config.
     let total_workers = nation.economy.labor.total_workers();
-    let food_requirement_json =
-        if total_workers > 0 && game.game_data.game_config.food_per_worker > 0 {
-            let (grain_need, fruit_need, meat_need) =
-                domain::economy::labor::worker_food_demand(total_workers);
-            serde_json::json!({
-                "workers": total_workers,
-                "grain": grain_need,
-                "fruit": fruit_need,
-                "meat": meat_need,
-            })
-        } else {
-            serde_json::Value::Null
+    let food_gate = total_workers > 0 && game.game_data.game_config.food_per_worker > 0;
+    let food_requirement_json = if food_gate {
+        let (grain_need, fruit_need, meat_need) =
+            domain::economy::labor::worker_food_demand(total_workers);
+        serde_json::json!({
+            "workers": total_workers,
+            "grain": grain_need,
+            "fruit": fruit_need,
+            "meat": meat_need,
+        })
+    } else {
+        serde_json::Value::Null
+    };
+
+    // Starvation projection for the transport UI's alarm colors: per-slot
+    // shortfall after warehouse stock (minus queued food sell orders) plus
+    // this turn's projected deliveries, then canned food covers any missing
+    // unit — mirroring the composite-meal resolution in the turn processor.
+    // Slightly conservative: the cannery reserves worker meals before
+    // consuming inputs, so it can never make this projection worse.
+    let starvation_json = if food_gate {
+        let (grain_need, fruit_need, meat_need) =
+            domain::economy::labor::worker_food_demand(total_workers);
+        let sold = |r: ResourceType| -> u32 {
+            nation
+                .diplomacy
+                .player_sell_orders
+                .iter()
+                .filter(|o| o.resource == r)
+                .map(|o| o.quantity)
+                .sum()
         };
+        let supply = |r: ResourceType| -> u32 {
+            nation.resource_amount(r).saturating_sub(sold(r))
+                + delivered_map.get(&r).copied().unwrap_or(0)
+        };
+        let grain_short = grain_need.saturating_sub(supply(ResourceType::Grain));
+        let fruit_short = fruit_need.saturating_sub(supply(ResourceType::Fruit));
+        let meat_short =
+            meat_need.saturating_sub(supply(ResourceType::Livestock) + supply(ResourceType::Fish));
+        let canned = nation.material_amount(MaterialType::CannedFood);
+        let workers_unfed = (grain_short + fruit_short + meat_short).saturating_sub(canned);
+        serde_json::json!({
+            "grain_short": grain_short,
+            "fruit_short": fruit_short,
+            "meat_short": meat_short,
+            "workers_unfed": workers_unfed,
+        })
+    } else {
+        serde_json::Value::Null
+    };
 
     Ok(serde_json::json!({
         "freight_cars": transport.freight_cars,
@@ -215,6 +253,7 @@ pub fn get_transport_data(game: &GameState, nation_id: u32) -> Result<serde_json
         "rail_only_deliveries": rail_only_deliveries_json,
         "demand": demand_json,
         "food_requirement": food_requirement_json,
+        "starvation": starvation_json,
     }))
 }
 

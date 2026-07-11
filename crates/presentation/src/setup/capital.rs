@@ -45,6 +45,12 @@ pub struct CapitalPreview {
 pub struct Suggestion {
     pub preview: CapitalPreview,
     pub province_name: String,
+    /// Compass direction from the site's own province centroid ("NW", or
+    /// "Center" when the site sits near it) — distinguishes rows that
+    /// share a province name.
+    pub direction: &'static str,
+    /// Any adjacent sea hex (coastal capitals fish up to 3 extra).
+    pub coastal: bool,
 }
 
 /// A capital may sit on any own land hex that isn't Sea or Mountain.
@@ -147,6 +153,55 @@ pub fn evaluate_capital_site(
     })
 }
 
+/// 8-way compass direction of `(q, r)` seen from its own province's
+/// centroid (plan: "compass direction from province center"); "Center"
+/// within ~1.5 hexes of it.
+fn compass_from_province_center(
+    tiles: &[MapTile],
+    nation_id: i64,
+    province: &str,
+    q: i32,
+    r: i32,
+) -> &'static str {
+    use crate::map::geometry::{HEX_SIZE, hex_to_world};
+    let mut sum = bevy::prelude::Vec2::ZERO;
+    let mut count = 0u32;
+    for tile in tiles {
+        if tile.nation_id == nation_id && !tile.is_sea() && tile.province == province {
+            sum += hex_to_world(tile.q, tile.r);
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return "Center";
+    }
+    let delta = hex_to_world(q, r) - sum / count as f32;
+    if delta.length() < HEX_SIZE * 1.5 {
+        return "Center";
+    }
+    // atan2 angle → one of 8 sectors, N at the top.
+    let sector = ((delta.y.atan2(delta.x).to_degrees() + 360.0 + 22.5) / 45.0) as u32 % 8;
+    ["E", "NE", "N", "NW", "W", "SW", "S", "SE"][sector as usize]
+}
+
+/// Any of the six neighbors is sea.
+fn is_coastal(by_coord: &HashMap<(i32, i32), usize>, tiles: &[MapTile], q: i32, r: i32) -> bool {
+    [
+        (q + 1, r),
+        (q + 1, r - 1),
+        (q, r - 1),
+        (q - 1, r),
+        (q - 1, r + 1),
+        (q, r + 1),
+    ]
+    .iter()
+    .any(|coord| {
+        by_coord
+            .get(coord)
+            .is_some_and(|&i| tiles[i].terrain == "Sea")
+    })
+}
+
 /// Rank every valid tile and return the top five placements
 /// (support → total yield → province name → coords; web parity).
 pub fn suggest_capitals(
@@ -165,6 +220,14 @@ pub fn suggest_capitals(
                 } else {
                     tile.province.clone()
                 },
+                direction: compass_from_province_center(
+                    tiles,
+                    nation_id,
+                    &tile.province,
+                    tile.q,
+                    tile.r,
+                ),
+                coastal: is_coastal(by_coord, tiles, tile.q, tile.r),
             })
         })
         .collect();

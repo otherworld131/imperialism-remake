@@ -9,12 +9,17 @@ use bevy::prelude::*;
 
 use crate::map::icons::IconAssets;
 use crate::screens::saveload;
-use crate::state::AppState;
+use crate::setup::jobs::{self, ActiveSetupJob};
+use crate::state::{AppState, TurnPhase};
 use crate::theme::{self, Theme};
 use crate::widgets::{self, ButtonActivated, ButtonProps, ModalStack};
 
 #[derive(Component)]
 pub struct IntroRoot;
+
+/// Loads the newest save in `./saves/` directly; absent when none exist.
+#[derive(Component)]
+pub struct IntroContinueBtn(pub std::path::PathBuf);
 
 #[derive(Component)]
 pub struct IntroNewGameBtn;
@@ -97,6 +102,31 @@ pub fn setup_intro(
                 BackgroundColor(Color::srgba(0.05, 0.05, 0.1, 0.55)),
             ))
             .with_children(|menu| {
+                // Continue = load the newest save; hidden when none exist.
+                let newest_save = frontend_api::session::list_saves(&saveload::saves_dir())
+                    .into_iter()
+                    .next();
+                if let Some(save) = newest_save {
+                    let detail = if save.nation_name.is_empty() {
+                        save.file_name.clone()
+                    } else {
+                        format!("{} — {}", save.nation_name, save.turn_display)
+                    };
+                    let button = widgets::spawn_button(
+                        menu,
+                        &theme,
+                        ButtonProps {
+                            label: "Continue".into(),
+                            width: Some(Val::Px(220.0)),
+                            font_size: 18.0,
+                            ..default()
+                        },
+                    );
+                    menu.commands().entity(button).insert((
+                        IntroContinueBtn(save.path),
+                        widgets::TooltipText(format!("Load the most recent save ({detail})")),
+                    ));
+                }
                 for (label, width) in [("New Game", 220.0), ("Load Game", 220.0), ("Quit", 220.0)] {
                     let button = widgets::spawn_button(
                         menu,
@@ -125,17 +155,23 @@ pub fn setup_intro(
 pub fn intro_menu(
     mut activations: MessageReader<ButtonActivated>,
     new_game: Query<(), With<IntroNewGameBtn>>,
+    cont: Query<&IntroContinueBtn>,
     load: Query<(), With<IntroLoadBtn>>,
     quit: Query<(), With<IntroQuitBtn>>,
     mut commands: Commands,
     mut stack: ResMut<ModalStack>,
     theme: Res<Theme>,
     mut next_state: ResMut<NextState<AppState>>,
+    mut active: ResMut<ActiveSetupJob>,
+    mut next_phase: ResMut<NextState<TurnPhase>>,
     mut exit: MessageWriter<AppExit>,
 ) {
     for ButtonActivated(entity) in activations.read() {
         if new_game.get(*entity).is_ok() {
             next_state.set(AppState::Setup);
+        } else if let Ok(continue_btn) = cont.get(*entity) {
+            // The async load installs the session and switches to InGame.
+            jobs::start_load(&mut active, &mut next_phase, continue_btn.0.clone());
         } else if load.get(*entity).is_ok() {
             // Stay on the title screen: the modal's confirm path drives the
             // async load job, which installs the session and switches to

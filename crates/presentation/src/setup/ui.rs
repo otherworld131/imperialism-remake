@@ -61,6 +61,10 @@ pub struct HideGridCheckbox;
 #[derive(Component)]
 pub struct NationRow(pub usize);
 
+/// Terrain/Political tab group in the preview header.
+#[derive(Component)]
+pub struct PreviewModeTabs;
+
 /// Clickable suggested-placement row (index into `SetupUi::suggestions`).
 #[derive(Component)]
 pub struct SuggestionRow(pub usize);
@@ -270,298 +274,346 @@ fn spawn_config_body(
             ..default()
         },))
         .with_children(|body| {
-            // Scenario cards.
+            // Two columns so the Nations sliders sit above the fold at
+            // 720p: scenario/difficulty/map-key left, size/nations/toggles
+            // right (wraps to one column on narrow windows).
             body.spawn((Node {
-                flex_direction: FlexDirection::Column,
+                flex_direction: FlexDirection::Row,
+                flex_wrap: FlexWrap::Wrap,
+                column_gap: Val::Px(40.0),
+                row_gap: Val::Px(16.0),
+                width: Val::Percent(100.0),
+                align_items: AlignItems::FlexStart,
                 ..default()
             },))
-                .with_children(|group| {
-                    group_label(group, theme, "Scenario");
-                    group
+                .with_children(|columns| {
+                    columns
                         .spawn((Node {
-                            flex_direction: FlexDirection::Row,
-                            column_gap: Val::Px(10.0),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(16.0),
+                            flex_grow: 1.0,
+                            flex_basis: Val::Px(0.0),
+                            min_width: Val::Px(430.0),
                             ..default()
                         },))
-                        .with_children(|cards| {
-                            spawn_card(
-                                cards,
-                                theme,
-                                "Random Map",
-                                "Procedurally generated world",
-                                SetupAction::SelectScenario(None),
-                            );
-                            for (id, name, description) in scenarios {
-                                spawn_card(
-                                    cards,
-                                    theme,
-                                    name,
-                                    description,
-                                    SetupAction::SelectScenario(Some(id.clone())),
-                                );
-                            }
-                        });
-                });
-
-            // Difficulty.
-            body.spawn((Node {
-                flex_direction: FlexDirection::Column,
-                ..default()
-            },))
-                .with_children(|group| {
-                    group_label(group, theme, "Difficulty");
-                    group
-                        .spawn((Node {
-                            flex_direction: FlexDirection::Row,
-                            column_gap: Val::Px(8.0),
-                            ..default()
-                        },))
-                        .with_children(|row| {
-                            for (i, label) in DIFFICULTIES.iter().enumerate() {
-                                let button = widgets::spawn_button(
-                                    row,
-                                    theme,
-                                    ButtonProps {
-                                        label: (*label).into(),
-                                        width: Some(Val::Px(118.0)),
-                                        font_size: 12.0,
-                                        auto_label_tint: false,
-                                        ..default()
-                                    },
-                                );
-                                row.commands()
-                                    .entity(button)
-                                    .insert(SetupActionBtn(SetupAction::SetDifficulty(i as u8)));
-                            }
-                        });
-                });
-
-            if cfg.scenario.is_none() {
-                // Map key.
-                body.spawn((Node {
-                    flex_direction: FlexDirection::Column,
-                    ..default()
-                },))
-                    .with_children(|group| {
-                        group_label(group, theme, "Map Key (optional)");
-                        let input = widgets::spawn_text_input(
-                            group,
-                            theme,
-                            TextInputProps {
-                                width: Val::Percent(100.0),
-                                max_len: 32,
-                                value: cfg.map_key.clone(),
-                            },
-                        );
-                        group.commands().entity(input).insert(MapKeyInput);
-                        group.spawn((
-                            Text::new("Leave blank for the default \"imperialism\" seed."),
-                            theme.font(11.0),
-                            TextColor(theme::TEXT_DIM),
-                        ));
-                    });
-
-                // Map size.
-                body.spawn((Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(6.0),
-                    ..default()
-                },))
-                    .with_children(|group| {
-                        group_label(group, theme, "Map Size");
-                        group
-                            .spawn((Node {
-                                flex_direction: FlexDirection::Row,
-                                column_gap: Val::Px(8.0),
+                        .with_children(|body| {
+                            // Scenario cards.
+                            body.spawn((Node {
+                                flex_direction: FlexDirection::Column,
                                 ..default()
                             },))
-                            .with_children(|row| {
-                                for (label, w, h) in SIZE_PRESETS {
-                                    let button = widgets::spawn_button(
-                                        row,
+                                .with_children(|group| {
+                                    group_label(group, theme, "Scenario");
+                                    group
+                                        .spawn((Node {
+                                            flex_direction: FlexDirection::Row,
+                                            column_gap: Val::Px(10.0),
+                                            ..default()
+                                        },))
+                                        .with_children(|cards| {
+                                            spawn_card(
+                                                cards,
+                                                theme,
+                                                "Random Map",
+                                                "Procedurally generated world",
+                                                SetupAction::SelectScenario(None),
+                                            );
+                                            for (id, name, description) in scenarios {
+                                                spawn_card(
+                                                    cards,
+                                                    theme,
+                                                    name,
+                                                    description,
+                                                    SetupAction::SelectScenario(Some(id.clone())),
+                                                );
+                                            }
+                                        });
+                                });
+
+                            // Difficulty.
+                            body.spawn((Node {
+                                flex_direction: FlexDirection::Column,
+                                ..default()
+                            },))
+                                .with_children(|group| {
+                                    group_label(group, theme, "Difficulty");
+                                    group
+                                        .spawn((Node {
+                                            flex_direction: FlexDirection::Row,
+                                            column_gap: Val::Px(8.0),
+                                            ..default()
+                                        },))
+                                        .with_children(|row| {
+                                            for (i, label) in DIFFICULTIES.iter().enumerate() {
+                                                let button = widgets::spawn_button(
+                                                    row,
+                                                    theme,
+                                                    ButtonProps {
+                                                        label: (*label).into(),
+                                                        width: Some(Val::Px(118.0)),
+                                                        font_size: 12.0,
+                                                        auto_label_tint: false,
+                                                        ..default()
+                                                    },
+                                                );
+                                                row.commands().entity(button).insert(
+                                                    SetupActionBtn(SetupAction::SetDifficulty(
+                                                        i as u8,
+                                                    )),
+                                                );
+                                            }
+                                        });
+                                });
+
+                            if cfg.scenario.is_none() {
+                                // Map key.
+                                body.spawn((Node {
+                                    flex_direction: FlexDirection::Column,
+                                    ..default()
+                                },))
+                                    .with_children(|group| {
+                                        group_label(group, theme, "Map Key (optional)");
+                                        let input = widgets::spawn_text_input(
+                                            group,
+                                            theme,
+                                            TextInputProps {
+                                                width: Val::Percent(100.0),
+                                                max_len: 32,
+                                                value: cfg.map_key.clone(),
+                                                ..default()
+                                            },
+                                        );
+                                        group.commands().entity(input).insert(MapKeyInput);
+                                        group.spawn((
+                                            Text::new(
+                                                "Leave blank for the default \"imperialism\" seed.",
+                                            ),
+                                            theme.font(11.0),
+                                            TextColor(theme::TEXT_DIM),
+                                        ));
+                                    });
+                            }
+                        });
+                    columns
+                        .spawn((Node {
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(16.0),
+                            flex_grow: 1.0,
+                            flex_basis: Val::Px(0.0),
+                            min_width: Val::Px(430.0),
+                            ..default()
+                        },))
+                        .with_children(|body| {
+                            if cfg.scenario.is_none() {
+                                // Map size.
+                                body.spawn((Node {
+                                    flex_direction: FlexDirection::Column,
+                                    row_gap: Val::Px(6.0),
+                                    ..default()
+                                },))
+                                    .with_children(|group| {
+                                        group_label(group, theme, "Map Size");
+                                        group
+                                            .spawn((Node {
+                                                flex_direction: FlexDirection::Row,
+                                                column_gap: Val::Px(8.0),
+                                                ..default()
+                                            },))
+                                            .with_children(|row| {
+                                                for (label, w, h) in SIZE_PRESETS {
+                                                    let button = widgets::spawn_button(
+                                                        row,
+                                                        theme,
+                                                        ButtonProps {
+                                                            label: label.into(),
+                                                            width: Some(Val::Px(150.0)),
+                                                            font_size: 12.0,
+                                                            auto_label_tint: false,
+                                                            ..default()
+                                                        },
+                                                    );
+                                                    row.commands().entity(button).insert(
+                                                        SetupActionBtn(SetupAction::SizePreset(
+                                                            w, h,
+                                                        )),
+                                                    );
+                                                }
+                                            });
+                                        let advanced = widgets::spawn_button(
+                                            group,
+                                            theme,
+                                            ButtonProps {
+                                                label: if show_advanced {
+                                                    "Hide advanced".into()
+                                                } else {
+                                                    "Advanced size…".into()
+                                                },
+                                                font_size: 11.0,
+                                                flat: true,
+                                                ..default()
+                                            },
+                                        );
+                                        group
+                                            .commands()
+                                            .entity(advanced)
+                                            .insert(SetupActionBtn(SetupAction::ToggleAdvanced));
+                                        if show_advanced {
+                                            group
+                                                .spawn((Node {
+                                                    flex_direction: FlexDirection::Row,
+                                                    align_items: AlignItems::Center,
+                                                    column_gap: Val::Px(10.0),
+                                                    ..default()
+                                                },))
+                                                .with_children(|row| {
+                                                    row.spawn((
+                                                        Text::new("Width (30–200):"),
+                                                        theme.font(12.0),
+                                                        TextColor(theme::TEXT_DIM),
+                                                    ));
+                                                    let width_input = widgets::spawn_text_input(
+                                                        row,
+                                                        theme,
+                                                        TextInputProps {
+                                                            width: Val::Px(70.0),
+                                                            max_len: 3,
+                                                            value: cfg.width.to_string(),
+                                                            ..default()
+                                                        },
+                                                    );
+                                                    row.commands()
+                                                        .entity(width_input)
+                                                        .insert(WidthInput);
+                                                    row.spawn((
+                                                        Text::new("Height (20–150):"),
+                                                        theme.font(12.0),
+                                                        TextColor(theme::TEXT_DIM),
+                                                    ));
+                                                    let height_input = widgets::spawn_text_input(
+                                                        row,
+                                                        theme,
+                                                        TextInputProps {
+                                                            width: Val::Px(70.0),
+                                                            max_len: 3,
+                                                            value: cfg.height.to_string(),
+                                                            ..default()
+                                                        },
+                                                    );
+                                                    row.commands()
+                                                        .entity(height_input)
+                                                        .insert(HeightInput);
+                                                });
+                                        }
+                                    });
+
+                                // Nations sliders.
+                                body.spawn((Node {
+                                    flex_direction: FlexDirection::Column,
+                                    row_gap: Val::Px(8.0),
+                                    ..default()
+                                },))
+                                    .with_children(|group| {
+                                        group_label(group, theme, "Nations");
+                                        group
+                                            .spawn((Node {
+                                                flex_direction: FlexDirection::Row,
+                                                align_items: AlignItems::Center,
+                                                column_gap: Val::Px(10.0),
+                                                ..default()
+                                            },))
+                                            .with_children(|row| {
+                                                row.spawn((
+                                                    Text::new("Great Powers"),
+                                                    theme.font(12.0),
+                                                    TextColor(theme::TEXT),
+                                                    Node {
+                                                        width: Val::Px(110.0),
+                                                        ..default()
+                                                    },
+                                                ));
+                                                let slider = widgets::spawn_slider(
+                                                    row,
+                                                    theme,
+                                                    SliderProps {
+                                                        min: 1.0,
+                                                        max: 20.0,
+                                                        step: 1.0,
+                                                        value: cfg.num_great_powers as f32,
+                                                        width: Val::Px(320.0),
+                                                        ..default()
+                                                    },
+                                                );
+                                                row.commands().entity(slider).insert(GpSlider);
+                                            });
+                                        group
+                                            .spawn((Node {
+                                                flex_direction: FlexDirection::Row,
+                                                align_items: AlignItems::Center,
+                                                column_gap: Val::Px(10.0),
+                                                ..default()
+                                            },))
+                                            .with_children(|row| {
+                                                row.spawn((
+                                                    Text::new("Minor Nations"),
+                                                    theme.font(12.0),
+                                                    TextColor(theme::TEXT),
+                                                    Node {
+                                                        width: Val::Px(110.0),
+                                                        ..default()
+                                                    },
+                                                ));
+                                                let slider = widgets::spawn_slider(
+                                                    row,
+                                                    theme,
+                                                    SliderProps {
+                                                        min: 0.0,
+                                                        max: 32.0,
+                                                        step: 1.0,
+                                                        value: cfg.num_minor_nations as f32,
+                                                        width: Val::Px(320.0),
+                                                        ..default()
+                                                    },
+                                                );
+                                                row.commands().entity(slider).insert(MinorSlider);
+                                            });
+                                    });
+                            }
+                            // Toggles.
+                            body.spawn((Node {
+                                flex_direction: FlexDirection::Column,
+                                row_gap: Val::Px(6.0),
+                                ..default()
+                            },))
+                                .with_children(|group| {
+                                    let observer = widgets::spawn_checkbox(
+                                        group,
                                         theme,
-                                        ButtonProps {
-                                            label: label.into(),
-                                            width: Some(Val::Px(150.0)),
-                                            font_size: 12.0,
-                                            auto_label_tint: false,
+                                        CheckboxProps {
+                                            label: format!(
+                                                "Observer Mode — watch AI play all {} Great Powers",
+                                                if cfg.scenario.is_some() {
+                                                    7
+                                                } else {
+                                                    cfg.num_great_powers
+                                                }
+                                            ),
+                                            checked: cfg.observer,
                                             ..default()
                                         },
                                     );
-                                    row.commands()
-                                        .entity(button)
-                                        .insert(SetupActionBtn(SetupAction::SizePreset(w, h)));
-                                }
-                            });
-                        let advanced = widgets::spawn_button(
-                            group,
-                            theme,
-                            ButtonProps {
-                                label: if show_advanced {
-                                    "Hide advanced".into()
-                                } else {
-                                    "Advanced size…".into()
-                                },
-                                font_size: 11.0,
-                                flat: true,
-                                ..default()
-                            },
-                        );
-                        group
-                            .commands()
-                            .entity(advanced)
-                            .insert(SetupActionBtn(SetupAction::ToggleAdvanced));
-                        if show_advanced {
-                            group
-                                .spawn((Node {
-                                    flex_direction: FlexDirection::Row,
-                                    align_items: AlignItems::Center,
-                                    column_gap: Val::Px(10.0),
-                                    ..default()
-                                },))
-                                .with_children(|row| {
-                                    row.spawn((
-                                        Text::new("Width (30–200):"),
-                                        theme.font(12.0),
-                                        TextColor(theme::TEXT_DIM),
-                                    ));
-                                    let width_input = widgets::spawn_text_input(
-                                        row,
+                                    group.commands().entity(observer).insert(ObserverCheckbox);
+                                    let organic = widgets::spawn_checkbox(
+                                        group,
                                         theme,
-                                        TextInputProps {
-                                            width: Val::Px(70.0),
-                                            max_len: 3,
-                                            value: cfg.width.to_string(),
+                                        CheckboxProps {
+                                            label: "Organic Borders — smooth coasts & borders"
+                                                .into(),
+                                            checked: cfg.organic_borders,
+                                            ..default()
                                         },
                                     );
-                                    row.commands().entity(width_input).insert(WidthInput);
-                                    row.spawn((
-                                        Text::new("Height (20–150):"),
-                                        theme.font(12.0),
-                                        TextColor(theme::TEXT_DIM),
-                                    ));
-                                    let height_input = widgets::spawn_text_input(
-                                        row,
-                                        theme,
-                                        TextInputProps {
-                                            width: Val::Px(70.0),
-                                            max_len: 3,
-                                            value: cfg.height.to_string(),
-                                        },
-                                    );
-                                    row.commands().entity(height_input).insert(HeightInput);
-                                });
-                        }
-                    });
-
-                // Nations sliders.
-                body.spawn((Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(8.0),
-                    ..default()
-                },))
-                    .with_children(|group| {
-                        group_label(group, theme, "Nations");
-                        group
-                            .spawn((Node {
-                                flex_direction: FlexDirection::Row,
-                                align_items: AlignItems::Center,
-                                column_gap: Val::Px(10.0),
-                                ..default()
-                            },))
-                            .with_children(|row| {
-                                row.spawn((
-                                    Text::new("Great Powers"),
-                                    theme.font(12.0),
-                                    TextColor(theme::TEXT),
-                                    Node {
-                                        width: Val::Px(110.0),
-                                        ..default()
-                                    },
-                                ));
-                                let slider = widgets::spawn_slider(
-                                    row,
-                                    theme,
-                                    SliderProps {
-                                        min: 1.0,
-                                        max: 20.0,
-                                        step: 1.0,
-                                        value: cfg.num_great_powers as f32,
-                                        width: Val::Px(320.0),
-                                        ..default()
-                                    },
-                                );
-                                row.commands().entity(slider).insert(GpSlider);
-                            });
-                        group
-                            .spawn((Node {
-                                flex_direction: FlexDirection::Row,
-                                align_items: AlignItems::Center,
-                                column_gap: Val::Px(10.0),
-                                ..default()
-                            },))
-                            .with_children(|row| {
-                                row.spawn((
-                                    Text::new("Minor Nations"),
-                                    theme.font(12.0),
-                                    TextColor(theme::TEXT),
-                                    Node {
-                                        width: Val::Px(110.0),
-                                        ..default()
-                                    },
-                                ));
-                                let slider = widgets::spawn_slider(
-                                    row,
-                                    theme,
-                                    SliderProps {
-                                        min: 0.0,
-                                        max: 32.0,
-                                        step: 1.0,
-                                        value: cfg.num_minor_nations as f32,
-                                        width: Val::Px(320.0),
-                                        ..default()
-                                    },
-                                );
-                                row.commands().entity(slider).insert(MinorSlider);
-                            });
-                    });
-            }
-
-            // Toggles.
-            body.spawn((Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(6.0),
-                ..default()
-            },))
-                .with_children(|group| {
-                    let observer = widgets::spawn_checkbox(
-                        group,
-                        theme,
-                        CheckboxProps {
-                            label: format!(
-                                "Observer Mode — watch AI play all {} Great Powers",
-                                if cfg.scenario.is_some() {
-                                    7
-                                } else {
-                                    cfg.num_great_powers
-                                }
-                            ),
-                            checked: cfg.observer,
-                            ..default()
-                        },
-                    );
-                    group.commands().entity(observer).insert(ObserverCheckbox);
-                    let organic = widgets::spawn_checkbox(
-                        group,
-                        theme,
-                        CheckboxProps {
-                            label: "Organic Borders — smooth coasts & borders".into(),
-                            checked: cfg.organic_borders,
-                            ..default()
-                        },
-                    );
-                    group.commands().entity(organic).insert(OrganicCheckbox);
-                    let hide_grid = widgets::spawn_checkbox(
+                                    group.commands().entity(organic).insert(OrganicCheckbox);
+                                    let hide_grid = widgets::spawn_checkbox(
                         group,
                         theme,
                         CheckboxProps {
@@ -570,9 +622,10 @@ fn spawn_config_body(
                             ..default()
                         },
                     );
-                    group.commands().entity(hide_grid).insert(HideGridCheckbox);
+                                    group.commands().entity(hide_grid).insert(HideGridCheckbox);
+                                });
+                        });
                 });
-
             if let Some(error) = error {
                 body.spawn((
                     Text::new(error.clone()),
@@ -777,23 +830,26 @@ pub fn rebuild_preview_ui(
                 flex_grow: 1.0,
                 ..default()
             },));
-            for (label, political) in [("Terrain", false), ("Political", true)] {
-                let b = widgets::spawn_button(
-                    bar,
-                    &theme,
-                    ButtonProps {
-                        label: label.into(),
-                        font_size: 11.5,
-                        flat: true,
-                        auto_label_tint: false,
-                        ..default()
-                    },
-                );
-                bar.commands()
-                    .entity(b)
-                    .insert(SetupActionBtn(SetupAction::SetMapMode(political)));
+            // Terrain/Political as the shared tab widget (CC-5).
+            let tabs = widgets::spawn_tabs(bar, &theme, &["Terrain", "Political"], 1);
+            let mut bar_commands = bar.commands();
+            bar_commands.entity(tabs.root).insert((
+                PreviewModeTabs,
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    ..default()
+                },
+            ));
+            for panel in &tabs.panels {
+                bar_commands.entity(*panel).insert(Node {
+                    display: Display::None,
+                    ..default()
+                });
             }
-            for (label, action) in [("−", SetupAction::ZoomOut), ("+", SetupAction::ZoomIn)] {
+            for (label, tooltip, action) in [
+                ("−", "Zoom out", SetupAction::ZoomOut),
+                ("+", "Zoom in", SetupAction::ZoomIn),
+            ] {
                 let b = widgets::spawn_button(
                     bar,
                     &theme,
@@ -803,7 +859,9 @@ pub fn rebuild_preview_ui(
                         ..default()
                     },
                 );
-                bar.commands().entity(b).insert(SetupActionBtn(action));
+                bar.commands()
+                    .entity(b)
+                    .insert((SetupActionBtn(action), widgets::TooltipText(tooltip.into())));
             }
         });
 
@@ -1019,41 +1077,100 @@ fn spawn_terrain_section(col: &mut ChildSpawnerCommands, theme: &Theme, config: 
                 theme,
                 "Same seed — only the world regenerates as you adjust.",
             );
-            for field in TerrainField::ALL {
-                let (min, max, step) = field.range(&config.terrain);
-                let value = field.get(&config.terrain);
-                section
-                    .spawn((Node {
-                        flex_direction: FlexDirection::Column,
+            // Grouped sliders: world shape, the normalized terrain mix
+            // (with its live sum so "relative weights" is visible), and
+            // clustering knobs.
+            const WORLD_SHAPE: [TerrainField; 4] = [
+                TerrainField::LandAmount,
+                TerrainField::SeaRing,
+                TerrainField::Falloff,
+                TerrainField::RiverSources,
+            ];
+            const TERRAIN_MIX: [TerrainField; 7] = [
+                TerrainField::Grassland,
+                TerrainField::Forest,
+                TerrainField::Hills,
+                TerrainField::Mountain,
+                TerrainField::Desert,
+                TerrainField::Swamp,
+                TerrainField::Tundra,
+            ];
+            const CLUSTERING: [TerrainField; 6] = [
+                TerrainField::ForestCluster,
+                TerrainField::HillsCluster,
+                TerrainField::MountainCluster,
+                TerrainField::DesertCluster,
+                TerrainField::SwampCluster,
+                TerrainField::PoleTundra,
+            ];
+            let mix_sum: f32 = TERRAIN_MIX
+                .iter()
+                .map(|field| field.get(&config.terrain))
+                .sum();
+            let groups: [(&str, Option<String>, &[TerrainField]); 3] = [
+                ("World shape", None, &WORLD_SHAPE),
+                (
+                    "Terrain mix",
+                    Some(format!(
+                        "Relative weights, normalized — currently sum {mix_sum:.2}"
+                    )),
+                    &TERRAIN_MIX,
+                ),
+                ("Clustering", None, &CLUSTERING),
+            ];
+            for (group_title, note, fields) in groups {
+                section.spawn((
+                    Text::new(group_title.to_string()),
+                    theme.font_bold(12.0),
+                    TextColor(theme::GOLD),
+                    Node {
+                        margin: UiRect::top(Val::Px(6.0)),
                         ..default()
-                    },))
-                    .with_children(|block| {
-                        block.spawn((
-                            Text::new(field.label()),
-                            theme.font(11.0),
-                            TextColor(theme::TEXT),
-                        ));
-                        let format: Option<widgets::slider::SliderFormatFn> =
-                            if field == TerrainField::LandAmount {
-                                Some(std::sync::Arc::new(|v: f32| format!("{v:.2}×")))
-                            } else {
-                                None
-                            };
-                        let slider = widgets::spawn_slider(
-                            block,
-                            theme,
-                            SliderProps {
-                                min,
-                                max,
-                                step,
-                                value,
-                                width: Val::Px(220.0),
-                                format,
-                                ..default()
-                            },
-                        );
-                        block.commands().entity(slider).insert(field);
-                    });
+                    },
+                ));
+                if let Some(note) = note {
+                    section.spawn((
+                        Text::new(note),
+                        theme.font_italic(10.5),
+                        TextColor(theme::TEXT_DIM),
+                    ));
+                }
+                for &field in fields {
+                    let (min, max, step) = field.range(&config.terrain);
+                    let value = field.get(&config.terrain);
+                    section
+                        .spawn((Node {
+                            flex_direction: FlexDirection::Column,
+                            ..default()
+                        },))
+                        .with_children(|block| {
+                            block.spawn((
+                                Text::new(field.label()),
+                                theme.font(11.0),
+                                TextColor(theme::TEXT),
+                            ));
+                            let format: Option<widgets::slider::SliderFormatFn> =
+                                if field == TerrainField::LandAmount {
+                                    Some(std::sync::Arc::new(|v: f32| format!("{v:.2}×")))
+                                } else {
+                                    None
+                                };
+                            let slider = widgets::spawn_slider(
+                                block,
+                                theme,
+                                SliderProps {
+                                    min,
+                                    max,
+                                    step,
+                                    value,
+                                    width: Val::Px(220.0),
+                                    format,
+                                    ..default()
+                                },
+                            );
+                            block.commands().entity(slider).insert(field);
+                        });
+                }
             }
         });
 }
@@ -1199,13 +1316,30 @@ fn spawn_capital_section(
             .with_children(|section| {
                 section_title(section, theme, "Suggested Placements");
                 for (i, suggestion) in ui.suggestions.iter().enumerate() {
+                    // Two lines so same-named provinces stay distinguishable:
+                    // where the site sits + what it yields.
+                    let place = format!(
+                        "{} · {}",
+                        suggestion.direction,
+                        if suggestion.coastal {
+                            "coastal"
+                        } else {
+                            "inland"
+                        }
+                    );
+                    let yields = suggestion
+                        .preview
+                        .resources
+                        .iter()
+                        .take(4)
+                        .map(|(name, amount)| format!("{name} {amount}"))
+                        .collect::<Vec<_>>()
+                        .join(" · ");
                     section
                         .spawn((
                             Node {
-                                flex_direction: FlexDirection::Row,
-                                justify_content: JustifyContent::SpaceBetween,
-                                align_items: AlignItems::Center,
-                                column_gap: Val::Px(8.0),
+                                flex_direction: FlexDirection::Column,
+                                row_gap: Val::Px(2.0),
                                 padding: UiRect::axes(Val::Px(8.0), Val::Px(6.0)),
                                 border: UiRect::all(Val::Px(1.0)),
                                 border_radius: BorderRadius::all(Val::Px(3.0)),
@@ -1220,17 +1354,37 @@ fn spawn_capital_section(
                         ))
                         .with_children(|row| {
                             row.spawn((
-                                Text::new(suggestion.province_name.clone()),
-                                theme.font(11.5),
-                                TextColor(theme::TEXT),
+                                Node {
+                                    flex_direction: FlexDirection::Row,
+                                    justify_content: JustifyContent::SpaceBetween,
+                                    align_items: AlignItems::Center,
+                                    column_gap: Val::Px(8.0),
+                                    ..default()
+                                },
                                 Pickable::IGNORE,
-                            ));
-                            row.spawn((
-                                Text::new(format!("Workers {}", suggestion.preview.support)),
-                                theme.font_bold(11.5),
-                                TextColor(theme::GOLD),
-                                Pickable::IGNORE,
-                            ));
+                            ))
+                            .with_children(|line| {
+                                line.spawn((
+                                    Text::new(format!("{} ({place})", suggestion.province_name)),
+                                    theme.font(11.5),
+                                    TextColor(theme::TEXT),
+                                    Pickable::IGNORE,
+                                ));
+                                line.spawn((
+                                    Text::new(format!("Workers {}", suggestion.preview.support)),
+                                    theme.font_bold(11.5),
+                                    TextColor(theme::GOLD),
+                                    Pickable::IGNORE,
+                                ));
+                            });
+                            if !yields.is_empty() {
+                                row.spawn((
+                                    Text::new(yields),
+                                    theme.font(10.5),
+                                    TextColor(theme::TEXT_DIM),
+                                    Pickable::IGNORE,
+                                ));
+                            }
                         });
                 }
             });
@@ -1576,6 +1730,16 @@ pub fn handle_setup_actions(
                 if let Some(suggestion) = ui.suggestions.get(*i).cloned() {
                     selected_hex.0 = Some((suggestion.preview.q, suggestion.preview.r));
                     config.capital = Some((suggestion.preview.q, suggestion.preview.r));
+                    // Pan the camera onto the picked hex so the selection
+                    // is visible even when it was off-screen.
+                    if let Ok((mut transform, _)) = camera.single_mut() {
+                        let world = crate::map::geometry::hex_to_world(
+                            suggestion.preview.q,
+                            suggestion.preview.r,
+                        );
+                        transform.translation.x = world.x;
+                        transform.translation.y = world.y;
+                    }
                     ui.picked_capital = Some(suggestion.preview);
                     ui.preview_dirty = true;
                 }
@@ -1757,15 +1921,69 @@ pub fn compute_suggestions(
     ui.preview_dirty = true;
 }
 
+/// Preview header tabs → map mode, and back (mode can change elsewhere).
+pub fn handle_preview_mode_tabs(
+    mut changes: MessageReader<widgets::TabChanged>,
+    tabs: Query<(), With<PreviewModeTabs>>,
+    mut actions: MessageWriter<SetupAction>,
+) {
+    for change in changes.read() {
+        if tabs.contains(change.group) {
+            actions.write(SetupAction::SetMapMode(change.index == 1));
+        }
+    }
+}
+
+pub fn sync_preview_mode_tabs(
+    mode: Res<MapMode>,
+    mut groups: Query<&mut widgets::TabGroup, With<PreviewModeTabs>>,
+) {
+    if !mode.is_changed() {
+        return;
+    }
+    let index = usize::from(*mode == MapMode::Political);
+    for mut group in &mut groups {
+        if group.active != index && matches!(*mode, MapMode::Political | MapMode::Terrain) {
+            group.active = index;
+        }
+    }
+}
+
 /// Hovering a suggestion row previews it in the yields panel (priority over
 /// the map hover, web parity).
-pub fn suggestion_row_hover(rows: Query<(&SuggestionRow, &Hovered)>, mut ui: ResMut<SetupUi>) {
+pub fn suggestion_row_hover(
+    rows: Query<(&SuggestionRow, &Hovered)>,
+    mut ui: ResMut<SetupUi>,
+    mut hovered_hex: ResMut<crate::map::picking::HoveredHex>,
+    mut override_coord: Local<Option<(i32, i32)>>,
+) {
     let hovered = rows
         .iter()
         .find(|(_, hovered)| hovered.get())
         .map(|(row, _)| row.0);
     if ui.sidebar_hovered != hovered {
         ui.sidebar_hovered = hovered;
+    }
+    // Highlight the suggested hex on the map (the hover ring follows
+    // `HoveredHex`; the cursor is over the sidebar so map picking is idle).
+    // On leaving the list, clear the override only while `HoveredHex`
+    // still holds OUR coordinate — a real map hover written earlier this
+    // frame (this system runs after `pick_hover`) must survive.
+    match hovered.and_then(|i| ui.suggestions.get(i)) {
+        Some(preview) => {
+            let coord = Some((preview.preview.q, preview.preview.r));
+            if hovered_hex.0 != coord {
+                hovered_hex.0 = coord;
+            }
+            *override_coord = coord;
+        }
+        None => {
+            if let Some(owned) = override_coord.take()
+                && hovered_hex.0 == Some(owned)
+            {
+                hovered_hex.0 = None;
+            }
+        }
     }
 }
 

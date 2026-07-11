@@ -19,6 +19,8 @@ pub struct ColumnSpec {
     pub header: String,
     /// Relative width in `fr` units.
     pub width: f32,
+    /// Optional hover explanation for the header (CC-4).
+    pub tooltip: Option<String>,
 }
 
 impl ColumnSpec {
@@ -26,7 +28,13 @@ impl ColumnSpec {
         Self {
             header: header.into(),
             width,
+            tooltip: None,
         }
+    }
+
+    pub fn with_tooltip(mut self, tooltip: impl Into<String>) -> Self {
+        self.tooltip = Some(tooltip.into());
+        self
     }
 }
 
@@ -111,10 +119,12 @@ pub fn spawn_table(parent: &mut ChildSpawnerCommands, theme: &Theme, props: Tabl
                                 ..default()
                             },
                         );
-                        header
-                            .commands()
-                            .entity(cell)
-                            .insert(TableHeaderCell { table: root, col });
+                        let mut commands = header.commands();
+                        let mut entity = commands.entity(cell);
+                        entity.insert(TableHeaderCell { table: root, col });
+                        if let Some(tooltip) = &spec.tooltip {
+                            entity.insert(super::TooltipText(tooltip.clone()));
+                        }
                     } else {
                         header
                             .spawn((Node {
