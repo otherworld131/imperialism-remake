@@ -5,19 +5,19 @@ one screenshot per screen at the 125% default interface scale, after the
 pixel-art map/font/title-screen work landed. Focus: interface usability —
 the screens work but read as "messy to use".
 
-Conventions for this file: items are grouped by priority (P1 = biggest
-usability wins, P3 = polish). Every item names the primary files and a
-verification strategy. Screenshot verification uses the existing debug
-hooks (`MAP_SCREENSHOT` + `M6..M10_DEBUG` / `INTRO_DEBUG` scripts — see
-`crates/presentation/src/app.rs`).
+This is a **tracking document**: check items off as they land, and keep
+the group checklist under "Execution order" in sync. Items are grouped by
+priority (P1 = biggest usability wins, P3 = polish). Every item names the
+primary files and a verification strategy. Screenshot verification uses
+the existing debug hooks (`MAP_SCREENSHOT` + `M6..M10_DEBUG` /
+`INTRO_DEBUG` scripts — see `crates/presentation/src/app.rs`).
 
 **Before/after requirement (mandatory):** every implemented change is
 presented to the user as a *pair* of screenshots — the same screen, same
-debug script, same zoom/scale, captured once from the commit before the
-change ("before") and once after ("after") — so the improvement is
-directly comparable. Capture the "before" shot first (e.g. via
-`git stash` or from the parent commit) and keep both under the task's
-scratch/verification notes until the user has reviewed them.
+debug script, same zoom/scale, captured once from the state before the
+change ("before", e.g. via `git stash` or the parent commit) and once
+after ("after") — so the improvement is directly comparable. Keep both
+until the user has reviewed them.
 
 ---
 
@@ -82,9 +82,7 @@ sliders, some only text).
   - Verify: screenshot.
 - [ ] **Hide AI aims behind debug.** The green "aim N" annotations in the
   Warehouse column are AI-target debug data; show them only when the
-  side panel's "Show AI reasoning" (or a dedicated debug toggle) is on.
-  The existing "Debug: show AI targets" checkbox already exists in this
-  screen — respect it for the aim annotations too.
+  existing "Debug: show AI targets" checkbox is on.
   - Verify: screenshot with toggle off shows no green aims.
 - [ ] **Warehouse grouping.** Resources / Materials / Goods columns get
   inset containers (CC-1) and right-aligned counts; keep icons.
@@ -104,9 +102,10 @@ sliders, some only text).
   start.
   - Verify: scripted click (extend `M7_DEBUG=transport` with an
     `autofill` variant) — allocations non-zero, food requirement met.
-- [ ] **Legible capacity labels (CC-4).** "Capacity: 35 (35)" → "35 of 35
-  cars free"; stepper `0/6` → tooltip "hauling 0 of 6 in warehouse";
-  red `▼4` → amber "4 short" text (or tooltip at minimum).
+- [ ] **Legible capacity labels (CC-4).**
+  - [ ] "Capacity: 35 (35)" → "35 of 35 cars free".
+  - [ ] Stepper `0/6` → tooltip "hauling 0 of 6 in warehouse".
+  - [ ] Red `▼4` → amber "4 short" text (or tooltip at minimum).
   - Verify: screenshot.
 - [ ] **Bigger stepper targets.** +/− buttons to ≥ 26px square at 100%
   scale; add shift-click = ±5 (document in tooltip).
@@ -120,24 +119,32 @@ sliders, some only text).
 
 ## P1 — Cross-cutting passes
 
-- [ ] **Red-color audit (CC-2) across all screens.** Ledger AI treasury
-  deltas → neutral; Industry "Not enough arms" → muted gray with amber
-  icon; News "FINANCIAL CRISIS" headlines keep red (correct usage).
-  Centralize the choice: add `theme::{ALARM, WARN, MUTED}` constants and
-  replace ad-hoc `Color::srgb...` reds in screens.
-  - Verify: grep — no per-screen hardcoded alarm reds; screenshots of
-    Ledger + Industry + Transport.
+- [ ] **Red-color audit (CC-2) across all screens.** Centralize the
+  choice: add `theme::{ALARM, WARN, MUTED}` constants and replace ad-hoc
+  `Color::srgb...` reds in screens.
+  - [ ] `theme` constants added; screens use them.
+  - [ ] Ledger: AI treasury deltas → neutral.
+  - [ ] Industry: "Not enough arms" → muted gray with amber icon.
+  - [ ] Transport: covered by its alarm-color item (cross-check).
+  - [ ] News: "FINANCIAL CRISIS" stays red (correct usage — confirm).
+  - Verify: grep — no per-screen hardcoded alarm reds; before/after
+    screenshots of Ledger + Industry + Transport.
 - [ ] **Dead-end hint audit (CC-3).** Sweep every "No X" / "Not enough X"
   / "Insufficient X" string in `screens/` and attach the unblock hint.
-  Full list to sweep: industry.rs (buildings, arms, resources),
-  transport.rs, trade.rs (cargo capacity), diplomacy.rs (queued action
-  requirements), battles.rs (empty archive), setup/capital.rs.
+  - [ ] `industry.rs` (buildings, arms, resources)
+  - [ ] `transport.rs`
+  - [ ] `trade.rs` (cargo capacity)
+  - [ ] `diplomacy.rs` (queued action requirements)
+  - [ ] `battles.rs` (empty archive)
+  - [ ] `setup/capital.rs`
   - Verify: grep for the strings; each has an adjacent hint or tooltip.
-- [ ] **Chrome standardization (CC-5).** News: move "Back to Map" /
-  "Continue" into the standard header ("Close (Esc)" top-right; Continue
-  stays bottom-right as primary). Battles: align its Current/Archive
-  tabs with the tab widget used by Trade/Ledger. Confirm Esc closes
-  every overlay (News currently uses buttons only).
+- [ ] **Chrome standardization (CC-5).**
+  - [ ] News: "Close (Esc)" top-right; Continue stays bottom-right as
+    primary; "Back to Map" folds into Close.
+  - [ ] Battles: align Current/Archive with the tab widget used by
+    Trade/Ledger.
+  - [ ] Esc closes every full-screen overlay (News currently uses
+    buttons only).
   - Verify: screenshots of News/Battles/Trade/Ledger headers match.
 
 ## P2 — Map screen & side panel (`screens/side_panel.rs`, `map_hud.rs`)
@@ -170,7 +177,7 @@ sliders, some only text).
   with a small flag or "GP" badge.
 - [ ] **Sell-slider context.** Show max = current stock in the row label
   ("Timber ×10 in stock"), so the slider range is meaningful.
-  - Verify (all): `M7_DEBUG=trade` screenshot.
+- Verify (all): `M7_DEBUG=trade` before/after screenshots.
 
 ## P2 — Diplomacy screen (`screens/diplomacy.rs`)
 
@@ -182,8 +189,8 @@ sliders, some only text).
 - [ ] **Diplomacy-specific side panel.** While in Diplomacy mode, hide the
   generic UI/Debug toggle sections; show only the legend + relation
   details for the hovered/selected nation.
-  - Verify (all): `M8_DEBUG=diplomacy` screenshot; a `diploselect`
-    script variant that selects a nation first.
+- Verify (all): `M8_DEBUG=diplomacy` screenshot; a `diploselect` script
+  variant that selects a nation first.
 
 ## P2 — Tech screen (`screens/tech.rs`)
 
@@ -192,21 +199,24 @@ sliders, some only text).
   category or decade, so the screen is a planning view instead of two
   rows in a void.
 - [ ] **Rename "Free" → "Adopt (free)"**; paid ones "Adopt ($N)".
-  - Verify: `M8_DEBUG=tech` screenshot shows ≥ the full 1815–1915 tech
-    list with locked entries.
+- Verify: `M8_DEBUG=tech` screenshot shows the full 1815–1915 tech list
+  with locked entries.
 
 ## P2 — Setup flow (`setup/ui.rs`, `setup/capital.rs`)
 
 - [ ] **Capital suggestions must be distinguishable.** Rows currently
-  repeat one town name ("Kiotdargrad ×4"). Add a per-row detail —
-  compass direction from province center + coastal/inland + the yield
-  split ("Grain 6 · Fruit 4 · Livestock 2") — and: hovering a row
-  highlights the hex on the map; clicking pans to and selects it.
+  repeat one town name ("Kiotdargrad ×4").
+  - [ ] Per-row detail: compass direction from province center +
+    coastal/inland + the yield split ("Grain 6 · Fruit 4 · Livestock 2").
+  - [ ] Hovering a row highlights the hex on the map.
+  - [ ] Clicking a row pans to and selects the hex.
   - Verify: `M10_DEBUG=capital` screenshot; rows visibly distinct.
-- [ ] **Group the preview sliders.** "World shape" (Land amount, Sea ring,
-  Coastline falloff, River sources) and "Terrain mix" (the 7 biomes).
-  Terrain-mix sliders show a live sum indicator (they are normalized —
-  make that visible).
+- [ ] **Group the preview sliders.**
+  - [ ] "World shape" group: Land amount, Sea ring, Coastline falloff,
+    River sources.
+  - [ ] "Terrain mix" group: the 7 biomes, with a live sum indicator
+    (they are normalized — make that visible).
+  - Verify: `M10_DEBUG=preview` screenshot.
 - [ ] **Label the header zoom buttons** (+/−) with tooltips; switch the
   Terrain/Political text pair to the tab widget.
   - Verify: `M10_DEBUG=preview` screenshot.
@@ -229,9 +239,12 @@ sliders, some only text).
 - [ ] **News: label or drop the colored edge bars** on headlines
   (currently unexplained red/blue/black); label the empty top-right
   search box ("Filter…" placeholder).
-- [ ] **Battles: minimap name clipping** ("CET…") — shrink label font or
-  clamp label position inside the minimap bounds; add a one-line legend
-  for unit strength bars ("bar = remaining strength") and rank stars.
+  - Verify: `M9_DEBUG=news` screenshot.
+- [ ] **Battles polish.**
+  - [ ] Minimap name clipping ("CET…") — shrink label font or clamp
+    label position inside the minimap bounds.
+  - [ ] One-line legend for unit strength bars ("bar = remaining
+    strength") and rank stars.
   - Verify: `M9_DEBUG=battles` screenshot.
 - [ ] **Ledger: zebra rows + neutral deltas** (part of the CC-2 audit);
   slightly larger text in the expanded player cash-flow detail.
@@ -243,15 +256,17 @@ sliders, some only text).
 
 ---
 
-## Suggested execution order
+## Execution order (group tracking)
 
-1. P1 Industry + P1 Transport (most-used screens, biggest mess)
-2. P1 cross-cutting passes (color audit, dead-end hints, chrome)
-3. P2 map side panel + skip row
-4. P2 Trade / Diplomacy / Tech / Setup
-5. P3 polish batch
+Each group is one batch of changes done and reviewed together. Per the
+project workflow: run `/adversarial-review` per group, check off the
+items above as they land, and deliver the mandatory before/after
+screenshot pair for every change.
 
-Each numbered group is one PR-sized task; run `/adversarial-review` per
-group per the project workflow, update this file's checkboxes as items
-land, and deliver the mandatory before/after screenshot pair for every
-change (see conventions above).
+- [ ] **Group 1** — P1 Industry + P1 Transport (most-used screens,
+  biggest mess)
+- [ ] **Group 2** — P1 cross-cutting passes (color audit, dead-end
+  hints, chrome)
+- [ ] **Group 3** — P2 map side panel + skip row
+- [ ] **Group 4** — P2 Trade / Diplomacy / Tech / Setup
+- [ ] **Group 5** — P3 polish batch
