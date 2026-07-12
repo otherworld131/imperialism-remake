@@ -325,10 +325,11 @@ cash-flow tab, proposal modal).
   Nations lands above the fold as intended.
   - Verify: `M10_DEBUG=config` screenshot — Nations visible without
     scrolling.
-- [x] **Burger menu for the convenience bar.** Save / Load / Restart, the
-  observer View dropdown, and the skip machinery all hide behind one "☰"
-  button (glyph added to the patched pixel font) so the map top-left
-  stays clean; triggering any action closes the menu.
+- [x] **Burger menu in the top bar.** Save / Load / Restart, the observer
+  View dropdown, and the skip machinery all hide behind one "☰" button
+  (glyph added to the patched pixel font) at the head of the main top
+  row — the separate convenience strip below the bar is gone entirely;
+  triggering any action closes the menu.
   - Verify: `HUMAN_GAME=1` screenshot — bar shows only ☰; a scripted
     open shows the menu.
 - [x] **Remove the non-functional scenario cards.** Only the random map

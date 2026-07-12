@@ -61,9 +61,6 @@ pub struct SkipCancelBtn;
 
 // ── Turn-convenience strip (second top bar) ─────────────────────────────
 
-#[derive(Component)]
-pub struct ConvenienceBar;
-
 /// Observer viewpoint dropdown (hidden in human games).
 #[derive(Component)]
 pub struct ViewpointDropdown;
@@ -130,6 +127,182 @@ pub fn setup_hud(mut commands: Commands, theme: Res<Theme>) {
                 ..default()
             },))
                 .with_children(|left| {
+                    let burger = widgets::spawn_button(
+                        left,
+                        &theme,
+                        ButtonProps {
+                            label: "☰".into(),
+                            font_size: 13.0,
+                            width: Some(Val::Px(34.0)),
+                            ..default()
+                        },
+                    );
+                    left.commands().entity(burger).insert((
+                        BurgerMenuBtn,
+                        widgets::TooltipText("Menu: viewpoint, save / load, skip turns".into()),
+                    ));
+
+                    // The menu itself: a vertical popover under the button.
+                    left.spawn((
+                        BurgerMenu,
+                        Node {
+                            position_type: PositionType::Absolute,
+                            top: Val::Px(40.0),
+                            left: Val::Px(6.0),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(8.0),
+                            padding: UiRect::all(Val::Px(10.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            border_radius: BorderRadius::all(Val::Px(4.0)),
+                            display: Display::None,
+                            ..default()
+                        },
+                        BackgroundColor(theme::PANEL_BG_SOLID),
+                        BorderColor::all(theme::BORDER),
+                        GlobalZIndex(20),
+                    ))
+                    .with_children(|menu| {
+                        // Observer viewpoint dropdown (synced from the roster).
+                        menu.spawn((
+                            ViewpointRow,
+                            Node {
+                                flex_direction: FlexDirection::Row,
+                                align_items: AlignItems::Center,
+                                column_gap: Val::Px(6.0),
+                                ..default()
+                            },
+                        ))
+                        .with_children(|row| {
+                            row.spawn((
+                                Text::new("View:"),
+                                theme.font(11.0),
+                                TextColor(theme::TEXT_DIM),
+                            ));
+                            let dropdown = widgets::spawn_dropdown(
+                                row,
+                                &theme,
+                                DropdownProps {
+                                    options: vec!["—".to_string()],
+                                    selected: 0,
+                                    width: Val::Px(160.0),
+                                },
+                            );
+                            row.commands().entity(dropdown).insert(ViewpointDropdown);
+                        });
+
+                        menu.spawn(Node {
+                            flex_direction: FlexDirection::Row,
+                            column_gap: Val::Px(8.0),
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            for (label, tooltip) in [
+                                ("Save", "Save to ./saves/ (CLI-compatible)"),
+                                ("Load", "Load a save from ./saves/"),
+                                ("↻ Restart", "Restart this map from turn 1"),
+                            ] {
+                                let button = widgets::spawn_button(
+                                    row,
+                                    &theme,
+                                    ButtonProps {
+                                        label: label.into(),
+                                        font_size: 11.5,
+                                        ..default()
+                                    },
+                                );
+                                let mut commands = row.commands();
+                                let mut entity = commands.entity(button);
+                                entity.insert(widgets::TooltipText(tooltip.into()));
+                                match label {
+                                    "Save" => entity.insert(SaveBtn),
+                                    "Load" => entity.insert(LoadBtn),
+                                    _ => entity.insert(RestartBtn),
+                                };
+                            }
+                        });
+
+                        // Skip machinery (dev): Skip N / Skip Until.
+                        menu.spawn(Node {
+                            flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::Center,
+                            column_gap: Val::Px(8.0),
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            row.spawn((
+                                Text::new("Skip"),
+                                theme.font(11.0),
+                                TextColor(theme::TEXT_DIM),
+                            ));
+                            let count = widgets::spawn_text_input(
+                                row,
+                                &theme,
+                                widgets::TextInputProps {
+                                    width: Val::Px(46.0),
+                                    max_len: 3,
+                                    value: "5".into(),
+                                    ..default()
+                                },
+                            );
+                            row.commands().entity(count).insert(SkipCountInput);
+                            let skip = widgets::spawn_button(
+                                row,
+                                &theme,
+                                ButtonProps {
+                                    label: "Go".into(),
+                                    font_size: 11.5,
+                                    ..default()
+                                },
+                            );
+                            row.commands().entity(skip).insert((
+                                SkipNBtn,
+                                widgets::TooltipText(
+                                    "Process N turns (1–500) with progress + cancel".into(),
+                                ),
+                            ));
+                        });
+                        menu.spawn(Node {
+                            flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::Center,
+                            column_gap: Val::Px(8.0),
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            row.spawn((
+                                Text::new("Until"),
+                                theme.font(11.0),
+                                TextColor(theme::TEXT_DIM),
+                            ));
+                            let until = widgets::spawn_text_input(
+                                row,
+                                &theme,
+                                widgets::TextInputProps {
+                                    width: Val::Px(140.0),
+                                    max_len: 40,
+                                    value: String::new(),
+                                    ..default()
+                                },
+                            );
+                            row.commands().entity(until).insert(SkipUntilInput);
+                            let until_btn = widgets::spawn_button(
+                                row,
+                                &theme,
+                                ButtonProps {
+                                    label: "Skip Until".into(),
+                                    font_size: 11.5,
+                                    ..default()
+                                },
+                            );
+                            row.commands().entity(until_btn).insert((
+                        SkipUntilBtn,
+                        widgets::TooltipText(
+                            "Skip turns until a headline contains this text (case-insensitive)"
+                                .into(),
+                        ),
+                    ));
+                        });
+                    });
+
                     left.spawn((
                         Text::new("Imperialism"),
                         theme.font_bold(15.0),
@@ -199,205 +372,6 @@ pub fn setup_hud(mut commands: Commands, theme: Res<Theme>) {
                 EndTurnButton,
                 widgets::TooltipText("Resolve the turn (Space)".into()),
             ));
-        });
-
-    // Turn-convenience controls (viewpoint, save/load, skip machinery)
-    // live behind one burger button so the map stays clean.
-    commands
-        .spawn((
-            ConvenienceBar,
-            Node {
-                position_type: PositionType::Absolute,
-                top: Val::Px(44.0),
-                left: Val::Px(0.0),
-                height: Val::Px(36.0),
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(8.0),
-                padding: UiRect::horizontal(Val::Px(6.0)),
-                ..default()
-            },
-            BackgroundColor(theme::PANEL_BG_SOLID),
-            GlobalZIndex(5),
-            Interaction::default(),
-            PickingBlocker,
-        ))
-        .with_children(|bar| {
-            let burger = widgets::spawn_button(
-                bar,
-                &theme,
-                ButtonProps {
-                    label: "☰".into(),
-                    font_size: 13.0,
-                    width: Some(Val::Px(34.0)),
-                    ..default()
-                },
-            );
-            bar.commands().entity(burger).insert((
-                BurgerMenuBtn,
-                widgets::TooltipText("Menu: viewpoint, save / load, skip turns".into()),
-            ));
-
-            // The menu itself: a vertical popover under the button.
-            bar.spawn((
-                BurgerMenu,
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: Val::Px(38.0),
-                    left: Val::Px(6.0),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(8.0),
-                    padding: UiRect::all(Val::Px(10.0)),
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(4.0)),
-                    display: Display::None,
-                    ..default()
-                },
-                BackgroundColor(theme::PANEL_BG_SOLID),
-                BorderColor::all(theme::BORDER),
-                GlobalZIndex(20),
-            ))
-            .with_children(|menu| {
-                // Observer viewpoint dropdown (synced from the roster).
-                menu.spawn((
-                    ViewpointRow,
-                    Node {
-                        flex_direction: FlexDirection::Row,
-                        align_items: AlignItems::Center,
-                        column_gap: Val::Px(6.0),
-                        ..default()
-                    },
-                ))
-                .with_children(|row| {
-                    row.spawn((
-                        Text::new("View:"),
-                        theme.font(11.0),
-                        TextColor(theme::TEXT_DIM),
-                    ));
-                    let dropdown = widgets::spawn_dropdown(
-                        row,
-                        &theme,
-                        DropdownProps {
-                            options: vec!["—".to_string()],
-                            selected: 0,
-                            width: Val::Px(160.0),
-                        },
-                    );
-                    row.commands().entity(dropdown).insert(ViewpointDropdown);
-                });
-
-                menu.spawn(Node {
-                    flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(8.0),
-                    ..default()
-                })
-                .with_children(|row| {
-                    for (label, tooltip) in [
-                        ("Save", "Save to ./saves/ (CLI-compatible)"),
-                        ("Load", "Load a save from ./saves/"),
-                        ("↻ Restart", "Restart this map from turn 1"),
-                    ] {
-                        let button = widgets::spawn_button(
-                            row,
-                            &theme,
-                            ButtonProps {
-                                label: label.into(),
-                                font_size: 11.5,
-                                ..default()
-                            },
-                        );
-                        let mut commands = row.commands();
-                        let mut entity = commands.entity(button);
-                        entity.insert(widgets::TooltipText(tooltip.into()));
-                        match label {
-                            "Save" => entity.insert(SaveBtn),
-                            "Load" => entity.insert(LoadBtn),
-                            _ => entity.insert(RestartBtn),
-                        };
-                    }
-                });
-
-                // Skip machinery (dev): Skip N / Skip Until.
-                menu.spawn(Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(8.0),
-                    ..default()
-                })
-                .with_children(|row| {
-                    row.spawn((
-                        Text::new("Skip"),
-                        theme.font(11.0),
-                        TextColor(theme::TEXT_DIM),
-                    ));
-                    let count = widgets::spawn_text_input(
-                        row,
-                        &theme,
-                        widgets::TextInputProps {
-                            width: Val::Px(46.0),
-                            max_len: 3,
-                            value: "5".into(),
-                            ..default()
-                        },
-                    );
-                    row.commands().entity(count).insert(SkipCountInput);
-                    let skip = widgets::spawn_button(
-                        row,
-                        &theme,
-                        ButtonProps {
-                            label: "Go".into(),
-                            font_size: 11.5,
-                            ..default()
-                        },
-                    );
-                    row.commands().entity(skip).insert((
-                        SkipNBtn,
-                        widgets::TooltipText(
-                            "Process N turns (1–500) with progress + cancel".into(),
-                        ),
-                    ));
-                });
-                menu.spawn(Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(8.0),
-                    ..default()
-                })
-                .with_children(|row| {
-                    row.spawn((
-                        Text::new("Until"),
-                        theme.font(11.0),
-                        TextColor(theme::TEXT_DIM),
-                    ));
-                    let until = widgets::spawn_text_input(
-                        row,
-                        &theme,
-                        widgets::TextInputProps {
-                            width: Val::Px(140.0),
-                            max_len: 40,
-                            value: String::new(),
-                            ..default()
-                        },
-                    );
-                    row.commands().entity(until).insert(SkipUntilInput);
-                    let until_btn = widgets::spawn_button(
-                        row,
-                        &theme,
-                        ButtonProps {
-                            label: "Skip Until".into(),
-                            font_size: 11.5,
-                            ..default()
-                        },
-                    );
-                    row.commands().entity(until_btn).insert((
-                        SkipUntilBtn,
-                        widgets::TooltipText(
-                            "Skip turns until a headline contains this text (case-insensitive)"
-                                .into(),
-                        ),
-                    ));
-                });
-            });
         });
 }
 
