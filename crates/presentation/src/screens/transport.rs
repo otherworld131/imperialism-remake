@@ -361,20 +361,28 @@ pub fn update_transport(
                         },
                         TooltipText("Haul 1 more (Shift-click: 5 more)".into()),
                     ));
-                    if shortfall > 0 {
-                        let warn_cell = row
-                            .spawn(Node {
-                                margin: UiRect::left(Val::Px(4.0)),
-                                ..default()
-                            })
-                            .with_children(|cell| {
+                    // Fixed-width trailing slot (present on every row) so
+                    // the −/count/+ steppers align as a column whether or
+                    // not a shortfall label is shown.
+                    let warn_cell = row
+                        .spawn(Node {
+                            width: Val::Px(50.0),
+                            flex_shrink: 0.0,
+                            justify_content: JustifyContent::FlexEnd,
+                            margin: UiRect::left(Val::Px(2.0)),
+                            ..default()
+                        })
+                        .with_children(|cell| {
+                            if shortfall > 0 {
                                 cell.spawn((
                                     Text::new(format!("{shortfall} short")),
                                     theme.font(10.0),
                                     TextColor(if alarm { theme::ALARM } else { theme::WARN }),
                                 ));
-                            })
-                            .id();
+                            }
+                        })
+                        .id();
+                    if shortfall > 0 {
                         row.commands().entity(warn_cell).insert(TooltipText(format!(
                             "Hauling {projected} of the {demand_qty} demanded this turn{}",
                             if alarm {

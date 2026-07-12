@@ -57,6 +57,7 @@ pub fn open_modal(
 ) -> ModalHandles {
     let depth = stack.len() as i32;
     let mut content = Entity::PLACEHOLDER;
+    let mut title_bar = Entity::PLACEHOLDER;
     let root = commands
         .spawn((
             Node {
@@ -90,7 +91,7 @@ pub fn open_modal(
                     BorderColor::all(theme::GOLD),
                 ))
                 .with_children(|panel| {
-                    panel
+                    title_bar = panel
                         .spawn((
                             Node {
                                 flex_direction: FlexDirection::Row,
@@ -108,7 +109,8 @@ pub fn open_modal(
                                 theme.font_bold(15.0),
                                 TextColor(theme::GOLD),
                             ));
-                        });
+                        })
+                        .id();
                     content = panel
                         .spawn((Node {
                             flex_direction: FlexDirection::Column,
@@ -121,31 +123,20 @@ pub fn open_modal(
                 });
         })
         .id();
-    // The ✕ button needs the root entity, so it is attached afterwards.
-    commands.entity(root).with_children(|overlay| {
-        overlay
-            .spawn((Node {
-                position_type: PositionType::Absolute,
-                top: Val::Px(0.0),
-                right: Val::Px(0.0),
+    // The ✕ lives in the dialog's title bar (needs `root` for the marker,
+    // so it is attached afterwards).
+    commands.entity(title_bar).with_children(|bar| {
+        let close = spawn_button(
+            bar,
+            theme,
+            ButtonProps {
+                label: "×".into(),
+                flat: true,
+                font_size: 14.0,
                 ..default()
-            },))
-            .with_children(|corner| {
-                let close = spawn_button(
-                    corner,
-                    theme,
-                    ButtonProps {
-                        label: "×".into(),
-                        flat: true,
-                        font_size: 14.0,
-                        ..default()
-                    },
-                );
-                corner
-                    .commands()
-                    .entity(close)
-                    .insert(ModalCloseButton(root));
-            });
+            },
+        );
+        bar.commands().entity(close).insert(ModalCloseButton(root));
     });
     stack.stack.push(root);
     ModalHandles { root, content }

@@ -340,8 +340,6 @@ pub struct SetupUi {
     pub suggestions: Vec<capital::Suggestion>,
     /// Data version `suggestions` was computed at (`0` = stale).
     pub suggestions_version: u64,
-    /// Scenario list fetched once at startup: `(id, name, description)`.
-    pub scenarios: Vec<(String, String, String)>,
 }
 
 /// Setup-flow actions. Buttons carry a [`SetupActionBtn`]; the M10 debug

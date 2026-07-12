@@ -12,10 +12,11 @@ use bevy::ui::UiScale;
 use serde::{Deserialize, Serialize};
 
 pub const MIN_SCALE: f32 = 0.8;
-pub const MAX_SCALE: f32 = 1.75;
-/// Fresh-install default: deliberately above 1.0 — the UI was authored
-/// small against a 1280×720 window and reads tiny on modern displays.
-pub const DEFAULT_SCALE: f32 = 1.25;
+pub const MAX_SCALE: f32 = 2.5;
+/// Fresh-install default: the UI was authored small against a 1280×720
+/// window; 175% (the previous ceiling) is the intended "normal" reading
+/// size on modern displays, with headroom up to 250%.
+pub const DEFAULT_SCALE: f32 = 1.75;
 const HOTKEY_STEP: f32 = 0.1;
 const SETTINGS_FILE: &str = "settings.json";
 
@@ -60,6 +61,14 @@ pub fn save_debug_expanded(expanded: bool) {
 }
 
 pub fn load_ui_scale() -> f32 {
+    // Debug/screenshot hook: `UI_SCALE=1.75` pins the scale for a run
+    // without touching settings.json.
+    if let Some(scale) = std::env::var("UI_SCALE")
+        .ok()
+        .and_then(|raw| raw.parse::<f32>().ok())
+    {
+        return scale.clamp(MIN_SCALE, MAX_SCALE);
+    }
     read_settings()
         .ui_scale
         .map_or(DEFAULT_SCALE, |scale| scale.clamp(MIN_SCALE, MAX_SCALE))

@@ -75,23 +75,10 @@ pub struct YieldsPanel;
 
 // ── Startup ─────────────────────────────────────────────────────────────
 
-/// Fetch the scenario list once and queue the first config build.
+/// Queue the first config build. (The scenario picker was removed — only
+/// the random map generator is playable today; scenario support returns
+/// once real scenarios exist.)
 pub fn init_setup(mut ui: ResMut<SetupUi>) {
-    let scenarios = frontend_api::setup::get_scenarios();
-    if let Some(list) = scenarios.as_array() {
-        ui.scenarios = list
-            .iter()
-            .filter_map(|s| {
-                let id = s["id"].as_str()?.to_string();
-                let name = s["name"].as_str().unwrap_or(&id).to_string();
-                let description = s["description"]
-                    .as_str()
-                    .map(str::to_string)
-                    .unwrap_or_else(|| format!("Year {}", s["year"].as_u64().unwrap_or(0)));
-                Some((id, name, description))
-            })
-            .collect();
-    }
     ui.config_dirty = true;
 }
 
@@ -118,7 +105,6 @@ pub fn rebuild_config_ui(
     }
 
     let error = ui.error.clone();
-    let scenarios = ui.scenarios.clone();
     let show_advanced = ui.show_advanced;
     let cfg = config.clone();
 
@@ -197,7 +183,7 @@ pub fn rebuild_config_ui(
                     .commands()
                     .entity(body.content)
                     .with_children(|content| {
-                        spawn_config_body(content, &theme, &cfg, &scenarios, show_advanced, &error);
+                        spawn_config_body(content, &theme, &cfg, show_advanced, &error);
                     });
 
                 // Footer.
@@ -261,7 +247,6 @@ fn spawn_config_body(
     content: &mut ChildSpawnerCommands,
     theme: &Theme,
     cfg: &SetupConfig,
-    scenarios: &[(String, String, String)],
     show_advanced: bool,
     error: &Option<String>,
 ) {
@@ -274,9 +259,44 @@ fn spawn_config_body(
             ..default()
         },))
         .with_children(|body| {
-            // Two columns so the Nations sliders sit above the fold at
-            // 720p: scenario/difficulty/map-key left, size/nations/toggles
-            // right (wraps to one column on narrow windows).
+            // Difficulty.
+            body.spawn((Node {
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },))
+                .with_children(|group| {
+                    group_label(group, theme, "Difficulty");
+                    group
+                        .spawn((Node {
+                            flex_direction: FlexDirection::Row,
+                            flex_wrap: FlexWrap::Wrap,
+                            column_gap: Val::Px(8.0),
+                            row_gap: Val::Px(6.0),
+                            ..default()
+                        },))
+                        .with_children(|row| {
+                            for (i, label) in DIFFICULTIES.iter().enumerate() {
+                                let button = widgets::spawn_button(
+                                    row,
+                                    theme,
+                                    ButtonProps {
+                                        label: (*label).into(),
+                                        width: Some(Val::Px(118.0)),
+                                        font_size: 12.0,
+                                        auto_label_tint: false,
+                                        ..default()
+                                    },
+                                );
+                                row.commands()
+                                    .entity(button)
+                                    .insert(SetupActionBtn(SetupAction::SetDifficulty(i as u8)));
+                            }
+                        });
+                });
+
+            // Two columns below the full-width scenario/difficulty rows so
+            // the Nations sliders sit above the fold at 720p (wraps back
+            // to one column on narrow windows).
             body.spawn((Node {
                 flex_direction: FlexDirection::Row,
                 flex_wrap: FlexWrap::Wrap,
@@ -293,78 +313,10 @@ fn spawn_config_body(
                             row_gap: Val::Px(16.0),
                             flex_grow: 1.0,
                             flex_basis: Val::Px(0.0),
-                            min_width: Val::Px(430.0),
+                            min_width: Val::Px(370.0),
                             ..default()
                         },))
                         .with_children(|body| {
-                            // Scenario cards.
-                            body.spawn((Node {
-                                flex_direction: FlexDirection::Column,
-                                ..default()
-                            },))
-                                .with_children(|group| {
-                                    group_label(group, theme, "Scenario");
-                                    group
-                                        .spawn((Node {
-                                            flex_direction: FlexDirection::Row,
-                                            column_gap: Val::Px(10.0),
-                                            ..default()
-                                        },))
-                                        .with_children(|cards| {
-                                            spawn_card(
-                                                cards,
-                                                theme,
-                                                "Random Map",
-                                                "Procedurally generated world",
-                                                SetupAction::SelectScenario(None),
-                                            );
-                                            for (id, name, description) in scenarios {
-                                                spawn_card(
-                                                    cards,
-                                                    theme,
-                                                    name,
-                                                    description,
-                                                    SetupAction::SelectScenario(Some(id.clone())),
-                                                );
-                                            }
-                                        });
-                                });
-
-                            // Difficulty.
-                            body.spawn((Node {
-                                flex_direction: FlexDirection::Column,
-                                ..default()
-                            },))
-                                .with_children(|group| {
-                                    group_label(group, theme, "Difficulty");
-                                    group
-                                        .spawn((Node {
-                                            flex_direction: FlexDirection::Row,
-                                            column_gap: Val::Px(8.0),
-                                            ..default()
-                                        },))
-                                        .with_children(|row| {
-                                            for (i, label) in DIFFICULTIES.iter().enumerate() {
-                                                let button = widgets::spawn_button(
-                                                    row,
-                                                    theme,
-                                                    ButtonProps {
-                                                        label: (*label).into(),
-                                                        width: Some(Val::Px(118.0)),
-                                                        font_size: 12.0,
-                                                        auto_label_tint: false,
-                                                        ..default()
-                                                    },
-                                                );
-                                                row.commands().entity(button).insert(
-                                                    SetupActionBtn(SetupAction::SetDifficulty(
-                                                        i as u8,
-                                                    )),
-                                                );
-                                            }
-                                        });
-                                });
-
                             if cfg.scenario.is_none() {
                                 // Map key.
                                 body.spawn((Node {
@@ -392,19 +344,7 @@ fn spawn_config_body(
                                             TextColor(theme::TEXT_DIM),
                                         ));
                                     });
-                            }
-                        });
-                    columns
-                        .spawn((Node {
-                            flex_direction: FlexDirection::Column,
-                            row_gap: Val::Px(16.0),
-                            flex_grow: 1.0,
-                            flex_basis: Val::Px(0.0),
-                            min_width: Val::Px(430.0),
-                            ..default()
-                        },))
-                        .with_children(|body| {
-                            if cfg.scenario.is_none() {
+
                                 // Map size.
                                 body.spawn((Node {
                                     flex_direction: FlexDirection::Column,
@@ -416,7 +356,9 @@ fn spawn_config_body(
                                         group
                                             .spawn((Node {
                                                 flex_direction: FlexDirection::Row,
+                                                flex_wrap: FlexWrap::Wrap,
                                                 column_gap: Val::Px(8.0),
+                                                row_gap: Val::Px(6.0),
                                                 ..default()
                                             },))
                                             .with_children(|row| {
@@ -505,7 +447,19 @@ fn spawn_config_body(
                                                 });
                                         }
                                     });
-
+                            }
+                        });
+                    columns
+                        .spawn((Node {
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(16.0),
+                            flex_grow: 1.0,
+                            flex_basis: Val::Px(0.0),
+                            min_width: Val::Px(370.0),
+                            ..default()
+                        },))
+                        .with_children(|body| {
+                            if cfg.scenario.is_none() {
                                 // Nations sliders.
                                 body.spawn((Node {
                                     flex_direction: FlexDirection::Column,
@@ -633,49 +587,6 @@ fn spawn_config_body(
                     TextColor(theme::ERROR),
                 ));
             }
-        });
-}
-
-/// Scenario/Random-Map card: a bordered column (title + description) made
-/// clickable via `Interaction`, tinted gold when selected.
-fn spawn_card(
-    parent: &mut ChildSpawnerCommands,
-    theme: &Theme,
-    title: &str,
-    description: &str,
-    action: SetupAction,
-) {
-    parent
-        .spawn((
-            Node {
-                width: Val::Px(170.0),
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Center,
-                row_gap: Val::Px(4.0),
-                padding: UiRect::all(Val::Px(12.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(4.0)),
-                ..default()
-            },
-            BackgroundColor(theme::INSET_BG),
-            BorderColor::all(theme::BORDER),
-            Interaction::default(),
-            SetupActionBtn(action),
-        ))
-        .with_children(|card| {
-            card.spawn((
-                Text::new(title),
-                theme.font_bold(13.0),
-                TextColor(theme::TEXT),
-                Pickable::IGNORE,
-            ));
-            card.spawn((
-                Text::new(description),
-                theme.font(10.5),
-                TextColor(theme::TEXT_DIM),
-                TextLayout::new_with_justify(Justify::Center),
-                Pickable::IGNORE,
-            ));
         });
 }
 
@@ -814,7 +725,7 @@ pub fn rebuild_preview_ui(
                 padding: UiRect::horizontal(Val::Px(14.0)),
                 ..default()
             },
-            BackgroundColor(theme::PANEL_BG),
+            BackgroundColor(theme::PANEL_BG_SOLID),
             GlobalZIndex(55),
             Interaction::default(),
             PickingBlocker,
@@ -878,7 +789,7 @@ pub fn rebuild_preview_ui(
                 flex_direction: FlexDirection::Column,
                 ..default()
             },
-            BackgroundColor(theme::PANEL_BG),
+            BackgroundColor(theme::PANEL_BG_SOLID),
             GlobalZIndex(55),
             Interaction::default(),
             PickingBlocker,
@@ -938,7 +849,7 @@ pub fn rebuild_preview_ui(
                 padding: UiRect::horizontal(Val::Px(14.0)),
                 ..default()
             },
-            BackgroundColor(theme::PANEL_BG),
+            BackgroundColor(theme::PANEL_BG_SOLID),
             GlobalZIndex(55),
             Interaction::default(),
             PickingBlocker,

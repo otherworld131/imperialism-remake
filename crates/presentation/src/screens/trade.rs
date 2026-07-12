@@ -710,7 +710,11 @@ pub fn update_trade_static(
                     } else {
                         minor.name.clone()
                     };
-                    row.spawn((Text::new(name), theme.font(12.5), TextColor(theme::TEXT)));
+                    let mut label =
+                        row.spawn((Text::new(name), theme.font(12.5), TextColor(theme::TEXT)));
+                    if minor.has_consulate {
+                        label.insert(TooltipText("• = consulate established".into()));
+                    }
                     row.spawn(Node {
                         flex_direction: FlexDirection::Row,
                         column_gap: Val::Px(4.0),
@@ -971,7 +975,7 @@ fn build_filter_bar(
             label: "Commodities".into(),
             options: commodities.to_vec(),
             selected,
-            width: Val::Px(170.0),
+            width: Val::Px(140.0),
         },
     );
     bar.commands().entity(dropdown).insert((
@@ -1008,7 +1012,7 @@ fn build_filter_bar(
             label: "Countries".into(),
             options,
             selected,
-            width: Val::Px(170.0),
+            width: Val::Px(140.0),
         },
     );
     bar.commands().entity(dropdown).insert((
@@ -1028,22 +1032,8 @@ fn build_filter_bar(
         .filter(|(_, _, gp)| !*gp)
         .map(|(id, _, _)| id.to_string())
         .collect();
-    spawn_chip(
-        bar,
-        theme,
-        table,
-        FilterKind::Country,
-        "Great Powers",
-        great,
-    );
-    spawn_chip(
-        bar,
-        theme,
-        table,
-        FilterKind::Country,
-        "Minor Powers",
-        minor,
-    );
+    spawn_chip(bar, theme, table, FilterKind::Country, "GPs", great);
+    spawn_chip(bar, theme, table, FilterKind::Country, "Minors", minor);
 }
 
 fn spawn_chip(
@@ -1062,7 +1052,7 @@ fn spawn_chip(
         theme,
         ButtonProps {
             label: format!("{label} ({})", values.len()),
-            font_size: 13.0,
+            font_size: 12.0,
             ..default()
         },
     );
@@ -1072,7 +1062,11 @@ fn spawn_chip(
             kind,
             values,
         },
-        TooltipText(format!("Toggle all {label} in the filter")),
+        TooltipText(match label {
+            "GPs" => "Toggle all Great Powers in the filter".to_string(),
+            "Minors" => "Toggle all Minor Powers in the filter".to_string(),
+            _ => format!("Toggle all {label} in the filter"),
+        }),
     ));
 }
 
@@ -1362,9 +1356,9 @@ fn build_offers_table(
             columns: vec![
                 ColumnSpec::new("Item", 1.6),
                 ColumnSpec::new("Seller", 1.8),
-                ColumnSpec::new("Avail", 0.8),
-                ColumnSpec::new("Price", 0.8),
-                ColumnSpec::new("GP", 0.5)
+                ColumnSpec::new("Avail", 0.8).numeric(),
+                ColumnSpec::new("Price", 0.8).numeric(),
+                ColumnSpec::new("GP", 0.35)
                     .with_tooltip("Great Power — badge marks trades with the seven major nations"),
                 ColumnSpec::new("", 0.8),
             ],
@@ -1459,10 +1453,10 @@ fn build_history_table(
                     ColumnSpec::new("Turn", 0.6),
                     ColumnSpec::new("Item", 1.4),
                     ColumnSpec::new("B/S", 0.6),
-                    ColumnSpec::new("Qty", 0.6),
-                    ColumnSpec::new("Cost", 1.0),
+                    ColumnSpec::new("Qty", 0.6).numeric(),
+                    ColumnSpec::new("Cost", 1.0).numeric(),
                     ColumnSpec::new("Partner", 1.6),
-                    ColumnSpec::new("GP", 0.5).with_tooltip(
+                    ColumnSpec::new("GP", 0.35).with_tooltip(
                         "Great Power — badge marks trades with the seven major nations",
                     ),
                 ],
@@ -1522,7 +1516,7 @@ fn build_history_table(
                 r.turn.to_string(),
                 r.resource.clone(),
                 if r.partner_gp {
-                    format!("{} •", r.partner)
+                    format!("{} (GP)", r.partner)
                 } else {
                     r.partner.clone()
                 },
@@ -1573,10 +1567,10 @@ fn build_history_table(
                 ColumnSpec::new("Turn", 0.6),
                 ColumnSpec::new("Item", 1.4),
                 ColumnSpec::new("Partner", 1.6),
-                ColumnSpec::new("Bought", 0.7),
-                ColumnSpec::new("Cost", 1.0),
-                ColumnSpec::new("Sold", 0.7),
-                ColumnSpec::new("Revenue", 1.0),
+                ColumnSpec::new("Bought", 0.7).numeric(),
+                ColumnSpec::new("Cost", 1.0).numeric(),
+                ColumnSpec::new("Sold", 0.7).numeric(),
+                ColumnSpec::new("Revenue", 1.0).numeric(),
             ],
             sortable: true,
             rows,
@@ -1634,7 +1628,7 @@ fn build_market_table(
             vec![
                 o.resource.clone(),
                 if o.seller_is_great_power {
-                    format!("{} •", o.seller_name)
+                    format!("{} (GP)", o.seller_name)
                 } else {
                     o.seller_name.clone()
                 },
@@ -1685,9 +1679,9 @@ fn build_market_table(
             columns: vec![
                 ColumnSpec::new("Item", 1.2),
                 ColumnSpec::new("Seller", 1.5),
-                ColumnSpec::new("Offered", 0.7),
-                ColumnSpec::new("Sold", 0.6),
-                ColumnSpec::new("Price", 0.7),
+                ColumnSpec::new("Offered", 0.7).numeric(),
+                ColumnSpec::new("Sold", 0.6).numeric(),
+                ColumnSpec::new("Price", 0.7).numeric(),
                 ColumnSpec::new("Bought by", 2.2),
             ],
             sortable: true,

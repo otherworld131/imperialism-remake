@@ -234,7 +234,7 @@ pub fn update_battles(
             .with_children(|header| {
                 header.spawn((
                     Text::new("Battles"),
-                    theme.font_bold(20.0),
+                    theme.font_bold(19.0),
                     TextColor(theme::GOLD),
                 ));
                 header.spawn((

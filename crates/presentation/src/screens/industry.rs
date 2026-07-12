@@ -57,6 +57,9 @@ pub struct ExpandButton(pub String);
 #[derive(Component)]
 pub struct ShowTargetsCheckbox;
 
+#[derive(Component)]
+pub struct IndustryCloseButton;
+
 /// Screen-local UI state (web `showTargets` localStorage toggle).
 /// AI-target debug data stays hidden until explicitly enabled.
 #[derive(Resource, Default)]
@@ -131,7 +134,7 @@ pub fn update_industry(
             .with_children(|row| {
                 row.spawn((
                     Text::new("Industry"),
-                    theme.font_bold(17.0),
+                    theme.font_bold(19.0),
                     TextColor(theme::GOLD),
                 ));
                 if let Some(buildable) = buildable {
@@ -158,6 +161,21 @@ pub fn update_industry(
                         TextColor(theme::TEXT_DIM),
                     ));
                 }
+                // Uniform chrome (CC-5): Close (Esc) top-right.
+                row.spawn(Node {
+                    flex_grow: 1.0,
+                    ..default()
+                });
+                let close = widgets::spawn_button(
+                    row,
+                    &theme,
+                    ButtonProps {
+                        label: "Close (Esc)".into(),
+                        font_size: 12.0,
+                        ..default()
+                    },
+                );
+                row.commands().entity(close).insert(IndustryCloseButton);
             });
 
         // Three columns.
@@ -1559,6 +1577,8 @@ pub fn handle_industry_sliders(
 pub fn handle_industry_buttons(
     mut activations: MessageReader<ButtonActivated>,
     expand: Query<&ExpandButton>,
+    closes: Query<(), With<IndustryCloseButton>>,
+    mut next_screen: ResMut<NextState<crate::state::Screen>>,
     mut out: MessageWriter<GameCommand>,
 ) {
     for ButtonActivated(entity) in activations.read() {
@@ -1566,6 +1586,8 @@ pub fn handle_industry_buttons(
             out.write(GameCommand::ExpandBuilding {
                 building_type: button.0.clone(),
             });
+        } else if closes.contains(*entity) {
+            next_screen.set(crate::state::Screen::Map);
         }
     }
 }

@@ -395,6 +395,9 @@ fn header_row(content: &mut ChildSpawnerCommands, theme: &Theme, columns: &[&str
                     .spawn(Node {
                         flex_grow: 1.0,
                         flex_basis: Val::Px(0.0),
+                        // Shrinkable below min-content: long headers wrap
+                        // instead of pushing the row under the scrollbar.
+                        min_width: Val::Px(0.0),
                         justify_content: JustifyContent::FlexEnd,
                         ..default()
                     })
@@ -579,6 +582,7 @@ fn spawn_value_cell(
         Node {
             flex_grow: 1.0,
             flex_basis: Val::Px(0.0),
+            min_width: Val::Px(0.0),
             flex_direction: FlexDirection::Row,
             justify_content: JustifyContent::FlexEnd,
             align_items: AlignItems::Center,
@@ -678,9 +682,9 @@ fn economy_tab(content: &mut ChildSpawnerCommands, ctx: &LedgerCtx) {
             "Treasury",
             "Provinces",
             "Revenue",
-            "Total Resources",
-            "Total Materials",
-            "Total Goods",
+            "Resources",
+            "Materials",
+            "Goods",
             "Workers",
         ],
     );

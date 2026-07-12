@@ -137,7 +137,7 @@ pub fn enter_legend(
             .with_children(|header| {
                 header.spawn((
                     Text::new("Legend"),
-                    theme.font_bold(20.0),
+                    theme.font_bold(19.0),
                     TextColor(theme::GOLD),
                 ));
                 let close = widgets::spawn_button(

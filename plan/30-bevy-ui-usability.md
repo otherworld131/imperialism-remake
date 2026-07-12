@@ -259,6 +259,91 @@ sliders, some only text).
   - Verify: `M10_DEBUG=config` screenshot — no scrollbar at 1280×720
     default window, or Nations visible without scrolling.
 
+
+## P2 — Group 6: alignment, spacing & interface-scale defaults
+
+Source: alignment/wasted-space re-examination of every screen (2026-07-12),
+including previously unreviewed views (Legend, Trade history tabs, Ledger
+cash-flow tab, proposal modal).
+
+- [x] **UI scale: "normal" becomes 175%, scalable beyond.** The old max
+  (1.75) is the new `DEFAULT_SCALE` (fresh installs + Ctrl+0 reset);
+  `MAX_SCALE` rises to 2.5 so scaling UP from the new normal works. The
+  side-panel slider range follows automatically; persisted values clamp.
+  - [x] Add a `UI_SCALE` env override (screenshot/debug hook) so captures
+    can pin a scale without touching `settings.json`.
+  - Verify: fresh start (no settings.json) screenshot at 175%; slider
+    shows 175% and drags to 250%.
+- [x] **Scale-invariant alignment.** Bevy's `UiScale` multiplies every Px
+  uniformly, so intra-panel alignment must not change with font size;
+  verify by capturing Industry/Trade/Ledger at 80% / 175% / 250% and
+  comparing proportions. Fitting regressions found by this audit are the
+  items below (clipping is a layout bug, not a scale bug).
+  - Verify: `UI_SCALE=0.8|1.75|2.5` screenshot triplets.
+- [x] **Ledger tables clip at the right edge.** The WORKERS (Economy tab)
+  and RECONCILE (Cash-flow tab) columns sit half under the scrollbar at
+  every scale. Reserve a scrollbar gutter on the table content.
+  - Verify: `M8_DEBUG=ledger` and `M8_DEBUG=ledgerflow` screenshots show
+    the full last column.
+- [x] **Table kit: vertical centering + numeric alignment.** Text cells sit
+  top-aligned next to taller Buy buttons (Trade offers); numeric columns
+  (Avail, Price, Bought, Cost, Sold, Revenue, Qty) are left-aligned under
+  their headers. Center rows vertically in `widgets/table.rs` and add
+  `ColumnSpec::numeric()` (right-aligned header + cells); narrow the GP
+  column (0.5 → 0.35 fr) so it stops reading as dead space.
+  - Verify: `M7_DEBUG=trade` + `histdata` screenshots — text centered
+    against buttons, numbers right-aligned.
+- [x] **Trade history "•" GP dots missed in Group 4.** The aggregated
+  Historical Country rows still mark Great-Power partners with a bare
+  gold dot ("Cetdaaria •"); replace with the same "GP" badge used in the
+  offers table.
+  - Verify: `M7_DEBUG=histdata` screenshot.
+- [x] **Trade filter bar fits one row.** (chips renamed GPs/Minors with full-name tooltips) "Minor Powers (16)" wraps onto a
+  lone second line; compact dropdown widths (170 → 150) and chip
+  font/padding so the Orders filter bar is a single row at 1280 px.
+  - Verify: `M7_DEBUG=trade` screenshot.
+- [x] **Transport steppers align as a column.** Rows without a shortfall
+  ("Livestock") let flex push −/count/+ to the right; reserve a
+  fixed-width trailing slot for the "N short" label so the steppers sit
+  at the same x on every row.
+  - Verify: `M7_DEBUG=transport` screenshot — one vertical stepper
+    column.
+- [x] **Solid chrome over the map.** Map labels ghost through the
+  translucent side panel, top tab bar, convenience bar, and setup preview
+  sidebar (e.g. "CENTRAL EAST-CENTRAL OCEAN" behind the UI toggles).
+  Switch map-adjacent chrome to the solid panel background.
+  - Verify: `HUMAN_GAME=1` + `M10_DEBUG=preview` screenshots — no text
+    bleed-through.
+- [x] **Modal ✕ sits on the dialog, not the screen.** The close button is
+  parented to the full-screen overlay, so it floats at the window's
+  top-right corner (visible in the proposal screenshot). Move it into the
+  dialog's title bar.
+  - Verify: `M8_DEBUG=proposal` screenshot.
+- [x] **Setup config: Nations above the fold at 1280×720.** (scenario removal + wrapping rows freed the space; wide rows wrap inside columns) The
+  Group-5 layout wraps back to one column (2 × 430 min-width + gap
+  exceeds the panel's inner width); lower the column min-width so
+  Nations lands above the fold as intended.
+  - Verify: `M10_DEBUG=config` screenshot — Nations visible without
+    scrolling.
+- [x] **Burger menu for the convenience bar.** Save / Load / Restart, the
+  observer View dropdown, and the skip machinery all hide behind one "☰"
+  button (glyph added to the patched pixel font) so the map top-left
+  stays clean; triggering any action closes the menu.
+  - Verify: `HUMAN_GAME=1` screenshot — bar shows only ☰; a scripted
+    open shows the menu.
+- [x] **Remove the non-functional scenario cards.** Only the random map
+  generator is playable; Congress of Vienna / Concert of Europe / Year
+  of Revolutions / Scramble for Africa were dead UI. The Scenario picker
+  section and its plumbing are removed (config always uses the random
+  generator; scenario support returns when real scenarios exist).
+  - Verify: `M10_DEBUG=config` screenshot — no Scenario section.
+- [x] **Uniform full-screen headers.** Title sizes and Close buttons vary
+  (Industry 17 px and no Close button; Battles 20 px; Tech/Trade/Ledger
+  19 px). Standardize: 19 px bold gold title, same header padding, and a
+  "Close (Esc)" button on every full-screen overlay including Industry.
+  - Verify: header screenshots across Industry/Trade/Tech/Ledger/Battles
+    line up.
+
 ---
 
 ## Execution order (group tracking)
@@ -275,3 +360,4 @@ screenshot pair for every change.
 - [x] **Group 3** — P2 map side panel + skip row
 - [x] **Group 4** — P2 Trade / Diplomacy / Tech / Setup
 - [x] **Group 5** — P3 polish batch
+- [x] **Group 6** — alignment, spacing & interface-scale defaults

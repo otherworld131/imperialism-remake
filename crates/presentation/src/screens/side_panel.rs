@@ -101,7 +101,7 @@ pub fn setup_side_panel(
                 flex_direction: FlexDirection::Column,
                 ..default()
             },
-            BackgroundColor(theme::PANEL_BG),
+            BackgroundColor(theme::PANEL_BG_SOLID),
             Interaction::default(),
             PickingBlocker,
         ))

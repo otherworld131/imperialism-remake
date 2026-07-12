@@ -1495,7 +1495,7 @@ pub fn run_game() {
                         map_hud::end_turn_button,
                         map_hud::keyboard_commands,
                         map_hud::handle_convenience_buttons,
-                        map_hud::handle_skip_popover,
+                        map_hud::handle_burger_menu,
                         map_hud::handle_viewpoint_dropdown,
                         panels::handle_unit_checkboxes,
                         panels::handle_panel_buttons,

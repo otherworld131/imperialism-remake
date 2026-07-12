@@ -21,6 +21,8 @@ pub struct ColumnSpec {
     pub width: f32,
     /// Optional hover explanation for the header (CC-4).
     pub tooltip: Option<String>,
+    /// Numeric column: header + cells right-aligned.
+    pub numeric: bool,
 }
 
 impl ColumnSpec {
@@ -29,11 +31,18 @@ impl ColumnSpec {
             header: header.into(),
             width,
             tooltip: None,
+            numeric: false,
         }
     }
 
     pub fn with_tooltip(mut self, tooltip: impl Into<String>) -> Self {
         self.tooltip = Some(tooltip.into());
+        self
+    }
+
+    /// Right-align the header and cells (numbers scan better aligned).
+    pub fn numeric(mut self) -> Self {
+        self.numeric = true;
         self
     }
 }
@@ -109,16 +118,30 @@ pub fn spawn_table(parent: &mut ChildSpawnerCommands, theme: &Theme, props: Tabl
             .with_children(|header| {
                 for (col, spec) in props.columns.iter().enumerate() {
                     if props.sortable {
-                        let cell = spawn_button(
-                            header,
-                            theme,
-                            ButtonProps {
-                                label: spec.header.clone(),
-                                font_size: 12.5,
-                                flat: true,
+                        // Numeric headers sit in a right-aligned wrapper so
+                        // the button keeps its own layout node.
+                        let mut cell = Entity::PLACEHOLDER;
+                        header
+                            .spawn((Node {
+                                justify_content: if spec.numeric {
+                                    JustifyContent::FlexEnd
+                                } else {
+                                    JustifyContent::FlexStart
+                                },
                                 ..default()
-                            },
-                        );
+                            },))
+                            .with_children(|wrap| {
+                                cell = spawn_button(
+                                    wrap,
+                                    theme,
+                                    ButtonProps {
+                                        label: spec.header.clone(),
+                                        font_size: 12.5,
+                                        flat: true,
+                                        ..default()
+                                    },
+                                );
+                            });
                         let mut commands = header.commands();
                         let mut entity = commands.entity(cell);
                         entity.insert(TableHeaderCell { table: root, col });
@@ -129,6 +152,11 @@ pub fn spawn_table(parent: &mut ChildSpawnerCommands, theme: &Theme, props: Tabl
                         header
                             .spawn((Node {
                                 padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                                justify_content: if spec.numeric {
+                                    JustifyContent::FlexEnd
+                                } else {
+                                    JustifyContent::FlexStart
+                                },
                                 ..default()
                             },))
                             .with_children(|cell| {
@@ -241,9 +269,18 @@ fn rebuild_table_bodies(
                 for col in 0..table.columns.len() {
                     let value = row.get(col).map_or("", String::as_str);
                     let striped = display_index % 2 == 1;
+                    let numeric = table.columns.get(col).is_some_and(|c| c.numeric);
                     grid.spawn((
                         Node {
                             padding: UiRect::axes(Val::Px(12.0), Val::Px(5.0)),
+                            // Center against taller neighbors (e.g. a Buy
+                            // button in the same grid row).
+                            align_items: AlignItems::Center,
+                            justify_content: if numeric {
+                                JustifyContent::FlexEnd
+                            } else {
+                                JustifyContent::FlexStart
+                            },
                             ..default()
                         },
                         BackgroundColor(if striped {
