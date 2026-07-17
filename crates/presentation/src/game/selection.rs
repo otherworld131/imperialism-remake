@@ -248,13 +248,35 @@ pub fn handle_map_click(
             continue;
         }
 
-        // 3. Deploy mode: only clicks on highlighted tiles act; anything
-        //    else is ignored and the mode stays armed (web F-004).
+        // 3. Deploy mode: clicks on highlighted tiles deploy; clicking
+        //    another idle own civilian switches the armed deploy to it
+        //    (and reopens an engineer's popover); anything else is ignored
+        //    and the mode stays armed (web F-004).
         if let Some(state) = deploy.0.as_ref() {
             let Some(tile) = tile else {
                 continue;
             };
             if !state.deployable.contains(&(tile.q, tile.r)) {
+                if !meta.observer
+                    && let Some(civ) = tile.civilian_on_tile.as_ref()
+                    && civ.is_human
+                    && tile.nation_id == i64::from(meta.player_nation)
+                    && !civ.working
+                {
+                    selected_hex.0 = Some((tile.q, tile.r));
+                    arm_civilian_deploy(
+                        civ,
+                        (tile.q, tile.r),
+                        meta.player_nation,
+                        &session,
+                        &vms,
+                        (&theme, icons.as_deref(), &windows, &ui_scale),
+                        &mut commands,
+                        &mut toasts,
+                        &mut deploy,
+                        &mut prompt,
+                    );
+                }
                 continue;
             }
             // Engineers deploy like everyone else (card #495): placement is
@@ -299,45 +321,18 @@ pub fn handle_map_click(
             && tile.nation_id == i64::from(meta.player_nation)
         {
             if !civ.working {
-                if let Some(tiles) = vms.map.as_ref() {
-                    deploy.0 = Some(compute_deploy_state(
-                        civ.id,
-                        &civ.civ_type,
-                        Some((tile.q, tile.r)),
-                        tiles,
-                        meta.player_nation,
-                    ));
-                }
-                // Card #495: an idle engineer also offers its build menu — a
-                // compact icon popover next to the click. Redeploy highlights
-                // stay active behind it.
-                if civ.civ_type == "Engineer"
-                    && let Some(session) = session.0.as_ref()
-                    && let Ok(options) = frontend_api::units::get_engineer_build_options(
-                        session.game(),
-                        civ.id as u32,
-                    )
-                {
-                    if options
-                        .get("can_build_now")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false)
-                    {
-                        open_engineer_popover(
-                            &mut commands,
-                            &theme,
-                            icons.as_deref(),
-                            &options,
-                            popover_anchor(&windows, &ui_scale),
-                            civ.id,
-                            &mut prompt,
-                        );
-                    } else if let Some(reason) =
-                        options.get("blocked_reason").and_then(|v| v.as_str())
-                    {
-                        toasts.write(Toast::info(format!("Engineer: {}", reason)));
-                    }
-                }
+                arm_civilian_deploy(
+                    civ,
+                    (tile.q, tile.r),
+                    meta.player_nation,
+                    &session,
+                    &vms,
+                    (&theme, icons.as_deref(), &windows, &ui_scale),
+                    &mut commands,
+                    &mut toasts,
+                    &mut deploy,
+                    &mut prompt,
+                );
                 continue;
             }
             selected_civilian.0 = Some(civ.id);
@@ -367,6 +362,63 @@ pub fn handle_map_click(
 }
 
 // ── Engineer build popover (card #495) ───────────────────────────────────
+
+/// Arm deploy mode for an idle civilian standing on `(q, r)`; engineers
+/// additionally get their build popover (or a toast explaining why builds
+/// are blocked this turn). Shared by the plain-tile pickup and the
+/// switch-civilian-while-deploying path.
+#[allow(clippy::too_many_arguments)]
+fn arm_civilian_deploy(
+    civ: &vm::CivilianOnTile,
+    (q, r): (i32, i32),
+    player_nation: u32,
+    session: &SessionRes,
+    vms: &ViewModels,
+    ui: (
+        &Theme,
+        Option<&IconAssets>,
+        &Query<&Window, With<PrimaryWindow>>,
+        &UiScale,
+    ),
+    commands: &mut Commands,
+    toasts: &mut MessageWriter<Toast>,
+    deploy: &mut DeployMode,
+    prompt: &mut EngineerPrompt,
+) {
+    let (theme, icons, windows, ui_scale) = ui;
+    if let Some(tiles) = vms.map.as_ref() {
+        deploy.0 = Some(compute_deploy_state(
+            civ.id,
+            &civ.civ_type,
+            Some((q, r)),
+            tiles,
+            player_nation,
+        ));
+    }
+    if civ.civ_type == "Engineer"
+        && let Some(session) = session.0.as_ref()
+        && let Ok(options) =
+            frontend_api::units::get_engineer_build_options(session.game(), civ.id as u32)
+    {
+        if options
+            .get("can_build_now")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            open_engineer_popover(
+                commands,
+                theme,
+                icons,
+                &options,
+                popover_anchor(windows, ui_scale),
+                civ.id,
+                prompt,
+            );
+        } else if let Some(reason) = options.get("blocked_reason").and_then(|v| v.as_str()) {
+            toasts.write(Toast::info(format!("Engineer: {}", reason)));
+        }
+    }
+}
 
 /// Where the popover opens: just beside the cursor, clamped to the window
 /// (in UI coordinates, i.e. divided by the global [`UiScale`]).
