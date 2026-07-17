@@ -190,13 +190,26 @@ pub fn apply_command(
     mut selected_civilian: ResMut<SelectedCivilian>,
     mut deploy: ResMut<DeployMode>,
     mut proposal_prompt: ResMut<ProposalPrompt>,
+    mut engineer_prompt: ResMut<crate::game::resources::EngineerPrompt>,
+    mut commands: Commands,
 ) {
+    // Turn resolution invalidates an armed deploy / engineer popover.
+    let cancel_deploy_ui = |deploy: &mut DeployMode,
+                            engineer_prompt: &mut crate::game::resources::EngineerPrompt,
+                            commands: &mut Commands| {
+        deploy.0 = None;
+        if let Some(state) = engineer_prompt.0.take() {
+            commands.entity(state.root).despawn();
+        }
+    };
     for command in messages.read() {
         if let GameCommand::EndTurn = command {
+            cancel_deploy_ui(&mut deploy, &mut engineer_prompt, &mut commands);
             turn_runner::start_end_turn(&mut session, &mut active, &mut next_phase);
             continue;
         }
         if let GameCommand::SkipTurns { count } = command {
+            cancel_deploy_ui(&mut deploy, &mut engineer_prompt, &mut commands);
             turn_runner::start_skip(
                 &mut session,
                 &mut active_skip,
@@ -206,6 +219,7 @@ pub fn apply_command(
             continue;
         }
         if let GameCommand::SkipUntil { text } = command {
+            cancel_deploy_ui(&mut deploy, &mut engineer_prompt, &mut commands);
             turn_runner::start_skip(
                 &mut session,
                 &mut active_skip,

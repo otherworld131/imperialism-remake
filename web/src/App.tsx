@@ -764,6 +764,12 @@ function App() {
   }, [gameStartParams, gameState, observerGps, applyGameJson, runMutation, applyModeUiDefaults]);
 
   const handleEndTurn = useCallback(async () => {
+    // Turn resolution invalidates an armed deploy / engineer popover.
+    setEngineerPopover(null);
+    setIsDeployMode(false);
+    setDeployingCivilian(null);
+    setDeployableTiles(new Set());
+    setProspectedTiles(new Set());
     await runMutation(async () => {
       setBusyMessage('Processing turn…');
       try {
@@ -1335,6 +1341,23 @@ function App() {
     // Any map click closes an open engineer build popover (a click on the
     // engineer itself reopens it below).
     setEngineerPopover(null);
+    // Arm deploy mode for an idle own civilian standing on (q, r); engineers
+    // additionally get the build popover (or an explanation toast).
+    const armCivilian = async (cot: NonNullable<TileData['civilian_on_tile']>, q: number, r: number) => {
+      const civ: CivilianDetail = {
+        id: cot.id, type: cot.type, working: false, turns_remaining: 0,
+        position: { q, r },
+      };
+      handleDeployCivilianRef.current(civ);
+      if (cot.type === 'Engineer') {
+        const opts = await getEngineerBuildOptions(gameJson, cot.id);
+        if (opts?.can_build_now) {
+          setEngineerPopover({ civId: cot.id, q, r, options: opts });
+        } else if (opts?.blocked_reason) {
+          showError(`Engineer: ${opts.blocked_reason}`);
+        }
+      }
+    };
     // Queued diplomacy action: fire the action against the clicked nation.
     if (queuedDiplomacyAction && activeScreen === 'diplomacy') {
       const targetNationId = tile.nation_id;
@@ -1422,9 +1445,17 @@ function App() {
 
     // Deploy mode: clicking a tile deploys the civilian (or prompts engineer action)
     if (isDeployMode && deployingCivilian) {
-      // F-004: Only allow clicking highlighted deployable tiles
+      // F-004: Only allow clicking highlighted deployable tiles — except
+      // that clicking another idle own civilian switches the armed deploy
+      // to it (and reopens an engineer's build popover).
       const tileKey = `${tile.q},${tile.r}`;
-      if (!deployableTiles.has(tileKey)) return; // Ignore click on invalid tile, keep mode active
+      if (!deployableTiles.has(tileKey)) {
+        const cot = tile.civilian_on_tile;
+        if (cot?.is_human && tile.nation_id === playerNationId && !cot.working) {
+          await armCivilian(cot, tile.q, tile.r);
+        }
+        return; // Otherwise ignore the click, keep mode active
+      }
 
       await runMutation(async () => {
         let currentJson = gameJson;
@@ -1460,21 +1491,7 @@ function App() {
     if (tile.civilian_on_tile?.is_human && tile.nation_id === playerNationId) {
       const cot = tile.civilian_on_tile;
       if (!cot.working) {
-        const civ: CivilianDetail = {
-          id: cot.id, type: cot.type, working: false, turns_remaining: 0,
-          position: { q: tile.q, r: tile.r },
-        };
-        handleDeployCivilianRef.current(civ);
-        // Card #495: an idle engineer also offers its build menu — a compact
-        // icon popover anchored to its tile. Redeploy highlights stay active.
-        if (cot.type === 'Engineer') {
-          const opts = await getEngineerBuildOptions(gameJson, cot.id);
-          if (opts?.can_build_now) {
-            setEngineerPopover({ civId: cot.id, q: tile.q, r: tile.r, options: opts });
-          } else if (opts?.blocked_reason) {
-            showError(`Engineer: ${opts.blocked_reason}`);
-          }
-        }
+        await armCivilian(cot, tile.q, tile.r);
         return;
       }
       setSelectedCivilianId(cot.id);
