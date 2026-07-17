@@ -15,10 +15,7 @@ use crate::game::resources::{
     DeployMode, GameMeta, PendingMoveList, ProvinceUnits, SelectedCivilian, SelectedNavy,
     SelectedShips, SelectedUnits, ViewModels,
 };
-use crate::game::selection;
-use crate::game::vm::{ArmyUnitVm, CivilianEntry, MapTile, NavyMarker, ShipVm};
-use crate::map::camera::GameCamera;
-use crate::map::geometry;
+use crate::game::vm::{ArmyUnitVm, MapTile, NavyMarker, ShipVm};
 use crate::map::icons::IconAssets;
 use crate::map::navy;
 use crate::map::picking::SelectedHex;
@@ -34,9 +31,6 @@ pub struct BannerSection;
 
 #[derive(Component)]
 pub struct UnitPanelSection;
-
-#[derive(Component)]
-pub struct CivilianPanelSection;
 
 #[derive(Component)]
 pub struct NavalPanelSection;
@@ -70,14 +64,6 @@ pub struct ConfirmDismissButton(pub Vec<u32>);
 
 #[derive(Component)]
 pub struct CancelModalButton;
-
-#[derive(Component, Clone)]
-pub struct CivilianRowButton {
-    pub id: i64,
-    pub civ_type: String,
-    pub working: bool,
-    pub position: Option<(i32, i32)>,
-}
 
 #[derive(Component)]
 pub struct RecallCivilianButton(pub i64);
@@ -246,10 +232,15 @@ pub fn update_banners(
                 &theme,
                 Color::srgba(46.0 / 255.0, 204.0 / 255.0, 64.0 / 255.0, 0.15),
                 Color::srgba(46.0 / 255.0, 204.0 / 255.0, 64.0 / 255.0, 0.4),
-                &format!(
-                    "Deploy {} — click a highlighted tile, or press Esc to cancel.",
-                    state.civ_type
-                ),
+                &if state.civ_type == "Engineer" {
+                    "Engineer — pick a build, or click a highlighted tile to move. Esc to cancel."
+                        .to_string()
+                } else {
+                    format!(
+                        "Deploy {} — click a highlighted tile, or press Esc to cancel.",
+                        state.civ_type
+                    )
+                },
             );
         }
         // Selected deployed civilian → Recall affordance.
@@ -627,228 +618,6 @@ fn spawn_unit_row(
         });
 }
 
-// ── Civilian panel ───────────────────────────────────────────────────────
-
-pub fn update_civilian_panel(
-    meta: Res<GameMeta>,
-    vms: Res<ViewModels>,
-    index: Res<TileIndex>,
-    selected_hex: Res<SelectedHex>,
-    selected_civilian: Res<SelectedCivilian>,
-    theme: Res<Theme>,
-    icons: Option<Res<IconAssets>>,
-    mut commands: Commands,
-    sections: Query<Entity, With<CivilianPanelSection>>,
-) {
-    if !vms.is_changed() && !selected_hex.is_changed() && !selected_civilian.is_changed() {
-        return;
-    }
-    let Ok(section) = sections.single() else {
-        return;
-    };
-    commands.entity(section).despawn_children();
-    if meta.observer {
-        return;
-    }
-    // Web parity: panel shows while one of the player's own tiles is pinned.
-    let on_player_tile = selected_tile(&selected_hex, &vms, &index)
-        .is_some_and(|t| t.nation_id == i64::from(meta.player_nation));
-    if !on_player_tile {
-        return;
-    }
-    let Some(civilians) = vms.civilians.as_ref() else {
-        return;
-    };
-    let icons = icons.as_deref();
-
-    commands.entity(section).with_children(|content| {
-        content.spawn((
-            Text::new("Civilian Workforce"),
-            theme.font_bold(13.0),
-            TextColor(theme::TEXT),
-        ));
-        if civilians.deployed.is_empty() && civilians.undeployed.is_empty() {
-            content.spawn((
-                Text::new("No civilians"),
-                theme.font_italic(12.0),
-                TextColor(theme::TEXT_DIM),
-            ));
-            return;
-        }
-        if !civilians.undeployed.is_empty() {
-            content.spawn((
-                Text::new(format!("Undeployed ({})", civilians.undeployed.len())),
-                theme.font(12.0),
-                TextColor(theme::TEXT_DIM),
-            ));
-            for civ in &civilians.undeployed {
-                spawn_civilian_row(content, &theme, icons, civ, false);
-            }
-        }
-        if !civilians.deployed.is_empty() {
-            content.spawn((
-                Text::new(format!("Deployed ({})", civilians.deployed.len())),
-                theme.font(12.0),
-                TextColor(theme::TEXT_DIM),
-            ));
-            for civ in &civilians.deployed {
-                spawn_civilian_row(
-                    content,
-                    &theme,
-                    icons,
-                    civ,
-                    selected_civilian.0 == Some(civ.id),
-                );
-            }
-        }
-    });
-}
-
-fn spawn_civilian_row(
-    parent: &mut ChildSpawnerCommands,
-    theme: &Theme,
-    icons: Option<&IconAssets>,
-    civ: &CivilianEntry,
-    is_selected: bool,
-) {
-    let deployed = civ.position.is_some();
-    let bg = if is_selected {
-        Color::srgba(1.0, 1.0, 1.0, 0.12)
-    } else if deployed {
-        Color::srgba(1.0, 1.0, 1.0, 0.05)
-    } else {
-        Color::srgba(46.0 / 255.0, 204.0 / 255.0, 64.0 / 255.0, 0.08)
-    };
-    parent
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Column,
-                padding: UiRect::axes(Val::Px(6.0), Val::Px(4.0)),
-                margin: UiRect::bottom(Val::Px(2.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(4.0)),
-                row_gap: Val::Px(2.0),
-                ..default()
-            },
-            BackgroundColor(bg),
-            BorderColor::all(if is_selected {
-                Color::srgba(1.0, 1.0, 1.0, 0.25)
-            } else {
-                Color::NONE
-            }),
-        ))
-        .with_children(|row| {
-            row.spawn(Node {
-                flex_direction: FlexDirection::Row,
-                justify_content: JustifyContent::SpaceBetween,
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(4.0),
-                ..default()
-            })
-            .with_children(|line| {
-                line.spawn(Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(4.0),
-                    ..default()
-                })
-                .with_children(|left| {
-                    spawn_icon(left, icons, "civilians", &civ.civ_type, 14.0);
-                    let label = match civ.position {
-                        Some(pos) => format!("{} ({}, {})", civ.civ_type, pos.q, pos.r),
-                        None => civ.civ_type.clone(),
-                    };
-                    let b = widgets::spawn_button(
-                        left,
-                        theme,
-                        ButtonProps {
-                            label,
-                            font_size: 12.0,
-                            flat: true,
-                            ..default()
-                        },
-                    );
-                    left.commands().entity(b).insert(CivilianRowButton {
-                        id: civ.id,
-                        civ_type: civ.civ_type.clone(),
-                        working: civ.working,
-                        position: civ.position.map(|p| (p.q, p.r)),
-                    });
-                });
-                let status = if !deployed {
-                    "Click to deploy"
-                } else if !civ.working {
-                    "Click to redeploy"
-                } else if is_selected {
-                    "selected"
-                } else {
-                    ""
-                };
-                if !status.is_empty() {
-                    line.spawn((
-                        Text::new(status.to_string()),
-                        theme.font(10.0),
-                        TextColor(Color::srgb_u8(0x88, 0xcc, 0x88)),
-                    ));
-                }
-            });
-            if civ.working && civ.turns_remaining > 0 {
-                row.spawn(Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(4.0),
-                    ..default()
-                })
-                .with_children(|line| {
-                    const MAX_TURNS: f32 = 5.0;
-                    let filled = (MAX_TURNS - civ.turns_remaining as f32).max(0.0) / MAX_TURNS;
-                    spawn_bar(line, 50.0, filled, Color::srgb_u8(0x44, 0xaa, 0x88));
-                    line.spawn((
-                        Text::new(format!(
-                            "{} turn{}",
-                            civ.turns_remaining,
-                            if civ.turns_remaining == 1 { "" } else { "s" }
-                        )),
-                        theme.font(10.0),
-                        TextColor(theme::TEXT_DIM),
-                    ));
-                });
-                if let Some(resource) = civ.tile_resource.as_deref() {
-                    row.spawn(Node {
-                        flex_direction: FlexDirection::Row,
-                        align_items: AlignItems::Center,
-                        column_gap: Val::Px(4.0),
-                        ..default()
-                    })
-                    .with_children(|line| {
-                        spawn_icon(line, icons, "commodities", resource, 12.0);
-                        line.spawn((
-                            Text::new(format!("Improving {resource}")),
-                            theme.font(10.0),
-                            TextColor(theme::TEXT_DIM),
-                        ));
-                    });
-                }
-                if civ.civ_type == "Engineer"
-                    && let Some(task) = civ.build_task.as_deref()
-                {
-                    row.spawn((
-                        Text::new(format!("Building {task}")),
-                        theme.font_italic(10.0),
-                        TextColor(Color::srgb_u8(0x88, 0xcc, 0x88)),
-                    ));
-                }
-            }
-            if deployed && !civ.working {
-                row.spawn((
-                    Text::new("Idle"),
-                    theme.font_italic(10.0),
-                    TextColor(theme::TEXT_DIM),
-                ));
-            }
-        });
-}
-
 // ── Naval panel ──────────────────────────────────────────────────────────
 
 pub fn update_naval_panel(
@@ -1195,12 +964,8 @@ pub fn handle_panel_buttons(
     selections: (
         ResMut<SelectedUnits>,
         ResMut<SelectedShips>,
-        ResMut<SelectedCivilian>,
-        ResMut<SelectedHex>,
-        ResMut<SelectedNavy>,
-        ResMut<DeployMode>,
+        Res<SelectedNavy>,
     ),
-    mut cameras: Query<&mut Transform, With<GameCamera>>,
     buttons: (
         Query<(), With<SelectAllUnitsButton>>,
         Query<(), With<CancelSelectedMovesButton>>,
@@ -1210,7 +975,6 @@ pub fn handle_panel_buttons(
         Query<&UpgradeUnitButton>,
         Query<&ConfirmDismissButton>,
         Query<(), With<CancelModalButton>>,
-        Query<&CivilianRowButton>,
         Query<&RecallCivilianButton>,
         Query<(), With<SelectAllShipsButton>>,
         Query<&CancelFleetMoveButton>,
@@ -1225,19 +989,11 @@ pub fn handle_panel_buttons(
         upgrade_unit,
         confirm_dismiss,
         cancel_modal,
-        civilian_rows,
         recall_civilian,
         select_all_ships,
         cancel_fleet_move,
     ) = buttons;
-    let (
-        mut selected_units,
-        mut selected_ships,
-        mut selected_civilian,
-        mut selected_hex,
-        mut selected_navy,
-        mut deploy,
-    ) = selections;
+    let (mut selected_units, mut selected_ships, selected_navy) = selections;
     if meta.observer {
         return;
     }
@@ -1305,18 +1061,6 @@ pub fn handle_panel_buttons(
             widgets::close_top_modal(&mut commands, &mut modal_stack);
         } else if cancel_modal.contains(entity) {
             widgets::close_top_modal(&mut commands, &mut modal_stack);
-        } else if let Ok(civ) = civilian_rows.get(entity) {
-            handle_civilian_row(
-                civ,
-                &meta,
-                &vms,
-                &mut selected_civilian,
-                &mut selected_hex,
-                &mut selected_navy,
-                &mut selected_units,
-                &mut deploy,
-                &mut cameras,
-            );
         } else if let Ok(recall) = recall_civilian.get(entity) {
             game_commands.write(GameCommand::RecallCivilian {
                 civilian_id: recall.0 as u32,
@@ -1345,47 +1089,6 @@ pub fn handle_panel_buttons(
             game_commands.write(GameCommand::CancelFleetMove {
                 from_zone: cancel.0,
             });
-        }
-    }
-}
-
-/// Sidebar civilian row click (web `handleSelectCivilian`): undeployed or
-/// idle → deploy mode; busy → select + focus the camera on its tile.
-fn handle_civilian_row(
-    civ: &CivilianRowButton,
-    meta: &GameMeta,
-    vms: &ViewModels,
-    selected_civilian: &mut SelectedCivilian,
-    selected_hex: &mut SelectedHex,
-    selected_navy: &mut SelectedNavy,
-    selected_units: &mut SelectedUnits,
-    deploy: &mut DeployMode,
-    cameras: &mut Query<&mut Transform, With<GameCamera>>,
-) {
-    let Some(tiles) = vms.map.as_ref() else {
-        return;
-    };
-    match civ.position {
-        Some(pos) if civ.working => {
-            selected_civilian.0 = Some(civ.id);
-            selected_navy.0 = None;
-            selected_units.0.clear();
-            selected_hex.0 = Some(pos);
-            if let Ok(mut transform) = cameras.single_mut() {
-                let world = geometry::hex_to_world(pos.0, pos.1);
-                transform.translation.x = world.x;
-                transform.translation.y = world.y;
-            }
-        }
-        position => {
-            // Undeployed, or deployed-but-idle (recall happens on tile click).
-            deploy.0 = Some(selection::compute_deploy_state(
-                civ.id,
-                &civ.civ_type,
-                position,
-                tiles,
-                meta.player_nation,
-            ));
         }
     }
 }

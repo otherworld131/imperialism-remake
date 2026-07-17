@@ -343,6 +343,15 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
             .insert(nation.id, nation.economy.treasury);
     }
 
+    // Civilians (re)deployed last turn have now "settled in": clear the
+    // arrival flag before the AI phase so engineers parked a turn ago (by
+    // player or AI) may start builds this turn (card #495 placement delay).
+    for nation in &mut game.world.nations {
+        for civ in &mut nation.military.civilians {
+            civ.arrived_this_turn = false;
+        }
+    }
+
     // 0. Player-issued direct diplomacy actions resolve on end turn rather
     // than immediately. Apply them before AI decisions so the new quarter's
     // diplomacy state is coherent for the rest of turn processing.
@@ -505,6 +514,14 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     }
     finalize_cash_flow(game, &mut report);
     finalize_resource_flow(game, &mut report);
+
+    // Card #495: with no "undeployed" list in the UI, a civilian off the map
+    // would be unreachable. Park anything left undeployed (recalls, new
+    // hires, civilians displaced by conquest) around its nation's capital.
+    let nation_ids: Vec<NationId> = game.world.nations.iter().map(|n| n.id).collect();
+    for nid in nation_ids {
+        game.auto_place_undeployed_civilians(nid);
+    }
 
     // 12. Advance turn
     report
@@ -6390,6 +6407,56 @@ mod tests {
 
         assert_eq!(report.turn, TurnNumber::new(1)); // report reflects the turn that was processed
         assert_eq!(game.turn, TurnNumber::new(2)); // game has advanced
+    }
+
+    // ── Card #495: arrival delay + end-of-turn parking ───────────────
+
+    #[test]
+    fn process_turn_clears_civilian_arrival_flags() {
+        let mut game = test_game_state();
+        let nid = game.human_player_nation;
+        let mut civ = crate::economy::civilians::Civilian::new(
+            crate::map::UnitId(9001),
+            crate::economy::CivilianType::Engineer,
+            nid,
+        );
+        civ.deploy(HexCoord::new(1, 0));
+        assert!(civ.arrived_this_turn);
+        game.get_nation_mut(nid)
+            .unwrap()
+            .military
+            .civilians
+            .push(civ);
+
+        process_turn(&mut game);
+
+        let civ = &game.get_nation(nid).unwrap().military.civilians[0];
+        assert!(
+            !civ.arrived_this_turn,
+            "arrival flag must clear over the end turn"
+        );
+    }
+
+    #[test]
+    fn undeployed_civilians_are_parked_at_end_of_turn() {
+        let mut game = test_game_state();
+        let nid = game.human_player_nation;
+        game.get_nation_mut(nid).unwrap().military.civilians.push(
+            crate::economy::civilians::Civilian::new(
+                crate::map::UnitId(9002),
+                crate::economy::CivilianType::Farmer,
+                nid,
+            ),
+        );
+
+        process_turn(&mut game);
+
+        let civ = &game.get_nation(nid).unwrap().military.civilians[0];
+        assert!(
+            civ.position.is_some(),
+            "undeployed civilian must be parked near the capital over the end turn"
+        );
+        assert!(!civ.working);
     }
 
     #[test]

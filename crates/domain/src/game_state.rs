@@ -288,6 +288,121 @@ impl GameState {
         UnitId(id)
     }
 
+    /// Park every undeployed civilian of `nation_id` on a free owned land
+    /// tile near the capital, nearest ring first. Parked civilians are idle
+    /// (not working, no arrival delay) — they just become visible and
+    /// clickable on the map instead of sitting in an abstract capital pool.
+    ///
+    /// Tiles without a visible resource are preferred within each ring so
+    /// parked civilians don't squat on tiles they (or others) could work.
+    /// Civilians that find no spot within `MAX_PARK_RADIUS` stay undeployed.
+    pub fn auto_place_undeployed_civilians(&mut self, nation_id: NationId) {
+        const MAX_PARK_RADIUS: i32 = 12;
+
+        let Some(nation) = self.get_nation(nation_id) else {
+            return;
+        };
+        let undeployed: Vec<UnitId> = nation
+            .military
+            .civilians
+            .iter()
+            .filter(|c| c.position.is_none())
+            .map(|c| c.id)
+            .collect();
+        if undeployed.is_empty() {
+            return;
+        }
+        let Some(cap_tile) = self
+            .get_province(nation.capital_province_id)
+            .map(|p| p.capital_tile)
+        else {
+            return;
+        };
+        let owned: HashSet<crate::hex::HexCoord> = self
+            .world
+            .provinces
+            .iter()
+            .filter(|p| p.owner == nation_id)
+            .flat_map(|p| p.tiles.iter().copied())
+            .collect();
+        // Occupancy must consult civilian *positions* too: a civilian that
+        // finished working sits on its tile with `assigned_civilian` already
+        // cleared (the turn processor releases the slot on completion).
+        let occupied: HashSet<crate::hex::HexCoord> = self
+            .world
+            .nations
+            .iter()
+            .flat_map(|n| n.military.civilians.iter().filter_map(|c| c.position))
+            .collect();
+
+        let free = |game: &Self, coord: crate::hex::HexCoord, allow_resource: bool| -> bool {
+            if !owned.contains(&coord) || occupied.contains(&coord) {
+                return false;
+            }
+            let Some(tile) = game.world.hex_map.get_tile(coord) else {
+                return false;
+            };
+            tile.terrain().is_land()
+                && tile.assigned_civilian.is_none()
+                && (allow_resource || !tile.has_visible_resource())
+        };
+
+        let mut spots: Vec<crate::hex::HexCoord> = Vec::with_capacity(undeployed.len());
+        'rings: for radius in 1..=MAX_PARK_RADIUS {
+            // Two passes per ring: resource-free tiles first, then the rest.
+            for allow_resource in [false, true] {
+                for coord in cap_tile.ring(radius) {
+                    if spots.len() == undeployed.len() {
+                        break 'rings;
+                    }
+                    if spots.contains(&coord) || !free(self, coord, allow_resource) {
+                        continue;
+                    }
+                    spots.push(coord);
+                }
+            }
+        }
+
+        // Exhaustive fallback: with the sidebar gone an unparked civilian is
+        // unreachable, so if the rings around the capital are full, take the
+        // nearest free owned land tile anywhere (deterministic order).
+        if spots.len() < undeployed.len() {
+            let mut rest: Vec<crate::hex::HexCoord> = owned
+                .iter()
+                .copied()
+                .filter(|c| !spots.contains(c) && free(self, *c, true))
+                .collect();
+            rest.sort_by_key(|c| (cap_tile.distance(*c), c.q, c.r));
+            spots.extend(rest.into_iter().take(undeployed.len() - spots.len()));
+        }
+
+        // Last resort: no free tile at all — stack the remainder on the
+        // capital tile so every civilian stays visible and clickable (the
+        // map surfaces one per tile; redeploying it uncovers the next).
+        while spots.len() < undeployed.len() {
+            spots.push(cap_tile);
+        }
+
+        for (civ_id, coord) in undeployed.into_iter().zip(spots) {
+            if let Some(tile) = self.world.hex_map.get_tile_mut(coord)
+                && tile.assigned_civilian.is_none()
+            {
+                tile.assigned_civilian = Some(civ_id);
+            }
+            if let Some(nation) = self.get_nation_mut(nation_id)
+                && let Some(civ) = nation
+                    .military
+                    .civilians
+                    .iter_mut()
+                    .find(|c| c.id == civ_id)
+            {
+                // Direct position write, not `deploy()`: parking is done by
+                // the state, not the player, so no arrival delay applies.
+                civ.position = Some(coord);
+            }
+        }
+    }
+
     /// Draw the next deterministic RNG value and advance game RNG state.
     pub fn next_rng_u64(&mut self) -> u64 {
         let mut state = normalize_rng_state(self.rng_state);
@@ -1635,6 +1750,13 @@ fn new_game_inner(
         }
     }
 
+    // Card #495: park every nation's starting civilians on tiles around the
+    // capital so they are immediately visible and clickable on the map.
+    let nation_ids: Vec<NationId> = game_state.world.nations.iter().map(|n| n.id).collect();
+    for nid in nation_ids {
+        game_state.auto_place_undeployed_civilians(nid);
+    }
+
     game_state
 }
 
@@ -2773,6 +2895,179 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── Card #495: civilians auto-placed around the capital ─────────
+
+    #[test]
+    fn starting_civilians_are_parked_around_the_capital() {
+        let game = new_game("civ_autoplace", Difficulty::Normal, 0);
+        for nation in game.great_powers() {
+            let cap_tile = game
+                .get_province(nation.capital_province_id)
+                .unwrap()
+                .capital_tile;
+            assert!(
+                !nation.military.civilians.is_empty(),
+                "GP should start with civilians"
+            );
+            let mut seen = std::collections::HashSet::new();
+            for civ in &nation.military.civilians {
+                let pos = civ.position.unwrap_or_else(|| {
+                    panic!(
+                        "{:?} of {} should be parked",
+                        civ.civilian_type, nation.name
+                    )
+                });
+                assert!(seen.insert(pos), "two civilians parked on the same tile");
+                assert!(cap_tile.distance(pos) <= 12, "parked far from the capital");
+                assert!(!civ.working, "parked civilians must be idle");
+                assert!(
+                    !civ.arrived_this_turn,
+                    "initial parking must not trigger the arrival delay"
+                );
+                let tile = game.world.hex_map.get_tile(pos).unwrap();
+                assert_eq!(
+                    tile.assigned_civilian,
+                    Some(civ.id),
+                    "parked tile must record its occupant"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn auto_place_prefers_resource_free_tiles() {
+        let game = new_game("civ_autoplace_pref", Difficulty::Normal, 0);
+        let human = game.get_nation(game.human_player_nation).unwrap();
+        let cap_tile = game
+            .get_province(human.capital_province_id)
+            .unwrap()
+            .capital_tile;
+        // Ring-1 resource-free owned land tiles must all be occupied before
+        // any civilian sits on a ring-1 resource tile.
+        let owned: std::collections::HashSet<HexCoord> = game
+            .world
+            .provinces
+            .iter()
+            .filter(|p| p.owner == human.id)
+            .flat_map(|p| p.tiles.iter().copied())
+            .collect();
+        let parked: std::collections::HashSet<HexCoord> = human
+            .military
+            .civilians
+            .iter()
+            .filter_map(|c| c.position)
+            .collect();
+        let free_ring1_unused = cap_tile.ring(1).into_iter().any(|c| {
+            owned.contains(&c)
+                && !parked.contains(&c)
+                && game
+                    .world
+                    .hex_map
+                    .get_tile(c)
+                    .is_some_and(|t| t.terrain().is_land() && !t.has_visible_resource())
+        });
+        let used_resource_tile = human.military.civilians.iter().any(|c| {
+            c.position.is_some_and(|p| {
+                game.world
+                    .hex_map
+                    .get_tile(p)
+                    .is_some_and(|t| t.has_visible_resource())
+            })
+        });
+        assert!(
+            !(free_ring1_unused && used_resource_tile),
+            "a resource tile was used while a closer resource-free tile stayed empty"
+        );
+    }
+
+    #[test]
+    fn overflow_civilians_stack_on_the_capital_tile() {
+        // One-tile nation: more civilians than free tiles. Every civilian
+        // must still get a position (stacked on the capital) so none becomes
+        // unreachable now that the sidebar list is gone.
+        let mut game = sample_game_state();
+        let nid = NationId(1);
+        for i in 0..3u32 {
+            game.get_nation_mut(nid).unwrap().military.civilians.push(
+                crate::economy::civilians::Civilian::new(
+                    UnitId(7_000_000 + i),
+                    crate::economy::CivilianType::Farmer,
+                    nid,
+                ),
+            );
+        }
+        game.auto_place_undeployed_civilians(nid);
+        let nation = game.get_nation(nid).unwrap();
+        let cap_tile = game
+            .get_province(nation.capital_province_id)
+            .unwrap()
+            .capital_tile;
+        for civ in &nation.military.civilians {
+            assert!(
+                civ.position.is_some(),
+                "no civilian may be left without a position"
+            );
+        }
+        assert!(
+            nation
+                .military
+                .civilians
+                .iter()
+                .filter(|c| c.position == Some(cap_tile))
+                .count()
+                >= 2,
+            "overflow civilians should stack on the capital tile"
+        );
+    }
+
+    #[test]
+    fn auto_place_skips_tiles_occupied_by_idle_civilians() {
+        let mut game = new_game("civ_park_occupied", Difficulty::Normal, 0);
+        let nid = game.human_player_nation;
+        // Simulate post-completion state: every parked civilian's tile slot
+        // has been released, but the civilians still stand there.
+        let positions: Vec<HexCoord> = game
+            .get_nation(nid)
+            .unwrap()
+            .military
+            .civilians
+            .iter()
+            .filter_map(|c| c.position)
+            .collect();
+        assert!(!positions.is_empty());
+        for &pos in &positions {
+            game.world
+                .hex_map
+                .get_tile_mut(pos)
+                .unwrap()
+                .assigned_civilian = None;
+        }
+        // A new undeployed civilian arrives and gets parked.
+        let cid = game.alloc_unit_id();
+        game.get_nation_mut(nid).unwrap().military.civilians.push(
+            crate::economy::civilians::Civilian::new(
+                cid,
+                crate::economy::CivilianType::Farmer,
+                nid,
+            ),
+        );
+        game.auto_place_undeployed_civilians(nid);
+        let new_pos = game
+            .get_nation(nid)
+            .unwrap()
+            .military
+            .civilians
+            .iter()
+            .find(|c| c.id == cid)
+            .unwrap()
+            .position
+            .expect("new civilian must be parked");
+        assert!(
+            !positions.contains(&new_pos),
+            "parking must not reuse a tile an idle civilian still stands on"
+        );
     }
 
     #[test]

@@ -1832,6 +1832,9 @@ fn execute_infrastructure(
     }
 
     // Where is the engineer? Default to capital if undeployed.
+    let engineer_civ_id = game
+        .get_nation(nation_id)
+        .map(|n| n.military.civilians[engineer_idx].id);
     let engineer_pos = game
         .get_nation(nation_id)
         .and_then(|n| n.military.civilians[engineer_idx].position)
@@ -1888,18 +1891,28 @@ fn execute_infrastructure(
             continue;
         }
 
+        // "Unassigned" tolerates the engineer's own tile assignment — a
+        // parked engineer (card #495 move-then-build) must be able to build
+        // on the very hex it is standing on next turn, not step past it.
         let unbuilt_unassigned = |c: HexCoord| -> bool {
             game.world.hex_map.get_tile(c).is_some_and(|t| {
                 !t.infrastructure.has_railroad
                     && !t.infrastructure.has_depot
-                    && t.assigned_civilian.is_none()
+                    && (t.assigned_civilian.is_none() || t.assigned_civilian == engineer_civ_id)
             })
         };
         let build_coord = plan
             .path
             .iter()
             .copied()
-            .find(|c| engineer_pos.neighbors().contains(c) && unbuilt_unassigned(*c))
+            // Standing on an unbuilt path hex → build right here.
+            .find(|c| *c == engineer_pos && unbuilt_unassigned(*c))
+            .or_else(|| {
+                plan.path
+                    .iter()
+                    .copied()
+                    .find(|c| engineer_pos.neighbors().contains(c) && unbuilt_unassigned(*c))
+            })
             .or_else(|| plan.path.iter().copied().find(|c| unbuilt_unassigned(*c)));
 
         let attempt = match build_coord {
@@ -1949,8 +1962,10 @@ fn execute_infrastructure(
     }
 }
 
-/// Deploy the engineer to `coord` and begin `task`. Clears any prior tile
-/// assignment and sets `assigned_civilian` on the target tile.
+/// Deploy the engineer to `coord` and begin `task` — or, when the engineer
+/// still has to move there, just deploy it this turn (the build starts next
+/// turn, card #495). Clears any prior tile assignment and sets
+/// `assigned_civilian` on the target tile.
 fn start_engineer_task(
     game: &mut GameState,
     nation_id: NationId,
@@ -2001,11 +2016,20 @@ fn start_engineer_task(
         .hex_map
         .get_tile(coord)
         .and_then(|t| t.assigned_civilian);
-    let target_ok = game
-        .world
-        .hex_map
-        .get_tile(coord)
-        .is_some_and(|t| t.assigned_civilian.is_none() || t.assigned_civilian == Some(civ_id));
+    // Occupancy check consults civilian positions too: a civilian that
+    // finished working sits on its tile with `assigned_civilian` already
+    // released by the turn processor.
+    let position_occupied = game.world.nations.iter().any(|n| {
+        n.military
+            .civilians
+            .iter()
+            .any(|c| c.id != civ_id && c.position == Some(coord))
+    });
+    let target_ok =
+        !position_occupied
+            && game.world.hex_map.get_tile(coord).is_some_and(|t| {
+                t.assigned_civilian.is_none() || t.assigned_civilian == Some(civ_id)
+            });
     if !target_ok {
         if game.ai_debug {
             eprintln!(
@@ -2052,18 +2076,33 @@ fn start_engineer_task(
     if let Some(tile) = game.world.hex_map.get_tile_mut(coord) {
         tile.assigned_civilian = Some(civ_id);
     }
+    // Card #495: placement turn ≠ build turn. An engineer already standing on
+    // the target hex (moved there last turn) starts the build; one that still
+    // has to move only travels this turn — next turn's plan finds it in place
+    // (idle, arrival flag cleared) and starts the task then. This is the same
+    // rule the player is under via `engineer_build`.
+    let mut moved_only = false;
     if let Some(nation) = game.get_nation_mut(nation_id) {
         let civ = &mut nation.military.civilians[engineer_idx];
-        civ.deploy(coord);
-        civ.start_build(task, cfg);
+        if civ.position == Some(coord) && !civ.arrived_this_turn {
+            civ.start_build(task, cfg);
+        } else {
+            civ.deploy(coord);
+            moved_only = true;
+        }
     }
     if game.ai_debug {
         eprintln!(
-            "[AI:{}:infra] start_task {:?} at ({}, {}) success civ_id={} cost=${}",
+            "[AI:{}:infra] start_task {:?} at ({}, {}) {} civ_id={} cost=${}",
             nation_name,
             task,
             coord.q,
             coord.r,
+            if moved_only {
+                "moved engineer (build next turn)"
+            } else {
+                "success"
+            },
             civ_id.0,
             cost.as_dollars()
         );
@@ -2375,12 +2414,15 @@ fn execute_hire_improver(game: &mut GameState, nation_id: NationId) {
             None => return,
         };
 
-        let already_idle_unplaced = nation
+        // Card #495: hired civilians get auto-parked (position set) at end of
+        // turn, so "idle capacity" must be judged by work state, not by
+        // `position.is_none()` — else the AI re-buys the same type each turn.
+        let already_idle = nation
             .military
             .civilians
             .iter()
-            .any(|c| c.civilian_type == civ_type && c.position.is_none());
-        if already_idle_unplaced {
+            .any(|c| c.civilian_type == civ_type && !c.working && c.turns_remaining == 0);
+        if already_idle {
             return;
         }
         let cost = civ_type.creation_cost(&cfg);

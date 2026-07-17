@@ -136,6 +136,8 @@ pub struct Civilian {
     pub turns_remaining: u8,
     #[serde(default)]
     pub build_task: Option<BuildTask>,
+    #[serde(default)]
+    pub arrived_this_turn: bool,
 }
 
 // ── Ledger ────────────────────────────────────────────────────────
@@ -682,6 +684,7 @@ impl From<&d::civilians::Civilian> for Civilian {
             working: v.working,
             turns_remaining: v.turns_remaining,
             build_task: v.build_task.map(Into::into),
+            arrived_this_turn: v.arrived_this_turn,
         }
     }
 }
@@ -696,6 +699,7 @@ impl From<Civilian> for d::civilians::Civilian {
             working: v.working,
             turns_remaining: v.turns_remaining,
             build_task: v.build_task.map(Into::into),
+            arrived_this_turn: v.arrived_this_turn,
         }
     }
 }

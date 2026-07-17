@@ -138,7 +138,6 @@ pub fn setup_side_panel(
                 // M6 player-flow sections (banners, units, civilians, navy).
                 content.spawn((panel_section(), panels::BannerSection));
                 content.spawn((panel_section(), panels::UnitPanelSection));
-                content.spawn((panel_section(), panels::CivilianPanelSection));
                 content.spawn((panel_section(), panels::NavalPanelSection));
 
                 content

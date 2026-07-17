@@ -209,6 +209,10 @@ pub struct Civilian {
     /// Engineer-only: the build task that completes when this civilian finishes.
     /// `None` for non-engineer civilians and for engineers not currently building.
     pub build_task: Option<BuildTask>,
+    /// Set when the civilian was (re)deployed this turn; cleared by the turn
+    /// processor. Engineers that arrived this turn cannot start a build until
+    /// the next turn (placement turn ≠ build turn).
+    pub arrived_this_turn: bool,
 }
 
 impl Civilian {
@@ -222,12 +226,15 @@ impl Civilian {
             working: false,
             turns_remaining: 0,
             build_task: None,
+            arrived_this_turn: false,
         }
     }
 
-    /// Deploy this civilian to a hex coordinate on the map.
+    /// Deploy this civilian to a hex coordinate on the map. Marks it as
+    /// having arrived this turn (engineers must wait a turn before building).
     pub fn deploy(&mut self, coord: HexCoord) {
         self.position = Some(coord);
+        self.arrived_this_turn = true;
     }
 
     /// Begin working on an improvement that takes `turns` turns to complete.
@@ -551,6 +558,14 @@ mod tests {
     fn tick_when_not_working_returns_false() {
         let mut c = Civilian::new(UnitId(1), CivilianType::Farmer, NationId(0));
         assert!(!c.tick());
+    }
+
+    #[test]
+    fn deploy_sets_arrival_flag() {
+        let mut c = Civilian::new(UnitId(1), CivilianType::Engineer, NationId(0));
+        assert!(!c.arrived_this_turn);
+        c.deploy(HexCoord::new(2, 3));
+        assert!(c.arrived_this_turn);
     }
 
     #[test]

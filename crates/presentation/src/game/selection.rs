@@ -8,6 +8,9 @@
 //! commands it emits mutate pending state resolved at end turn.
 
 use bevy::prelude::*;
+use bevy::ui::FocusPolicy;
+use bevy::ui::UiScale;
+use bevy::window::PrimaryWindow;
 use std::collections::HashSet;
 
 use crate::game::commands::GameCommand;
@@ -17,20 +20,21 @@ use crate::game::resources::{
     SelectedShips, SelectedUnits, SessionRes, TileIndex, ViewModels,
 };
 use crate::game::vm::{self, MapTile};
+use crate::map::icons::IconAssets;
 use crate::map::navy;
-use crate::map::picking::{HoverTarget, MapClick, SelectedHex};
+use crate::map::picking::{HoverTarget, MapClick, PickingBlocker, SelectedHex};
 use crate::screens::diplomacy::{can_target_nation, invalid_target_reason};
 use crate::state::Screen;
 use crate::theme::{self, Theme};
-use crate::widgets::{self, ButtonProps, ModalProps, ModalStack, Toast};
+use crate::widgets::{self, ButtonProps, ModalStack, Toast, TooltipText};
 
 /// Terrains a prospector can search (web `PROSPECTOR_TERRAIN`).
 const PROSPECTOR_TERRAIN: [&str; 5] = ["Hills", "Mountain", "Swamp", "Desert", "Tundra"];
 
-/// Buttons inside the engineer build-choice modal. `Some(kind)` starts the
-/// build chain; `None` cancels the prompt (deploy mode stays active).
+/// Buttons inside the engineer build popover: the build kind this icon
+/// orders ("railroad" | "depot" | "port").
 #[derive(Component, Clone, Copy)]
-pub struct EngineerChoiceButton(pub Option<&'static str>);
+pub struct EngineerChoiceButton(pub &'static str);
 
 // ── Deploy-mode entry (web handleDeployCivilian) ─────────────────────────
 
@@ -104,8 +108,12 @@ pub fn handle_map_click(
     mut diplo: ResMut<DiploUi>,
     mut toasts: MessageWriter<Toast>,
     mut commands: Commands,
-    mut modal_stack: ResMut<ModalStack>,
     mut game_commands: MessageWriter<GameCommand>,
+    popover_ui: (
+        Query<&Window, With<PrimaryWindow>>,
+        Res<UiScale>,
+        Option<Res<IconAssets>>,
+    ),
     selections: (
         ResMut<SelectedHex>,
         ResMut<SelectedNavy>,
@@ -115,6 +123,7 @@ pub fn handle_map_click(
         ResMut<EngineerPrompt>,
     ),
 ) {
+    let (windows, ui_scale, icons) = popover_ui;
     let (
         mut selected_hex,
         mut selected_navy,
@@ -124,6 +133,12 @@ pub fn handle_map_click(
         mut prompt,
     ) = selections;
     for MapClick(target) in clicks.read() {
+        // Any map click closes an open engineer build popover (choosing a
+        // build icon is a UI click and never reaches here). Deploy mode is
+        // left alone: clicking a highlighted tile below still redeploys.
+        if let Some(state) = prompt.0.take() {
+            commands.entity(state.root).despawn();
+        }
         let tile = match target {
             HoverTarget::Hex(q, r) => {
                 let Some(tiles) = vms.map.as_ref() else {
@@ -242,61 +257,9 @@ pub fn handle_map_click(
             if !state.deployable.contains(&(tile.q, tile.r)) {
                 continue;
             }
-            if state.civ_type == "Engineer" {
-                // Popup: what should the engineer build on that tile?
-                let handles = widgets::open_modal(
-                    &mut commands,
-                    &mut modal_stack,
-                    &theme,
-                    ModalProps {
-                        title: format!("Engineer at ({}, {})", tile.q, tile.r),
-                        width: Val::Px(340.0),
-                    },
-                );
-                let q = tile.q;
-                let r = tile.r;
-                let civilian_id = state.civilian_id;
-                let redeploy = state.redeploy_from.is_some();
-                commands.entity(handles.content).with_children(|content| {
-                    content.spawn((
-                        Text::new("What should this engineer build?"),
-                        theme.font(13.0),
-                        TextColor(theme::TEXT),
-                    ));
-                    content
-                        .spawn(Node {
-                            flex_direction: FlexDirection::Row,
-                            column_gap: Val::Px(8.0),
-                            ..default()
-                        })
-                        .with_children(|row| {
-                            for (label, kind) in [
-                                ("Railroad", "railroad"),
-                                ("Depot", "depot"),
-                                ("Port", "port"),
-                            ] {
-                                let button =
-                                    widgets::spawn_button(row, &theme, ButtonProps::label(label));
-                                row.commands()
-                                    .entity(button)
-                                    .insert(EngineerChoiceButton(Some(kind)));
-                            }
-                            let cancel =
-                                widgets::spawn_button(row, &theme, ButtonProps::label("Cancel"));
-                            row.commands()
-                                .entity(cancel)
-                                .insert(EngineerChoiceButton(None));
-                        });
-                });
-                prompt.0 = Some(EngineerPromptState {
-                    civilian_id,
-                    redeploy,
-                    q,
-                    r,
-                    modal: handles.root,
-                });
-                continue;
-            }
+            // Engineers deploy like everyone else (card #495): placement is
+            // this turn's action; the build popover appears when the parked
+            // engineer is clicked next turn.
             game_commands.write(GameCommand::DeployCivilian {
                 civilian_id: state.civilian_id as u32,
                 q: tile.q,
@@ -345,6 +308,36 @@ pub fn handle_map_click(
                         meta.player_nation,
                     ));
                 }
+                // Card #495: an idle engineer also offers its build menu — a
+                // compact icon popover next to the click. Redeploy highlights
+                // stay active behind it.
+                if civ.civ_type == "Engineer"
+                    && let Some(session) = session.0.as_ref()
+                    && let Ok(options) = frontend_api::units::get_engineer_build_options(
+                        session.game(),
+                        civ.id as u32,
+                    )
+                {
+                    if options
+                        .get("can_build_now")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                    {
+                        open_engineer_popover(
+                            &mut commands,
+                            &theme,
+                            icons.as_deref(),
+                            &options,
+                            popover_anchor(&windows, &ui_scale),
+                            civ.id,
+                            &mut prompt,
+                        );
+                    } else if let Some(reason) =
+                        options.get("blocked_reason").and_then(|v| v.as_str())
+                    {
+                        toasts.write(Toast::info(format!("Engineer: {}", reason)));
+                    }
+                }
                 continue;
             }
             selected_civilian.0 = Some(civ.id);
@@ -373,15 +366,155 @@ pub fn handle_map_click(
     }
 }
 
-// ── Engineer prompt plumbing ─────────────────────────────────────────────
+// ── Engineer build popover (card #495) ───────────────────────────────────
 
-/// Engineer modal buttons: a build kind fires the recall→deploy→build chain;
-/// Cancel just dismisses the popup (deploy mode stays active, web parity).
+/// Where the popover opens: just beside the cursor, clamped to the window
+/// (in UI coordinates, i.e. divided by the global [`UiScale`]).
+fn popover_anchor(windows: &Query<&Window, With<PrimaryWindow>>, ui_scale: &UiScale) -> Vec2 {
+    let Ok(window) = windows.single() else {
+        return Vec2::new(40.0, 40.0);
+    };
+    let scale = ui_scale.0.max(0.01);
+    let cursor = window.cursor_position().unwrap_or_default() / scale;
+    let bounds = Vec2::new(window.width(), window.height()) / scale;
+    // Keep the strip (~200×64 UI px) fully on screen.
+    (cursor + Vec2::new(14.0, 10.0)).min((bounds - Vec2::new(210.0, 80.0)).max(Vec2::ZERO))
+}
+
+/// Spawn the compact build strip: one icon button per build kind with the
+/// cost beside it — no labels (ticket #495), tooltips carry the words.
+/// Disallowed kinds render dimmed with the reason as tooltip so the strip
+/// teaches the prerequisites (depot needs rail, port needs coast).
+fn open_engineer_popover(
+    commands: &mut Commands,
+    theme: &Theme,
+    icons: Option<&IconAssets>,
+    options: &serde_json::Value,
+    anchor: Vec2,
+    civilian_id: i64,
+    prompt: &mut EngineerPrompt,
+) {
+    let empty = Vec::new();
+    let opts = options
+        .get("options")
+        .and_then(|v| v.as_array())
+        .unwrap_or(&empty);
+
+    let root = commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(anchor.x),
+                top: Val::Px(anchor.y),
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(6.0),
+                padding: UiRect::all(Val::Px(7.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(5.0)),
+                ..default()
+            },
+            BackgroundColor(theme::PANEL_BG_SOLID),
+            BorderColor::all(theme::GOLD),
+            GlobalZIndex(180),
+            FocusPolicy::Block,
+            Interaction::default(),
+            PickingBlocker,
+        ))
+        .id();
+
+    commands.entity(root).with_children(|row| {
+        for opt in opts {
+            let kind = opt.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+            let (kind_static, icon_name) = match kind {
+                "railroad" => ("railroad", "Railroad"),
+                "depot" => ("depot", "Depot"),
+                "port" => ("port", "Port"),
+                _ => continue,
+            };
+            let allowed = opt
+                .get("allowed")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let affordable = opt
+                .get("affordable")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let cost = opt.get("cost").and_then(|v| v.as_i64());
+            let reason = opt.get("reason").and_then(|v| v.as_str());
+            let enabled = allowed && affordable;
+
+            let tooltip = if let Some(reason) = reason {
+                format!("{}: {}", icon_name, reason)
+            } else if !affordable {
+                format!(
+                    "{} — ${} (insufficient funds)",
+                    icon_name,
+                    cost.unwrap_or(0)
+                )
+            } else {
+                format!("Build {} — ${}", icon_name, cost.unwrap_or(0))
+            };
+
+            let button = widgets::spawn_button(
+                row,
+                theme,
+                ButtonProps {
+                    label: String::new(),
+                    enabled,
+                    ..default()
+                },
+            );
+            row.commands()
+                .entity(button)
+                .insert((EngineerChoiceButton(kind_static), TooltipText(tooltip)))
+                .with_children(|content| {
+                    if let Some(image) = icons.and_then(|i| i.get("infrastructure", icon_name)) {
+                        let mut icon = ImageNode::new(image);
+                        if !enabled {
+                            icon.color = Color::srgba(1.0, 1.0, 1.0, 0.35);
+                        }
+                        content.spawn((
+                            Node {
+                                width: Val::Px(22.0),
+                                height: Val::Px(22.0),
+                                flex_shrink: 0.0,
+                                ..default()
+                            },
+                            icon,
+                            bevy::picking::Pickable::IGNORE,
+                        ));
+                    }
+                    if let Some(cost) = cost {
+                        content.spawn((
+                            Text::new(format!("${}", cost)),
+                            theme.font_bold(11.0),
+                            TextColor(if !allowed {
+                                theme::TEXT_DIM
+                            } else if !affordable {
+                                theme::ALARM
+                            } else {
+                                theme::GOLD
+                            }),
+                            Node {
+                                margin: UiRect::left(Val::Px(4.0)),
+                                ..default()
+                            },
+                            bevy::picking::Pickable::IGNORE,
+                        ));
+                    }
+                });
+        }
+    });
+
+    prompt.0 = Some(EngineerPromptState { civilian_id, root });
+}
+
+/// Popover buttons: an icon click orders the build on the engineer's hex.
 pub fn handle_engineer_choice(
     mut activations: MessageReader<widgets::ButtonActivated>,
     buttons: Query<&EngineerChoiceButton>,
     mut prompt: ResMut<EngineerPrompt>,
-    mut modal_stack: ResMut<ModalStack>,
     mut commands: Commands,
     mut game_commands: MessageWriter<GameCommand>,
 ) {
@@ -392,24 +525,18 @@ pub fn handle_engineer_choice(
         let Some(state) = prompt.0.take() else {
             continue;
         };
-        if let Some(kind) = choice.0 {
-            game_commands.write(GameCommand::EngineerBuild {
-                civilian_id: state.civilian_id as u32,
-                q: state.q,
-                r: state.r,
-                kind,
-                recall_first: state.redeploy,
-            });
-        }
-        widgets::close_top_modal(&mut commands, &mut modal_stack);
+        game_commands.write(GameCommand::EngineerBuild {
+            civilian_id: state.civilian_id as u32,
+            kind: choice.0,
+        });
+        commands.entity(state.root).despawn();
     }
 }
 
-/// Clear the prompt state when its modal was closed by other means
-/// (Esc / the ✕ button) — equivalent to choosing Cancel.
+/// Clear the prompt state when its popover node was despawned by other means.
 pub fn sync_engineer_prompt(mut prompt: ResMut<EngineerPrompt>, nodes: Query<(), With<Node>>) {
     if let Some(state) = prompt.0.as_ref()
-        && !nodes.contains(state.modal)
+        && !nodes.contains(state.root)
     {
         prompt.0 = None;
     }
@@ -417,11 +544,10 @@ pub fn sync_engineer_prompt(mut prompt: ResMut<EngineerPrompt>, nodes: Query<(),
 
 // ── Esc cascade ──────────────────────────────────────────────────────────
 
-/// Esc cancels, in order: engineer popup (handled by the modal stack) →
-/// armed diplomacy action → deploy mode → unit selection → navy selection →
-/// tile selection → back to the map screen (from Transport / Diplomacy) →
-/// quit. The full-screen overlays gate this system off;
-/// `map_hud::screen_hotkeys` owns Esc there.
+/// Esc cancels, in order: armed diplomacy action → engineer build popover →
+/// deploy mode → unit selection → navy selection → tile selection → back to
+/// the map screen (from Transport / Diplomacy) → quit. The full-screen
+/// overlays gate this system off; `map_hud::screen_hotkeys` owns Esc there.
 pub fn esc_cascade(
     keys: Res<ButtonInput<KeyCode>>,
     modals: Res<ModalStack>,
@@ -434,10 +560,11 @@ pub fn esc_cascade(
     mut selected_navy: ResMut<SelectedNavy>,
     mut selected_hex: ResMut<SelectedHex>,
     mut selected_civilian: ResMut<SelectedCivilian>,
+    mut prompt: ResMut<EngineerPrompt>,
+    mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
 ) {
-    // Modals own Esc (the engineer popup pops first); focused text inputs
-    // own the keyboard.
+    // Modals own Esc; focused text inputs own the keyboard.
     if !keys.just_pressed(KeyCode::Escape) || !modals.is_empty() || focus.0.is_some() {
         return;
     }
@@ -450,6 +577,9 @@ pub fn esc_cascade(
         diplo.show_grant_picker = false;
         diplo.show_break_picker = false;
         diplo.confirm_war = false;
+    } else if let Some(state) = prompt.0.take() {
+        // Engineer build popover closes first; redeploy mode stays armed.
+        commands.entity(state.root).despawn();
     } else if deploy.0.is_some() {
         deploy.0 = None;
     } else if !selected_units.0.is_empty() {

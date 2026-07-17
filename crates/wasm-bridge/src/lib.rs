@@ -292,6 +292,13 @@ pub fn wasm_get_civilians(game_json: &str, nation_id: u32) -> String {
 }
 
 #[wasm_bindgen]
+pub fn wasm_get_engineer_build_options(game_json: &str, civilian_id: u32) -> String {
+    run_query(game_json, |g| {
+        frontend_api::units::get_engineer_build_options(g, civilian_id)
+    })
+}
+
+#[wasm_bindgen]
 pub fn wasm_get_ships(game_json: &str, nation_id: u32) -> String {
     run_query(game_json, |g| frontend_api::units::get_ships(g, nation_id))
 }
