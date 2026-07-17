@@ -237,19 +237,18 @@ pub struct DeployState {
     pub prospected: HashSet<(i32, i32)>,
 }
 
-/// Engineer build-choice popup state (Railroad / Depot / Port), opened when
-/// an engineer deploy tile is clicked. The modal entity lets Esc / ✕ cancel
-/// the prompt without leaving deploy mode (web parity).
+/// Engineer build popover state (card #495): a compact icon strip
+/// (Railroad / Depot / Port + costs) anchored near the click, opened when a
+/// deployed idle engineer is clicked on the map. Esc or any map click
+/// dismisses it; redeploy highlights stay active alongside it.
 #[derive(Resource, Default)]
 pub struct EngineerPrompt(pub Option<EngineerPromptState>);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EngineerPromptState {
     pub civilian_id: i64,
-    pub redeploy: bool,
-    pub q: i32,
-    pub r: i32,
-    pub modal: Entity,
+    /// Popover root node; despawning it closes the popover.
+    pub root: Entity,
 }
 
 /// Checked warships in the naval panel (scoped to the selected fleet).

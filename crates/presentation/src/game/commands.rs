@@ -64,14 +64,12 @@ pub enum GameCommand {
     RecallCivilian {
         civilian_id: u32,
     },
-    /// Engineer deploy chain: (recall →) deploy → start build task.
+    /// Order a deployed engineer to build on the hex it stands on (card
+    /// #495: the engineer was placed on an earlier turn).
     EngineerBuild {
         civilian_id: u32,
-        q: i32,
-        r: i32,
         /// "railroad" | "depot" | "port".
         kind: &'static str,
-        recall_first: bool,
     },
     MoveFleet {
         from_zone: u32,
@@ -432,34 +430,14 @@ pub fn apply_command(
                 }
             }
 
-            GameCommand::EngineerBuild {
-                civilian_id,
-                q,
-                r,
-                kind,
-                recall_first,
-            } => {
-                if *recall_first
-                    && let Err(err) = frontend_api::units::recall_civilian(game, *civilian_id)
-                {
-                    toasts.write(Toast::error(format!("Recall failed: {}", err.message())));
-                    continue;
-                }
-                bump = *recall_first;
-                match frontend_api::units::deploy_civilian(game, *civilian_id, *q, *r) {
+            GameCommand::EngineerBuild { civilian_id, kind } => {
+                match frontend_api::units::engineer_build(game, *civilian_id, kind) {
                     Ok(()) => {
                         bump = true;
                         deploy.0 = None;
-                        // The deploy stands even when the build order fails
-                        // (web parity: finalJson falls back to deployCmd).
-                        if let Err(err) =
-                            frontend_api::units::engineer_build(game, *civilian_id, kind)
-                        {
-                            toasts.write(Toast::error(format!("Build failed: {}", err.message())));
-                        }
                     }
                     Err(err) => {
-                        toasts.write(Toast::error(format!("Deploy failed: {}", err.message())));
+                        toasts.write(Toast::error(format!("Build failed: {}", err.message())));
                     }
                 }
             }

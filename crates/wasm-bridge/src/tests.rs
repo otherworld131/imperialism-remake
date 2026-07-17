@@ -2670,3 +2670,121 @@ fn chain_target_zero_suppresses_production_on_next_turn() {
         "target=0 should suppress all timber mill output, got {lumber_zero}"
     );
 }
+
+// ── Card #495: engineer placement delay + tile occupancy ─────────────
+
+/// Find the human player's parked engineer and a fresh grassland tile it
+/// can be redeployed to (owned, land, no rail, unoccupied).
+fn engineer_and_redeploy_target(
+    game: &domain::game_state::GameState,
+) -> (u32, domain::hex::HexCoord) {
+    let nid = game.human_player_nation;
+    let nation = game.get_nation(nid).unwrap();
+    let engineer = nation
+        .military
+        .civilians
+        .iter()
+        .find(|c| c.civilian_type == domain::economy::CivilianType::Engineer)
+        .expect("human starts with an engineer");
+    let occupied: std::collections::HashSet<domain::hex::HexCoord> = game
+        .world
+        .nations
+        .iter()
+        .flat_map(|n| n.military.civilians.iter().filter_map(|c| c.position))
+        .collect();
+    let target = game
+        .world
+        .provinces
+        .iter()
+        .filter(|p| p.owner == nid)
+        .flat_map(|p| p.tiles.iter().copied())
+        .find(|&c| {
+            !occupied.contains(&c)
+                && game.world.hex_map.get_tile(c).is_some_and(|t| {
+                    t.terrain() == TerrainType::Grassland
+                        && !t.infrastructure.has_railroad
+                        && t.assigned_civilian.is_none()
+                        && !t.is_capital
+                })
+        })
+        .expect("an owned unoccupied grassland tile exists");
+    (engineer.id.0, target)
+}
+
+#[test]
+fn engineer_build_waits_a_turn_after_placement() {
+    let mut game = new_game("default", Difficulty::Normal, 0);
+    let (eng_id, target) = engineer_and_redeploy_target(&game);
+
+    frontend_api::units::recall_civilian(&mut game, eng_id).expect("recall");
+    frontend_api::units::deploy_civilian(&mut game, eng_id, target.q, target.r).expect("deploy");
+
+    // Same turn: the build must be rejected (placement turn ≠ build turn).
+    let err = frontend_api::units::engineer_build(&mut game, eng_id, "railroad")
+        .expect_err("build on the placement turn must fail");
+    assert!(
+        err.message().contains("arrives this turn"),
+        "unexpected error: {}",
+        err.message()
+    );
+
+    // Next turn: the arrival flag cleared and the build goes through.
+    process_turn(&mut game);
+    // Simulate the slot release a completed previous build performs, so the
+    // build order also re-claims the tile (F-002 regression).
+    if let Some(tile) = game.world.hex_map.get_tile_mut(target) {
+        tile.assigned_civilian = None;
+    }
+    frontend_api::units::engineer_build(&mut game, eng_id, "railroad").expect("build next turn");
+
+    let nid = game.human_player_nation;
+    let civ = game
+        .get_nation(nid)
+        .unwrap()
+        .military
+        .civilians
+        .iter()
+        .find(|c| c.id.0 == eng_id)
+        .unwrap();
+    assert!(civ.working, "engineer should be building");
+    assert_eq!(
+        game.world
+            .hex_map
+            .get_tile(target)
+            .unwrap()
+            .assigned_civilian,
+        Some(domain::map::UnitId(eng_id)),
+        "starting a build must re-claim the tile slot"
+    );
+}
+
+#[test]
+fn deploy_rejected_on_tile_with_idle_civilian() {
+    let mut game = new_game("default", Difficulty::Normal, 0);
+    let nid = game.human_player_nation;
+    // Two parked civilians; free the first one's tile slot (as build/improve
+    // completion does) and try to deploy the second onto it.
+    let (first_id, first_pos, second_id) = {
+        let nation = game.get_nation(nid).unwrap();
+        let mut parked = nation
+            .military
+            .civilians
+            .iter()
+            .filter(|c| c.position.is_some());
+        let a = parked.next().expect("first parked civilian");
+        let b = parked.next().expect("second parked civilian");
+        (a.id.0, a.position.unwrap(), b.id.0)
+    };
+    if let Some(tile) = game.world.hex_map.get_tile_mut(first_pos) {
+        tile.assigned_civilian = None;
+    }
+    frontend_api::units::recall_civilian(&mut game, second_id).expect("recall");
+    let err = frontend_api::units::deploy_civilian(&mut game, second_id, first_pos.q, first_pos.r)
+        .expect_err("deploying onto an occupied tile must fail");
+    assert!(
+        err.message().contains("civilian"),
+        "unexpected error: {}",
+        err.message()
+    );
+    let _ = first_id;
+}

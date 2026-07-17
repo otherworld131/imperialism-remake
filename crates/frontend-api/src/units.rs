@@ -797,6 +797,19 @@ pub fn deploy_civilian(
             "{\"error\":\"tile already has a civilian assigned\"}",
         ));
     }
+    // A civilian that finished working sits on its tile with the slot
+    // already released — occupancy must consult positions too.
+    let tile_occupied = game.world.nations.iter().any(|n| {
+        n.military
+            .civilians
+            .iter()
+            .any(|c| c.id != cid && c.position == Some(coord))
+    });
+    if tile_occupied {
+        return Err(ApiError::raw(
+            "{\"error\":\"tile already has a civilian on it\"}",
+        ));
+    }
 
     let terrain = tile.terrain();
     // F-017: Only use visible resources for can_improve check.
@@ -896,9 +909,94 @@ pub fn recall_civilian(game: &mut GameState, civilian_id: u32) -> Result<(), Api
 
 // ── Command: Engineer Build (railroad / depot / port) ────────────────
 
+/// Validate one engineer build task on `pos`. Returns the task cost on
+/// success or a short human-readable reason (used directly as UI tooltip
+/// text) when the task is not allowed there. Affordability is NOT checked
+/// here — callers decide how to surface it.
+fn check_engineer_task(
+    game: &GameState,
+    nation_id: NationId,
+    pos: HexCoord,
+    task: domain::economy::BuildTask,
+) -> Result<Money, String> {
+    use domain::economy::BuildTask;
+
+    let tile = match game.world.hex_map.get_tile(pos) {
+        Some(t) => t,
+        None => return Err("tile not found".into()),
+    };
+    let owns_tile = tile
+        .province_id
+        .and_then(|pid| game.get_province(pid))
+        .is_some_and(|p| p.owner == nation_id);
+    if !owns_tile {
+        return Err("tile not owned by player".into());
+    }
+    if !tile.terrain().is_land() {
+        return Err("cannot build on sea".into());
+    }
+    let cfg = &game.game_data.game_config;
+    match task {
+        BuildTask::Railroad => {
+            if tile.infrastructure.has_railroad {
+                return Err("railroad already exists".into());
+            }
+            // Tech pre-flight: some terrains require a researched tech.
+            let researched = match game.get_nation(nation_id) {
+                Some(n) => &n.researched_techs,
+                None => return Err("nation not found".into()),
+            };
+            if !domain::map::infrastructure::rail_terrain_enabled(
+                tile.terrain(),
+                researched,
+                &game.game_data,
+                cfg,
+            ) {
+                let tech = domain::map::infrastructure::railroad_required_tech(tile.terrain(), cfg)
+                    .unwrap_or("?");
+                return Err(format!(
+                    "railroad on {:?} requires tech: {}",
+                    tile.terrain(),
+                    tech
+                ));
+            }
+            match domain::map::infrastructure::railroad_cost(tile.terrain(), cfg) {
+                Some(c) => Ok(c),
+                None => Err("cannot build railroad on this terrain".into()),
+            }
+        }
+        BuildTask::Depot => {
+            if tile.infrastructure.has_depot {
+                return Err("depot already exists".into());
+            }
+            if !tile.infrastructure.has_railroad {
+                return Err("depot requires a railroad on the tile".into());
+            }
+            Ok(Money::dollars(cfg.depot_cost))
+        }
+        BuildTask::Port => {
+            if tile.infrastructure.has_port {
+                return Err("port already exists".into());
+            }
+            let is_coastal = pos.neighbors().iter().any(|n| {
+                game.world
+                    .hex_map
+                    .get_tile(*n)
+                    .is_some_and(|t| !t.terrain().is_land())
+            });
+            if !is_coastal {
+                return Err("port requires a coastal tile".into());
+            }
+            Ok(Money::dollars(cfg.port_cost))
+        }
+    }
+}
+
 /// Order a deployed Engineer civilian to start a build task on its current hex.
-/// The engineer must already be deployed (via `deploy_civilian`) on an
-/// owned hex. `build_kind` is one of "railroad", "depot", "port".
+/// The engineer must already be deployed (via `deploy_civilian`) on an owned
+/// hex — and must have been there since last turn (card #495: placement turn
+/// and build turn are distinct). `build_kind` is one of "railroad", "depot",
+/// "port".
 pub fn engineer_build(
     game: &mut GameState,
     civilian_id: u32,
@@ -917,7 +1015,7 @@ pub fn engineer_build(
     };
 
     // Look up the engineer, its position, and the target tile's state.
-    let (position, working) = {
+    let (position, working, arrived) = {
         let nation = match game.get_nation(human_nid) {
             Some(n) => n,
             None => return Err(ApiError::raw("{\"error\":\"nation not found\"}")),
@@ -929,7 +1027,7 @@ pub fn engineer_build(
         if civ.civilian_type != domain::economy::CivilianType::Engineer {
             return Err(ApiError::raw("{\"error\":\"civilian is not an engineer\"}"));
         }
-        (civ.position, civ.working)
+        (civ.position, civ.working, civ.arrived_this_turn)
     };
 
     let pos = match position {
@@ -939,102 +1037,19 @@ pub fn engineer_build(
     if working {
         return Err(ApiError::raw("{\"error\":\"engineer is already working\"}"));
     }
+    if arrived {
+        return Err(ApiError::raw(
+            "{\"error\":\"engineer arrives this turn; builds can start next turn\"}",
+        ));
+    }
 
-    // Validate tile ownership + prerequisites (depot needs railroad or capital,
-    // port needs coastal tile). Railroad only needs ownership + land.
-    let tile = match game.world.hex_map.get_tile(pos) {
-        Some(t) => t,
-        None => return Err(ApiError::raw("{\"error\":\"tile not found\"}")),
+    let task_cost = match check_engineer_task(game, human_nid, pos, task) {
+        Ok(c) => c,
+        Err(reason) => return Err(ApiError::msg(reason)),
     };
-    let owns_tile = tile
-        .province_id
-        .and_then(|pid| game.get_province(pid))
-        .is_some_and(|p| p.owner == human_nid);
-    if !owns_tile {
-        return Err(ApiError::raw("{\"error\":\"tile not owned by player\"}"));
-    }
-    match task {
-        BuildTask::Railroad => {
-            if !tile.terrain().is_land() {
-                return Err(ApiError::raw(
-                    "{\"error\":\"cannot build railroad on sea\"}",
-                ));
-            }
-            if tile.infrastructure.has_railroad {
-                return Err(ApiError::raw("{\"error\":\"railroad already exists\"}"));
-            }
-            // Tech pre-flight: some terrains require a researched tech.
-            let cfg_for_tech = &game.game_data.game_config;
-            let researched = &game.get_nation(human_nid).unwrap().researched_techs;
-            if !domain::map::infrastructure::rail_terrain_enabled(
-                tile.terrain(),
-                researched,
-                &game.game_data,
-                cfg_for_tech,
-            ) {
-                let tech = domain::map::infrastructure::railroad_required_tech(
-                    tile.terrain(),
-                    cfg_for_tech,
-                )
-                .unwrap_or("?");
-                return Err(ApiError::msg(format!(
-                    "railroad on {:?} requires tech: {}",
-                    tile.terrain(),
-                    tech
-                )));
-            }
-        }
-        BuildTask::Depot => {
-            if !tile.terrain().is_land() {
-                return Err(ApiError::raw("{\"error\":\"cannot build depot on sea\"}"));
-            }
-            if tile.infrastructure.has_depot {
-                return Err(ApiError::raw("{\"error\":\"depot already exists\"}"));
-            }
-            if !tile.infrastructure.has_railroad {
-                return Err(ApiError::raw(
-                    "{\"error\":\"depot requires a railroad on the tile\"}",
-                ));
-            }
-        }
-        BuildTask::Port => {
-            if !tile.terrain().is_land() {
-                return Err(ApiError::raw("{\"error\":\"cannot build port on sea\"}"));
-            }
-            if tile.infrastructure.has_port {
-                return Err(ApiError::raw("{\"error\":\"port already exists\"}"));
-            }
-            let is_coastal = pos.neighbors().iter().any(|n| {
-                game.world
-                    .hex_map
-                    .get_tile(*n)
-                    .is_some_and(|t| !t.terrain().is_land())
-            });
-            if !is_coastal {
-                return Err(ApiError::raw(
-                    "{\"error\":\"port requires a coastal tile\"}",
-                ));
-            }
-        }
-    }
 
     // Affordability gate — treasury is debited on completion, so reject orders
     // the nation cannot pay for up front (matches CLI/AI contract).
-    let cfg = game.game_data.game_config.clone();
-    let task_cost = match task {
-        BuildTask::Railroad => {
-            match domain::map::infrastructure::railroad_cost(tile.terrain(), &cfg) {
-                Some(c) => c,
-                None => {
-                    return Err(ApiError::raw(
-                        "{\"error\":\"cannot build railroad on this terrain\"}",
-                    ));
-                }
-            }
-        }
-        BuildTask::Depot => Money::dollars(cfg.depot_cost),
-        BuildTask::Port => Money::dollars(cfg.port_cost),
-    };
     let nation_treasury = game
         .get_nation(human_nid)
         .map(|n| n.economy.treasury)
@@ -1043,7 +1058,13 @@ pub fn engineer_build(
         return Err(ApiError::raw("{\"error\":\"insufficient funds\"}"));
     }
 
-    // Issue the build order.
+    // Issue the build order. Re-claim the tile slot too: completion of a
+    // previous build released `assigned_civilian` while the engineer stayed
+    // parked, and deploys/auto-parking key off that field.
+    let cfg = game.game_data.game_config.clone();
+    if let Some(tile_mut) = game.world.hex_map.get_tile_mut(pos) {
+        tile_mut.assigned_civilian = Some(cid);
+    }
     let nation = match game.get_nation_mut(human_nid) {
         Some(n) => n,
         None => return Err(ApiError::raw("{\"error\":\"nation not found\"}")),
@@ -1052,6 +1073,98 @@ pub fn engineer_build(
         civ.start_build(task, &cfg);
     }
     Ok(())
+}
+
+// ── Query: Engineer build options (for the build popover) ────────────
+
+/// What a deployed engineer may build on its current hex, with costs —
+/// drives the compact build popover in both frontends (card #495).
+///
+/// Shape:
+/// ```json
+/// {
+///   "civilian_id": 42,
+///   "deployed": true,
+///   "can_build_now": false,
+///   "blocked_reason": "arrives this turn — can build next turn",
+///   "options": [
+///     {"kind": "railroad", "allowed": true, "cost": 100, "affordable": true, "reason": null},
+///     ...
+///   ]
+/// }
+/// ```
+pub fn get_engineer_build_options(
+    game: &GameState,
+    civilian_id: u32,
+) -> Result<serde_json::Value, ApiError> {
+    use domain::economy::BuildTask;
+
+    let cid = domain::map::UnitId(civilian_id);
+    let human_nid = game.human_player_nation;
+
+    let nation = match game.get_nation(human_nid) {
+        Some(n) => n,
+        None => return Err(ApiError::raw("{\"error\":\"nation not found\"}")),
+    };
+    let civ = match nation.military.civilians.iter().find(|c| c.id == cid) {
+        Some(c) => c,
+        None => return Err(ApiError::raw("{\"error\":\"civilian not found\"}")),
+    };
+    if civ.civilian_type != domain::economy::CivilianType::Engineer {
+        return Err(ApiError::raw("{\"error\":\"civilian is not an engineer\"}"));
+    }
+    let treasury = nation.economy.treasury;
+
+    let (can_build_now, blocked_reason) = if civ.position.is_none() {
+        (false, Some("engineer is not deployed"))
+    } else if civ.working {
+        (false, Some("already working"))
+    } else if civ.arrived_this_turn {
+        (false, Some("arrives this turn — can build next turn"))
+    } else {
+        (true, None)
+    };
+
+    let options: Vec<serde_json::Value> = [
+        ("railroad", BuildTask::Railroad),
+        ("depot", BuildTask::Depot),
+        ("port", BuildTask::Port),
+    ]
+    .into_iter()
+    .map(|(kind, task)| match civ.position {
+        Some(pos) => match check_engineer_task(game, human_nid, pos, task) {
+            Ok(cost) => serde_json::json!({
+                "kind": kind,
+                "allowed": true,
+                "cost": cost.as_dollars(),
+                "affordable": treasury.checked_sub(cost).is_some(),
+                "reason": serde_json::Value::Null,
+            }),
+            Err(reason) => serde_json::json!({
+                "kind": kind,
+                "allowed": false,
+                "cost": serde_json::Value::Null,
+                "affordable": false,
+                "reason": reason,
+            }),
+        },
+        None => serde_json::json!({
+            "kind": kind,
+            "allowed": false,
+            "cost": serde_json::Value::Null,
+            "affordable": false,
+            "reason": "engineer is not deployed",
+        }),
+    })
+    .collect();
+
+    Ok(serde_json::json!({
+        "civilian_id": civilian_id,
+        "deployed": civ.position.is_some(),
+        "can_build_now": can_build_now,
+        "blocked_reason": blocked_reason,
+        "options": options,
+    }))
 }
 
 // ── Command: Recruit Army Unit ───────────────────────────────────────

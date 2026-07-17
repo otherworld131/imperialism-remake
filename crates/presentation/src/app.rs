@@ -182,16 +182,20 @@ fn m6_debug_driver(
         && *frames == 30
         && let Some(civs) = vms.civilians.as_ref()
     {
+        // Card #495: civilians start parked on the map, so the script picks
+        // an idle deployed one (redeploy flow) — undeployed is the fallback.
         let pick = civs
-            .undeployed
+            .deployed
             .iter()
+            .filter(|c| !c.working)
             .find(|c| arg.is_none_or(|w| c.civ_type == w))
+            .or_else(|| civs.deployed.iter().find(|c| !c.working))
             .or_else(|| civs.undeployed.first());
         if let Some(civ) = pick {
             deploy.0 = Some(selection::compute_deploy_state(
                 civ.id,
                 &civ.civ_type,
-                None,
+                civ.position.as_ref().map(|p| (p.q, p.r)),
                 tiles,
                 meta.player_nation,
             ));
@@ -1646,7 +1650,6 @@ pub fn run_game() {
                 side_panel::update_nations,
                 panels::update_banners,
                 panels::update_unit_panel,
-                panels::update_civilian_panel,
                 panels::update_naval_panel,
             )
                 .run_if(in_state(AppState::InGame)),

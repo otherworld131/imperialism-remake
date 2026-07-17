@@ -6,8 +6,9 @@ import {
   getDiplomacyOverlay, getMilitaryOverlay,
   getUnitsInProvince, getCivilians, getShips, getValidMoveTargets, getBuildableUnits,
   queueUnitMove, cancelUnitMove, disbandUnit, deployCivilian, recallCivilian, engineerBuild,
+  getEngineerBuildOptions,
   moveFleet, cancelFleetMove,
-  type EngineerBuildKind,
+  type EngineerBuildKind, type EngineerBuildOptions,
   setPendingShips, setAutoTradeWithMinors, setPendingArmyRecruit,
   upgradeUnit, upgradeUnits,
   // New screen queries
@@ -60,7 +61,6 @@ function isFullScreen(screen: ScreenTab): boolean {
 import HexMap, { navyMarkerKey } from './components/HexMap';
 import GameSetup, { type GameStartParams } from './components/GameSetup';
 import UnitPanel from './components/UnitPanel';
-import CivilianPanel from './components/CivilianPanel';
 import NavalPanel from './components/NavalPanel';
 import TransportPanel from './components/TransportPanel';
 import IndustryPanel from './components/IndustryPanel';
@@ -485,7 +485,9 @@ function App() {
   const [deployableTiles, setDeployableTiles] = useState<Set<string>>(new Set());
   const [prospectedTiles, setProspectedTiles] = useState<Set<string>>(new Set());
   const [selectedCivilianId, setSelectedCivilianId] = useState<number | null>(null);
-  const [pendingEngineerDeploy, setPendingEngineerDeploy] = useState<{ civ: CivilianDetail; q: number; r: number } | null>(null);
+  // Card #495: compact build popover for a clicked idle engineer, anchored
+  // to its tile on the map.
+  const [engineerPopover, setEngineerPopover] = useState<{ civId: number; q: number; r: number; options: EngineerBuildOptions } | null>(null);
   const [wasmError, setWasmError] = useState<string | null>(null);
 
   // New screen state
@@ -1215,7 +1217,7 @@ function App() {
         else if (queuedDiplomacyAction) { setQueuedDiplomacyAction(null); }
         else if (selectedUnitIds.length > 0) { setSelectedUnitIds([]); }
         else if (selectedNavyKey) { setSelectedNavyKey(null); }
-        else if (pendingEngineerDeploy) { setPendingEngineerDeploy(null); }
+        else if (engineerPopover) { setEngineerPopover(null); }
         else if (isDeployMode) { setIsDeployMode(false); setDeployingCivilian(null); setDeployableTiles(new Set()); setProspectedTiles(new Set()); }
         else if (showProposals) setShowProposals(false);
         else if (activeScreen === 'newspaper') dismissNewspaper();
@@ -1234,7 +1236,7 @@ function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeScreen, showProposals, savePickerContext, handleEndTurn, dismissNewspaper, selectedUnitIds, isDeployMode, pendingEngineerDeploy, queuedDiplomacyAction, selectedNavyKey]);
+  }, [activeScreen, showProposals, savePickerContext, handleEndTurn, dismissNewspaper, selectedUnitIds, isDeployMode, engineerPopover, queuedDiplomacyAction, selectedNavyKey]);
 
   // Fetch overlay data when map mode, active screen, or selected nation changes
   useEffect(() => {
@@ -1330,6 +1332,9 @@ function App() {
   const handleDeployCivilianRef = useRef<(civ: CivilianDetail) => void>(() => {});
 
   const handleTileClick = useCallback(async (tile: TileData) => {
+    // Any map click closes an open engineer build popover (a click on the
+    // engineer itself reopens it below).
+    setEngineerPopover(null);
     // Queued diplomacy action: fire the action against the clicked nation.
     if (queuedDiplomacyAction && activeScreen === 'diplomacy') {
       const targetNationId = tile.nation_id;
@@ -1421,12 +1426,6 @@ function App() {
       const tileKey = `${tile.q},${tile.r}`;
       if (!deployableTiles.has(tileKey)) return; // Ignore click on invalid tile, keep mode active
 
-      if (deployingCivilian.type === 'Engineer') {
-        // Show popup to choose what to build before deploying
-        setPendingEngineerDeploy({ civ: deployingCivilian, q: tile.q, r: tile.r });
-        return;
-      }
-
       await runMutation(async () => {
         let currentJson = gameJson;
         // If the civilian was deployed (idle redeploy), recall from current position first
@@ -1466,6 +1465,16 @@ function App() {
           position: { q: tile.q, r: tile.r },
         };
         handleDeployCivilianRef.current(civ);
+        // Card #495: an idle engineer also offers its build menu — a compact
+        // icon popover anchored to its tile. Redeploy highlights stay active.
+        if (cot.type === 'Engineer') {
+          const opts = await getEngineerBuildOptions(gameJson, cot.id);
+          if (opts?.can_build_now) {
+            setEngineerPopover({ civId: cot.id, q: tile.q, r: tile.r, options: opts });
+          } else if (opts?.blocked_reason) {
+            showError(`Engineer: ${opts.blocked_reason}`);
+          }
+        }
         return;
       }
       setSelectedCivilianId(cot.id);
@@ -1739,86 +1748,6 @@ function App() {
       else if (cmd.error) showError(`Engineer build failed: ${cmd.error}`);
     });
   }, [gameJson, applyGameJson, showError, runMutation]);
-
-  // Handle engineer action choice after clicking a deploy tile
-  const handleEngineerDeployChoice = useCallback(async (kind: EngineerBuildKind | null) => {
-    if (!pendingEngineerDeploy) return;
-    const { civ, q, r } = pendingEngineerDeploy;
-    setPendingEngineerDeploy(null);
-    if (kind === null) return; // cancelled
-
-    await runMutation(async () => {
-      if (isObserver) return;
-      let currentJson = gameJson;
-      // If the engineer was deployed (idle redeploy), recall first
-      if (civ.position !== null) {
-        const recallCmd = await recallCivilian(currentJson, civ.id);
-        if (recallCmd.ok && recallCmd.gameJson) {
-          currentJson = recallCmd.gameJson;
-        } else {
-          showError(`Recall failed: ${recallCmd.error ?? 'Unknown error'}`);
-          return;
-        }
-      }
-      const deployCmd = await deployCivilian(currentJson, civ.id, q, r);
-      if (!deployCmd.ok || !deployCmd.gameJson) {
-        showError(`Deploy failed: ${deployCmd.error ?? 'Unknown error'}`);
-        return;
-      }
-      const buildCmd = await engineerBuild(deployCmd.gameJson, civ.id, kind);
-      const finalJson = buildCmd.ok && buildCmd.gameJson ? buildCmd.gameJson : deployCmd.gameJson;
-      if (await applyGameJson(finalJson)) {
-        setIsDeployMode(false);
-        setDeployingCivilian(null);
-        setDeployableTiles(new Set());
-        setProspectedTiles(new Set());
-      }
-      if (buildCmd.error) showError(`Build failed: ${buildCmd.error}`);
-    });
-  }, [pendingEngineerDeploy, gameJson, applyGameJson, showError, runMutation, isObserver]);
-
-  // Selecting a civilian from the sidebar:
-  //   - undeployed → enter deploy mode
-  //   - deployed + idle (working=false) → enter deploy mode immediately; recall happens on tile click
-  //   - deployed + busy → navigate to map and select
-  const handleSelectCivilian = useCallback(async (civ: CivilianDetail) => {
-    if (isObserver) return;
-    if (civ.position) {
-      if (!civ.working) {
-        // Idle deployed civilian: enter deploy mode right away; tile click will recall+redeploy
-        setActiveScreen('map');
-        handleDeployCivilian(civ);
-      } else {
-        // Busy deployed civilian: navigate to map, select tile
-        setActiveScreen('map');
-        setSelectedCivilianId(civ.id);
-        setSelectedNavyKey(null);
-        setSelectedUnitIds([]);
-        const civTile = tiles.find(t => t.q === civ.position!.q && t.r === civ.position!.r);
-        if (civTile) {
-          setSelectedTile(civTile);
-          if (civTile.is_capital && civTile.province_id != null) {
-            setProvinceUnits(await getUnitsInProvince(gameJson, civTile.province_id));
-          } else {
-            setProvinceUnits(null);
-          }
-        } else {
-          setProvinceUnits(null);
-        }
-        const HEX_SIZE = 18;
-        const SQRT3 = Math.sqrt(3);
-        const px = HEX_SIZE * (SQRT3 * civ.position.q + SQRT3 / 2 * civ.position.r);
-        const py = HEX_SIZE * (3 / 2 * civ.position.r);
-        const mapWidth = window.innerWidth - 300;
-        const mapHeight = window.innerHeight;
-        setMapOffset({ x: mapWidth / 2 - px * mapScale, y: mapHeight / 2 - py * mapScale });
-      }
-    } else {
-      // Undeployed: enter deploy mode and switch to map
-      setActiveScreen('map');
-      handleDeployCivilian(civ);
-    }
-  }, [isObserver, mapScale, tiles, gameJson, handleDeployCivilian]);
 
   const handleSetPendingCivilianHire = useCallback(async (civType: string, count: number) => {
     await runMutation(async () => {
@@ -2303,6 +2232,59 @@ function App() {
         {/* Map — always mounted, hidden behind full-screen views to preserve zoom/pan */}
         <div style={{ ...styles.mapContainer, display: isFullScreen(activeScreen) ? 'none' : 'flex', flexDirection: 'column' }}>
           <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
+            {/* Card #495: engineer build popover — icon + cost per build kind,
+                anchored to the engineer's tile. Disallowed kinds are dimmed
+                with the reason as tooltip. */}
+            {engineerPopover && (() => {
+              const HEX_SIZE = 18;
+              const SQRT3 = Math.sqrt(3);
+              const px = HEX_SIZE * (SQRT3 * engineerPopover.q + SQRT3 / 2 * engineerPopover.r) * mapScale + mapOffset.x;
+              const py = HEX_SIZE * (3 / 2 * engineerPopover.r) * mapScale + mapOffset.y;
+              const KIND_EMOJI: Record<EngineerBuildKind, string> = { railroad: '\u{1F6E4}\uFE0F', depot: '\u{1F3EC}', port: '\u2693' };
+              return (
+                <div style={{ position: 'absolute', left: px + 22, top: py - 14, zIndex: 30, background: '#1a1a2e', border: '1px solid #daa520', borderRadius: 6, padding: 6, display: 'flex', gap: 6 }}>
+                  {engineerPopover.options.options.map(o => {
+                    const enabled = o.allowed && o.affordable;
+                    const title = o.reason
+                      ? `${o.kind}: ${o.reason}`
+                      : !o.affordable
+                        ? `${o.kind} — $${o.cost} (insufficient funds)`
+                        : `Build ${o.kind} — $${o.cost}`;
+                    return (
+                      <button
+                        key={o.kind}
+                        disabled={!enabled}
+                        title={title}
+                        onClick={async () => {
+                          const civId = engineerPopover.civId;
+                          setEngineerPopover(null);
+                          setIsDeployMode(false);
+                          setDeployingCivilian(null);
+                          setDeployableTiles(new Set());
+                          setProspectedTiles(new Set());
+                          await handleEngineerBuild(civId, o.kind);
+                        }}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 4,
+                          background: enabled ? '#2a2a3e' : '#20202e',
+                          border: `1px solid ${enabled ? '#daa520' : '#333'}`,
+                          borderRadius: 4, padding: '4px 7px', fontSize: 15,
+                          cursor: enabled ? 'pointer' : 'default',
+                          opacity: enabled ? 1 : 0.45,
+                        }}
+                      >
+                        <span>{KIND_EMOJI[o.kind]}</span>
+                        {o.cost != null && (
+                          <span style={{ fontSize: 11, fontWeight: 'bold', color: !o.allowed ? '#888' : o.affordable ? '#daa520' : '#e64444' }}>
+                            ${o.cost}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })()}
             <HexMap
               tiles={tiles}
               mapMode={mapMode}
@@ -2662,31 +2644,14 @@ function App() {
                   <b>Movement Mode</b> — {selectedUnitIds.length > 1 ? `moving ${selectedUnitIds.length} units` : 'moving 1 unit'} — click a highlighted province, or press Escape to cancel.
                 </div>
               )}
-              {isDeployMode && deployingCivilian && !pendingEngineerDeploy && (
+              {isDeployMode && deployingCivilian && (
                 <div style={{ background: 'rgba(46,204,64,0.15)', border: '1px solid rgba(46,204,64,0.4)', borderRadius: 4, padding: 8, marginBottom: 8, fontSize: 'var(--ui-font-size, 14px)' }}>
-                  <b>Deploy {deployingCivilian.type}</b> — click a highlighted tile, or press Escape to cancel.
+                  <b>{deployingCivilian.type === 'Engineer' ? 'Engineer' : `Deploy ${deployingCivilian.type}`}</b>
+                  {deployingCivilian.type === 'Engineer'
+                    ? ' — pick a build, or click a highlighted tile to move. Escape to cancel.'
+                    : ' — click a highlighted tile, or press Escape to cancel.'}
                 </div>
               )}
-              {pendingEngineerDeploy && (
-                <div style={{ background: 'rgba(46,100,200,0.2)', border: '1px solid rgba(46,100,200,0.5)', borderRadius: 4, padding: 10, marginBottom: 8, fontSize: 'var(--ui-font-size, 14px)' }}>
-                  <div style={{ fontWeight: 'bold', marginBottom: 6 }}>
-                    🔧 Engineer at ({pendingEngineerDeploy.q},{pendingEngineerDeploy.r}) — what to build?
-                  </div>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' as const }}>
-                    {(['railroad', 'depot', 'port'] as const).map(kind => (
-                      <button key={kind} onClick={() => handleEngineerDeployChoice(kind)}
-                        style={{ background: '#364', color: '#fff', border: 'none', borderRadius: 3, padding: '3px 10px', fontSize: 11, cursor: 'pointer' }}>
-                        {kind.charAt(0).toUpperCase() + kind.slice(1)}
-                      </button>
-                    ))}
-                    <button onClick={() => handleEngineerDeployChoice(null)}
-                      style={{ background: '#555', color: '#ddd', border: 'none', borderRadius: 3, padding: '3px 10px', fontSize: 11, cursor: 'pointer' }}>
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              )}
-
               {/* Unit Panel — shown when a capital with units is selected */}
               {provinceUnits && (
                 <div style={{ borderTop: '1px solid #3a3520', paddingTop: 8, marginTop: 6 }}>
@@ -2703,17 +2668,6 @@ function App() {
                     onUpgradeUnit={handleUpgradeUnit}
                     onUpgradeSelected={handleUpgradeSelected}
                     showHealDebug={showHealDebug}
-                  />
-                </div>
-              )}
-
-              {/* Civilian Panel — shown for player when any player tile selected */}
-              {civilians && isPlayerProvince && (
-                <div style={{ borderTop: '1px solid #3a3520', paddingTop: 8, marginTop: 6 }}>
-                  <CivilianPanel
-                    civilians={civilians}
-                    selectedCivilianId={selectedCivilianId}
-                    onSelectCivilian={handleSelectCivilian}
                   />
                 </div>
               )}

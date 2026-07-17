@@ -961,6 +961,31 @@ export async function engineerBuild(gameJson: string, civilianId: number, kind: 
   return runCmd('wasm_engineer_build', gameJson, civilianId, kind);
 }
 
+// Card #495: what a deployed engineer may build on its hex (drives the
+// compact build popover). `can_build_now` is false while the engineer is
+// working or arrived this turn (placement turn != build turn).
+export interface EngineerBuildOption {
+  kind: EngineerBuildKind;
+  allowed: boolean;
+  cost: number | null;
+  affordable: boolean;
+  reason: string | null;
+}
+
+export interface EngineerBuildOptions {
+  civilian_id: number;
+  deployed: boolean;
+  can_build_now: boolean;
+  blocked_reason: string | null;
+  options: EngineerBuildOption[];
+}
+
+export async function getEngineerBuildOptions(gameJson: string, civilianId: number): Promise<EngineerBuildOptions | null> {
+  const parsed = JSON.parse(await call<string>('wasm_get_engineer_build_options', gameJson, civilianId));
+  if (parsed.error) return null;
+  return parsed;
+}
+
 export async function recruitArmyUnit(gameJson: string, nationId: number, unitType: string): Promise<CommandResult> {
   return runCmd('wasm_recruit_army_unit', gameJson, nationId, unitType);
 }
