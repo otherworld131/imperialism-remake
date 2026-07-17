@@ -138,7 +138,7 @@ on a tile the map marker plays the three images ping-pong
 | Grant | `crates/presentation/assets/icons/diplomacy/Grant.png` | Tied money sack with gold coin |
 | BreakTreaty | `crates/presentation/assets/icons/diplomacy/BreakTreaty.png` | Document torn in two, wax seal |
 
-## ui/ (8)
+## ui/ (13)
 
 | Name | Output | Pictogram |
 |------|--------|-----------|
@@ -150,6 +150,11 @@ on a tile the map marker plays the three images ping-pong
 | Science | `crates/presentation/assets/icons/ui/Science.png` | Erlenmeyer flask with teal liquid |
 | News | `crates/presentation/assets/icons/ui/News.png` | Folded newspaper with masthead |
 | Tent | `crates/presentation/assets/icons/ui/Tent.png` | Canvas A-frame tent with red pennant (army encampment marker, 1–4 per capital) |
+| Factory | `crates/presentation/assets/icons/ui/Factory.png` | Brick hall with sawtooth roof and smoking chimney (Industry Production card tab) |
+| Warehouse | `crates/presentation/assets/icons/ui/Warehouse.png` | Three stacked X-braced crates (Industry Warehouse card tab) |
+| WorkerUntrained | `crates/presentation/assets/icons/ui/WorkerUntrained.png` | Bare-headed labourer bust, denim shirt (labor tier) |
+| WorkerTrained | `crates/presentation/assets/icons/ui/WorkerTrained.png` | Flat-capped worker bust, navy shirt (labor tier) |
+| WorkerExpert | `crates/presentation/assets/icons/ui/WorkerExpert.png` | Top-hatted foreman bust, gold pin (labor tier) |
 
 ## terrain/ (7)
 

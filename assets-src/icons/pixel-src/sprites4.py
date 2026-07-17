@@ -461,6 +461,100 @@ def science():
     return c
 
 
+def worker_untrained():
+    c = Canvas()
+    # bare-headed labourer bust: scruffy hair, plain denim shirt
+    c.rect(7, 21, 24, 29, "denim")
+    c.hline(7, 24, 21, "denim_lt")
+    c.rect(11, 8, 20, 20, "skin")
+    c.rect(11, 6, 20, 9, "wood_sh")
+    c.px(10, 8, "wood_sh"); c.px(21, 8, "wood_sh")
+    c.px(13, 13, "outline"); c.px(18, 13, "outline")
+    c.hline(14, 17, 17, "skin_sh")
+    c.outline_silhouette()
+    return c
+
+
+def worker_trained():
+    c = Canvas()
+    # flat-capped worker bust, navy work shirt
+    c.rect(7, 21, 24, 29, "navy")
+    c.hline(7, 24, 21, "navy_lt")
+    c.rect(11, 10, 20, 20, "skin")
+    c.rect(10, 7, 21, 10, "denim")
+    c.hline(9, 23, 10, "denim_lt")
+    c.px(13, 14, "outline"); c.px(18, 14, "outline")
+    c.hline(14, 17, 18, "skin_sh")
+    c.outline_silhouette()
+    return c
+
+
+def worker_expert():
+    c = Canvas()
+    # top-hatted foreman bust, dark suit with gold pin
+    c.rect(7, 21, 24, 29, "coal")
+    c.hline(7, 24, 21, "coal_lt")
+    c.px(16, 24, "gold")
+    c.rect(11, 12, 20, 20, "skin")
+    c.rect(11, 2, 20, 11, "coal")
+    c.hline(11, 20, 9, "gold")
+    c.hline(8, 23, 11, "coal_lt")
+    c.px(13, 15, "outline"); c.px(18, 15, "outline")
+    c.hline(14, 17, 19, "skin_sh")
+    c.outline_silhouette()
+    return c
+
+
+def factory():
+    c = Canvas()
+    # smoke puffs drifting off the chimney
+    c.px(25, 2, "snow_sh"); c.px(27, 3, "snow_sh"); c.px(24, 4, "snow_sh")
+    # sawtooth roof: three teeth slanting up-right, vertical drop
+    for x0 in (3, 10, 17):
+        for i in range(7):
+            c.vline(x0 + i, 14 - i, 14, "navy")
+            c.px(x0 + i, 14 - i, "navy_lt")
+    # chimney in front of the rightmost tooth
+    c.rect(23, 5, 26, 14, "red_dk"); c.vline(23, 5, 14, "red")
+    c.hline(22, 27, 5, "coal")
+    # brick hall
+    c.rect(3, 15, 28, 26, "red_dk")
+    c.rect(3, 15, 4, 26, "red")
+    c.hline(3, 28, 15, "red")
+    # lit windows + door
+    for x in (7, 13, 24):
+        c.rect(x, 18, x + 2, 21, "gold")
+        c.px(x, 18, "gold_lt")
+    c.rect(18, 20, 21, 26, "coal")
+    c.vline(19, 20, 26, "coal_lt")
+    # ground
+    c.hline(2, 29, 27, "grey_dk")
+    c.outline_silhouette()
+    return c
+
+
+def warehouse():
+    c = Canvas()
+
+    def crate(x0, y0, x1, y1):
+        c.rect(x0, y0, x1, y1, "wood")
+        c.frame(x0, y0, x1, y1, "wood_sh")
+        c.hline(x0, x1, y0, "wood_lt"); c.vline(x0, y0, y1, "wood_lt")
+        # X brace
+        span = x1 - x0
+        for i in range(span + 1):
+            y = y0 + round(i * (y1 - y0) / span)
+            c.px(x0 + i, y, "wood_sh")
+            c.px(x1 - i, y, "wood_sh")
+
+    crate(4, 17, 15, 28)
+    crate(17, 17, 28, 28)
+    crate(10, 5, 21, 16)
+    c.hline(2, 29, 29, "grey_dk")
+    c.outline_silhouette()
+    return c
+
+
 def news():
     c = Canvas()
     # folded paper: top fold face + front face
@@ -506,4 +600,9 @@ BATCH4 = [
     ("ui/Science", science),
     ("ui/News", news),
     ("ui/Tent", tent),
+    ("ui/Factory", factory),
+    ("ui/Warehouse", warehouse),
+    ("ui/WorkerUntrained", worker_untrained),
+    ("ui/WorkerTrained", worker_trained),
+    ("ui/WorkerExpert", worker_expert),
 ]

@@ -227,9 +227,11 @@ fn m6_debug_driver(
 
 /// Debug driver for the M7 screens: `M7_DEBUG=<script>` switches screens and
 /// replays interactions so `MAP_SCREENSHOT` captures live state.
-/// Scripts: `industry`, `industrydrag`, `industryarms`, `transport`,
-/// `transportfill`, `trade`, `tradebuy`, `tradehist`, `trademarket`,
-/// `queue`, `queuetrade`, `queueendturn`.
+/// Scripts: `industry`, `industrydrag`, `industryarms`, `industryworkforce`,
+/// `industrywarehouse`, `industryrecruit`, `transport`, `transportfill`,
+/// `trade`, `tradebuy`, `tradehist`, `trademarket`, `queue`, `queuetrade`,
+/// `queueendturn`.
+#[allow(clippy::too_many_arguments)]
 fn m7_debug_driver(
     mut frames: Local<u32>,
     phase: Res<State<TurnPhase>>,
@@ -239,6 +241,7 @@ fn m7_debug_driver(
     buy_buttons: Query<Entity, With<trade::TradeBuyButton>>,
     autofill_buttons: Query<Entity, With<transport::AutoFillButton>>,
     mut tab_groups: Query<&mut TabGroup>,
+    mut industry_ui: ResMut<industry::IndustryUi>,
     mut chain_sliders: Query<(
         &widgets::UiSlider,
         &mut widgets::UiSliderDrag,
@@ -268,7 +271,16 @@ fn m7_debug_driver(
 
     if *frames == 20 {
         match script.as_str() {
-            "industry" | "industrydrag" => next_screen.set(Screen::Industry),
+            "industry" | "industrydrag" | "industryworkforce" | "industrywarehouse"
+            | "industryrecruit" => {
+                industry_ui.active_card = match script.as_str() {
+                    "industryworkforce" => industry::IndustryCard::Workforce,
+                    "industrywarehouse" => industry::IndustryCard::Warehouse,
+                    "industryrecruit" => industry::IndustryCard::Recruit,
+                    _ => industry::IndustryCard::Production,
+                };
+                next_screen.set(Screen::Industry);
+            }
             "transport" | "transportfill" => next_screen.set(Screen::Transport),
             "trade" | "tradebuy" | "tradehist" | "trademarket" => next_screen.set(Screen::Trade),
             "queue" | "queuetrade" | "queueendturn" => {
@@ -1542,6 +1554,7 @@ pub fn run_game() {
                 map_hud::handle_screen_tabs,
                 map_hud::screen_hotkeys.before(widgets::modal::esc_pops_top_modal),
                 map_hud::update_screen_tabs,
+                industry::industry_card_hotkeys.run_if(in_state(Screen::Industry)),
                 industry::update_industry,
                 transport::update_transport,
                 (trade::update_trade_static, trade::update_trade_tables).chain(),
