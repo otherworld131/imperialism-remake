@@ -32,6 +32,13 @@ pub const REACT_SCALE: f32 = HEX_SIZE / 18.0;
 /// ground and motif pixels are the same size on screen.
 pub const GROUND_TEX_WORLD: f32 = HEX_SIZE * 1.5;
 
+/// Rail-link quad width in world units. Half a hex keeps the 64x64 track
+/// texture's texels square (V maps 32 art texels across this width).
+pub const RAIL_TRACK_WIDTH: f32 = HEX_SIZE * 0.5;
+/// World-units per repeat of the track texture along a rail quad (64 art
+/// texels at the same texel density as `RAIL_TRACK_WIDTH`).
+pub const RAIL_TRACK_U_PERIOD: f32 = HEX_SIZE;
+
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub enum MapMode {
     Terrain,
@@ -471,6 +478,39 @@ pub fn rebuild_layers(
         }
     };
 
+    // Variant spawner for meshes carrying their own (mesh-local) UVs — the
+    // rail track/node textures. Unlike `spawn_mesh` it must NOT rewrite the
+    // UVs to world space nor phase-shift per wrap copy: the UVs are baked
+    // along each segment, identical in every copy, so one shared material
+    // suffices.
+    let spawn_mesh_local_uv = |commands: &mut Commands,
+                               meshes: &mut Assets<Mesh>,
+                               materials: &mut Assets<ColorMaterial>,
+                               mesh: Mesh,
+                               color: Color,
+                               texture: Handle<Image>,
+                               z: f32,
+                               gate: Option<LodGate>| {
+        let mesh = meshes.add(mesh);
+        let material = materials.add(ColorMaterial {
+            color,
+            texture: Some(texture),
+            ..default()
+        });
+        for &(root, _) in &roots {
+            let mut entity = commands.spawn((
+                Mesh2d(mesh.clone()),
+                MeshMaterial2d(material.clone()),
+                Transform::from_xyz(0.0, 0.0, z),
+                StaticLayer,
+                ChildOf(root),
+            ));
+            if let Some(gate) = gate {
+                entity.insert(gate);
+            }
+        }
+    };
+
     let fill_map = nation_fill_map(*mode, &vms);
 
     // ── Pass 1: tile fills, grouped per (ground texture, color) ─────────
@@ -838,35 +878,76 @@ pub fn rebuild_layers(
     }
 
     // ── Pass 3b: rail links (terrain mode, transport toggle) ────────────
-    // Phase 1 placeholder: untextured brown center-to-center segments per rail
-    // edge. Each edge is emitted on both endpoints as opposite direction
-    // indices; drawing only dirs {0,1,2} (the opposite is (i+3)%6 ∈ {3,4,5})
-    // gives a free dedup so each physical link is drawn exactly once.
+    // Each physical link is a textured quad from hex center to hex center
+    // (hand-drawn seamless track texture, arc-length UVs), with a ballast
+    // node pad under every railhead hex to hide the butt joints where quads
+    // meet. Edges appear on both endpoints as opposite direction indices;
+    // drawing only dirs {0,1,2} (the opposite is (i+3)%6 ∈ {3,4,5}) gives a
+    // free dedup so each link is drawn exactly once.
     if *mode == MapMode::Terrain && settings.show_transport_network {
         // Axial deltas for direction indices 0-5, matching domain HEX_DIRECTIONS.
         const DIRS: [(i32, i32); 6] = [(1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1)];
-        let mut builder = MeshBuilder2d::default();
-        let line_w = HEX_SIZE * 0.12;
+        // Quad width HEX_SIZE/2 with one texture repeat per HEX_SIZE keeps
+        // the 64x64 art's texels square (32 texels across the width).
+        let track_w = RAIL_TRACK_WIDTH;
+        let u_period = RAIL_TRACK_U_PERIOD;
+        let track_tex = icons.get("rail", "Track");
+        let node_tex = icons.get("rail", "Node");
+
+        let mut track = MeshBuilder2d::default();
+        let mut nodes = MeshBuilder2d::default();
+        let mut fallback = MeshBuilder2d::default();
         for tile in tiles {
             if tile.is_sea() {
                 continue;
             }
             let a = geometry::hex_to_world(tile.q, tile.r);
+            if node_tex.is_some() && !tile.rail_links.is_empty() {
+                nodes.add_textured_quad(a, HEX_SIZE * 0.5);
+            }
             for &dir in &tile.rail_links {
                 if dir > 2 {
                     continue;
                 }
                 let (dq, dr) = DIRS[dir as usize];
                 let b = geometry::hex_to_world(tile.q + dq, tile.r + dr);
-                builder.add_segment(a, b, line_w);
+                if track_tex.is_some() {
+                    track.add_textured_segment(a, b, track_w, u_period);
+                } else {
+                    fallback.add_segment(a, b, HEX_SIZE * 0.12);
+                }
             }
         }
-        if !builder.is_empty() {
+        if let (Some(tex), false) = (node_tex, nodes.is_empty()) {
+            spawn_mesh_local_uv(
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+                nodes.build(),
+                Color::WHITE,
+                tex,
+                1.05,
+                Some(LodGate::Infra),
+            );
+        }
+        if let (Some(tex), false) = (track_tex, track.is_empty()) {
+            spawn_mesh_local_uv(
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+                track.build(),
+                Color::WHITE,
+                tex,
+                1.1,
+                Some(LodGate::Infra),
+            );
+        }
+        if !fallback.is_empty() {
             spawn_mesh(
                 &mut commands,
                 &mut meshes,
                 &mut materials,
-                builder.build(),
+                fallback.build(),
                 Color::srgba(100.0 / 255.0, 60.0 / 255.0, 20.0 / 255.0, 0.8),
                 None,
                 1.1,
