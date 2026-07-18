@@ -54,6 +54,7 @@ pub fn setup_map_tooltip(mut commands: Commands) {
             GlobalZIndex(500),
             Visibility::Hidden,
             bevy::picking::Pickable::IGNORE,
+            crate::screens::map_hud::InGameChrome,
         ))
         .with_children(|tooltip| {
             tooltip.spawn((

@@ -82,6 +82,14 @@ pub fn init_setup(mut ui: ResMut<SetupUi>) {
     ui.config_dirty = true;
 }
 
+/// Rewind the setup flow to the config step. Runs on entering
+/// `AppState::Setup`: after Quit to Title the previous game left the flow
+/// parked on the preview step, which would otherwise render nothing.
+pub fn reset_setup_flow(mut ui: ResMut<SetupUi>) {
+    ui.step = SetupStep::Config;
+    ui.config_dirty = true;
+}
+
 // ── Config step UI ──────────────────────────────────────────────────────
 
 /// Rebuild the config panel whenever it is dirty (or tear it down once the

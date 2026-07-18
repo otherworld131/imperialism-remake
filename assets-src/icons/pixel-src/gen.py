@@ -15,6 +15,7 @@ import sprites
 import sprites2
 import sprites3
 import sprites4
+import sprites5
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
@@ -24,6 +25,7 @@ for batch in (
     sprites2.BATCH2,
     sprites3.BATCH3,
     sprites4.BATCH4,
+    sprites5.BATCH5,
     ground.GROUND,
     rail.RAIL,
     splash.SPLASH,

@@ -47,6 +47,10 @@ fn debug_screenshot(
     mut game_commands: MessageWriter<GameCommand>,
     screen: Res<State<Screen>>,
     mut next_screen: ResMut<NextState<Screen>>,
+    mut burger_menus: Query<&mut Node, With<map_hud::BurgerMenu>>,
+    quit_buttons: Query<Entity, With<map_hud::QuitToTitleBtn>>,
+    quit_confirms: Query<Entity, With<map_hud::QuitConfirmBtn>>,
+    mut activations: MessageWriter<ButtonActivated>,
     mut exit: MessageWriter<AppExit>,
 ) {
     use bevy::render::view::screenshot::{Screenshot, save_to_disk};
@@ -69,6 +73,30 @@ fn debug_screenshot(
     // after this hook's first frames tick.
     if std::env::var("MAP_DEBUG_AI_CIVS").as_deref() == Ok("1") && !settings.show_ai_civilians {
         settings.show_ai_civilians = true;
+    }
+    // `MAP_DEBUG_BURGER=1` holds the top-bar burger menu open so the
+    // capture shows the Display / Debug / Quit sections.
+    if std::env::var("MAP_DEBUG_BURGER").as_deref() == Ok("1") {
+        for mut node in &mut burger_menus {
+            if node.display == Display::None {
+                node.display = Display::Flex;
+            }
+        }
+    }
+    // `MAP_DEBUG_QUIT=1` replays the Quit-to-Title flow through the real
+    // button path: menu entry → confirm modal → title screen; the capture
+    // then shows the respawned intro menu.
+    if std::env::var("MAP_DEBUG_QUIT").as_deref() == Ok("1") {
+        if *frames == 60
+            && let Some(button) = quit_buttons.iter().next()
+        {
+            activations.write(ButtonActivated(button));
+        }
+        if *frames == 100
+            && let Some(button) = quit_confirms.iter().next()
+        {
+            activations.write(ButtonActivated(button));
+        }
     }
     if *frames == 1 {
         if let Ok(label) = std::env::var("MAP_DEBUG_MODE")
@@ -563,7 +591,9 @@ fn m8_debug_driver(
 
 /// Debug driver for the M9 screens: `M9_DEBUG=<script>` ends turns and
 /// switches screens so `MAP_SCREENSHOT` captures live state. Scripts:
-/// `news` (end turn → newspaper interstitial), `newsproposal` (end turn →
+/// `news` (end turn → newspaper interstitial), `newsdouble` (end turn →
+/// newspaper → press End Turn again → the second resolution is ignored and
+/// prints `M9_NEWSDOUBLE OK/FAIL`), `newsproposal` (end turn →
 /// newspaper → dismiss → proposal modal), `newsarchive` (two turns →
 /// Archive tab → turn selected → Show Map modal), `battles` /
 /// `battlesdebug` (fast-forwards turns until the battle archive has
@@ -698,6 +728,63 @@ fn m9_debug_driver(
                     position.y = 100_000.0;
                 }
             }
+        }
+        _ => {}
+    }
+}
+
+/// Bug proof (standalone so `m9_debug_driver` stays under the system-param
+/// limit): `M9_DEBUG=newsdouble`. Ending the turn again while the newspaper
+/// is still open must be ignored — it used to start a second resolution
+/// behind the paper, so the between-turns session opened underneath the
+/// overlay and the UI wedged. This resolves one turn (→ newspaper), then
+/// presses the real top-bar End Turn *button* and confirms the turn did not
+/// advance and we are still on the (dismissable) newspaper. Prints
+/// `M9_NEWSDOUBLE OK/FAIL`.
+fn m9_newsdouble_driver(
+    mut frames: Local<u32>,
+    mut step: Local<u32>,
+    mut click_frame: Local<u32>,
+    phase: Res<State<TurnPhase>>,
+    screen_state: Res<State<Screen>>,
+    session: Res<SessionRes>,
+    mut game_commands: MessageWriter<GameCommand>,
+    mut activations: MessageWriter<ButtonActivated>,
+    end_turn_btn: Query<Entity, With<map_hud::EndTurnButton>>,
+) {
+    if std::env::var("M9_DEBUG").as_deref() != Ok("newsdouble") {
+        return;
+    }
+    if *phase.get() != TurnPhase::Idle {
+        return;
+    }
+    *frames += 1;
+    let turn = session.0.as_ref().map(|s| s.turn_number()).unwrap_or(0);
+    let on_news = *screen_state.get() == Screen::News;
+    match *step {
+        0 if *frames == 20 => {
+            game_commands.write(GameCommand::EndTurn);
+            *step = 1;
+        }
+        1 if turn == 2 && on_news => {
+            if let Some(button) = end_turn_btn.iter().next() {
+                activations.write(ButtonActivated(button));
+                *click_frame = *frames;
+                *step = 2;
+            }
+        }
+        2 if *frames >= *click_frame + 40 => {
+            if turn == 2 && on_news {
+                println!(
+                    "M9_NEWSDOUBLE OK: End Turn ignored while newspaper open (turn stayed {turn})"
+                );
+            } else {
+                println!(
+                    "M9_NEWSDOUBLE FAIL: turn={turn} screen={:?}",
+                    screen_state.get()
+                );
+            }
+            *step = 3;
         }
         _ => {}
     }
@@ -1020,6 +1107,50 @@ fn m10_debug_driver(
             }
             _ => {}
         },
+        // CLI-autosave proof: begins a game, then loads the CLI-written
+        // `saves/autosave.json` (an uncompressed v5 JSON envelope, the only
+        // file the CLI autosaves) through the real Load-modal button path and
+        // verifies the session adopted the saved turn. Prints
+        // `M10_LOADAUTO OK/FAIL`.
+        "loadauto" => {
+            match *step {
+                0 => {
+                    p.actions.write(SetupAction::PreviewMap);
+                    *step = 1;
+                }
+                1 if preview_ready => {
+                    p.actions.write(SetupAction::BeginCampaign);
+                    *step = 2;
+                }
+                2 if in_game => {
+                    saveload::open_load_modal(&mut p.commands, &mut p.modal_stack, &p.theme);
+                    *step = 3;
+                }
+                3 => {
+                    let Some((entity, _)) = p.load_rows.iter().find(|(_, row)| {
+                        row.path.file_name().is_some_and(|n| n == "autosave.json")
+                    }) else {
+                        if *frames > 600 {
+                            fail(&mut p.exit, "M10_LOADAUTO", "autosave.json not listed");
+                        }
+                        return;
+                    };
+                    p.activations.write(ButtonActivated(entity));
+                    *step = 4;
+                }
+                // The fresh CLI autosave is past turn 1; a successful load rolls
+                // the just-begun turn-1 session forward to the saved turn.
+                4 if turn > 1 => {
+                    println!("M10_LOADAUTO OK: autosave.json loaded, session at turn {turn}");
+                    p.exit.write(AppExit::Success);
+                    *step = 5;
+                }
+                4 if *frames > 1200 => {
+                    fail(&mut p.exit, "M10_LOADAUTO", "autosave did not load");
+                }
+                _ => {}
+            }
+        }
         // Setup-screen load proof: the config step's "Load Save" button
         // loads straight into the game (needs `saves/m10-e2e.json.gz` from
         // an earlier `e2e` run).
@@ -1574,7 +1705,8 @@ pub fn run_game() {
             )
                 .run_if(in_state(AppState::Intro)),
         )
-        // The in-game HUD chrome exists only once a game starts.
+        // The in-game HUD chrome exists only once a game starts, and is
+        // torn down again when Quit to Title leaves the state.
         .add_systems(
             OnEnter(AppState::InGame),
             (
@@ -1584,6 +1716,10 @@ pub fn run_game() {
                 tooltip::setup_map_tooltip,
             ),
         )
+        .add_systems(OnExit(AppState::InGame), map_hud::cleanup_ingame_chrome)
+        // Re-entering Setup after Quit to Title restarts the flow at the
+        // config step (the previous game left it on Preview).
+        .add_systems(OnEnter(AppState::Setup), setup::ui::reset_setup_flow)
         // Shared map/world systems (setup preview + in-game).
         .add_systems(
             Update,
@@ -1626,6 +1762,7 @@ pub fn run_game() {
                     m7_debug_driver,
                     m8_debug_driver,
                     m9_debug_driver,
+                    m9_newsdouble_driver,
                     m11_debug_driver,
                 )
                     .run_if(in_state(AppState::InGame)),
@@ -1712,6 +1849,7 @@ pub fn run_game() {
                         map_hud::keyboard_commands,
                         map_hud::handle_convenience_buttons,
                         map_hud::handle_burger_menu,
+                        map_hud::handle_quit_to_title,
                         map_hud::handle_viewpoint_dropdown,
                         panels::handle_unit_checkboxes,
                         panels::handle_panel_buttons,
@@ -1838,32 +1976,25 @@ pub fn run_game() {
             Update,
             (
                 map_hud::update_turn_display,
-                map_hud::update_mode_display,
+                map_hud::sync_end_turn_enabled,
+                map_hud::populate_screen_tab_icons,
                 map_hud::sync_viewpoint_dropdown,
                 side_panel::handle_toggles,
                 side_panel::handle_debug_disclosure,
-                side_panel::sync_side_panel_for_diplomacy,
                 side_panel::handle_ui_scale_slider,
                 side_panel::sync_ui_scale_slider,
                 side_panel::handle_mode_dropdown,
                 side_panel::sync_mode_dropdown,
                 side_panel::update_selected_info,
                 side_panel::update_legend,
-                side_panel::update_nations,
                 panels::update_banners,
                 panels::update_unit_panel,
                 panels::update_naval_panel,
             )
                 .run_if(in_state(AppState::InGame)),
         )
-        .add_systems(
-            OnEnter(TurnPhase::Processing),
-            (map_hud::show_busy_overlay, map_hud::disable_end_turn),
-        )
-        .add_systems(
-            OnExit(TurnPhase::Processing),
-            (map_hud::hide_busy_overlay, map_hud::enable_end_turn),
-        )
+        .add_systems(OnEnter(TurnPhase::Processing), map_hud::show_busy_overlay)
+        .add_systems(OnExit(TurnPhase::Processing), map_hud::hide_busy_overlay)
         // ── Between-turns sessions (card #494) ──────────────────────────
         .add_systems(
             OnEnter(TurnPhase::DiploSession),

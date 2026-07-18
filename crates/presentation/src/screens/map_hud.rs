@@ -8,18 +8,23 @@ use bevy::prelude::*;
 use std::sync::atomic::Ordering;
 
 use crate::game::commands::GameCommand;
-use crate::game::resources::{GameMeta, TurnInfo, ViewModels};
+use crate::game::resources::{GameMeta, NewsDebugSettings, RenderSettings, TurnInfo, ViewModels};
 use crate::game::turn_runner::{ActiveSkip, BusyProgress};
-use crate::map::layers::MapMode;
 use crate::map::picking::PickingBlocker;
 use crate::screens::saveload;
+use crate::screens::side_panel;
 use crate::setup::jobs::ActiveSetupJob;
-use crate::state::Screen;
+use crate::state::{AppState, Screen};
 use crate::theme::{self, Theme};
 use crate::widgets::{
-    self, ButtonActivated, ButtonProps, DropdownChanged, DropdownProps, ModalStack, UiDropdown,
-    UiTextInput,
+    self, ButtonActivated, ButtonProps, DropdownChanged, DropdownProps, ModalProps, ModalStack,
+    ScrollProps, UiDropdown, UiTextInput, open_modal,
 };
+
+/// Chrome spawned on entering `AppState::InGame` (top bar, side panel, map
+/// tooltip); despawned again on leaving the state (Quit to Title).
+#[derive(Component)]
+pub struct InGameChrome;
 
 #[derive(Component)]
 pub struct TurnDisplay;
@@ -28,22 +33,32 @@ pub struct TurnDisplay;
 #[derive(Component)]
 pub struct ScreenTabButton(pub Screen);
 
-/// `(screen, label, hotkey)` for the top-bar tabs and the F-key bindings.
-pub const SCREEN_TABS: [(Screen, &str, &str); 10] = [
-    (Screen::Map, "Map", "F1"),
-    (Screen::Transport, "Transport", "F2"),
-    (Screen::Industry, "Industry", "F3"),
-    (Screen::Diplomacy, "Diplomacy", "F4"),
-    (Screen::Trade, "Trade", "F5"),
-    (Screen::Tech, "Tech", "F6"),
-    (Screen::Ledger, "Ledger", "F7"),
-    (Screen::News, "News", "F8"),
-    (Screen::Battles, "Battles", "F9"),
-    (Screen::Legend, "Legend", "F10"),
-];
-
+/// Pictogram slot inside a screen tab; the `ImageNode` is filled in by
+/// [`populate_screen_tab_icons`] once `IconAssets` finished loading (the
+/// HUD can spawn before `Startup` when a debug shortcut boots straight
+/// into `InGame`).
 #[derive(Component)]
-pub struct ModeDisplay;
+pub struct ScreenTabIcon(pub &'static str);
+
+/// Text label inside a screen tab; visible only while its tab is active
+/// (Industry inner-tab behavior).
+#[derive(Component)]
+pub struct ScreenTabLabel(pub Screen);
+
+/// `(screen, label, hotkey, ui-icon name)` for the top-bar tabs and the
+/// F-key bindings.
+pub const SCREEN_TABS: [(Screen, &str, &str, &str); 10] = [
+    (Screen::Map, "Map", "F1", "Map"),
+    (Screen::Transport, "Transport", "F2", "FreightCar"),
+    (Screen::Industry, "Industry", "F3", "Factory"),
+    (Screen::Diplomacy, "Diplomacy", "F4", "Diplomacy"),
+    (Screen::Trade, "Trade", "F5", "Trade"),
+    (Screen::Tech, "Tech", "F6", "Science"),
+    (Screen::Ledger, "Ledger", "F7", "Ledger"),
+    (Screen::News, "News", "F8", "News"),
+    (Screen::Battles, "Battles", "F9", "Swords"),
+    (Screen::Legend, "Legend", "F10", "Legend"),
+];
 
 #[derive(Component)]
 pub struct EndTurnButton;
@@ -97,7 +112,25 @@ pub struct LoadBtn;
 #[derive(Component)]
 pub struct RestartBtn;
 
-pub fn setup_hud(mut commands: Commands, theme: Res<Theme>) {
+/// "Quit to Title" burger-menu entry: opens the confirm modal.
+#[derive(Component)]
+pub struct QuitToTitleBtn;
+
+/// Confirm button inside the quit modal; leaves the game for the title
+/// screen.
+#[derive(Component)]
+pub struct QuitConfirmBtn {
+    pub modal: Entity,
+}
+
+pub fn setup_hud(
+    mut commands: Commands,
+    theme: Res<Theme>,
+    settings: Res<RenderSettings>,
+    news_debug: Res<NewsDebugSettings>,
+    ui_scale: Res<bevy::ui::UiScale>,
+    debug_expanded: Res<side_panel::DebugPanelExpanded>,
+) {
     // Top bar.
     commands
         .spawn((
@@ -117,6 +150,7 @@ pub fn setup_hud(mut commands: Commands, theme: Res<Theme>) {
             Interaction::default(),
             PickingBlocker,
             crate::screens::session::SessionHiddenChrome,
+            InGameChrome,
         ))
         .with_children(|bar| {
             // Compact left block — ten screen tabs share the 1280px bar.
@@ -140,18 +174,24 @@ pub fn setup_hud(mut commands: Commands, theme: Res<Theme>) {
                     );
                     left.commands().entity(burger).insert((
                         BurgerMenuBtn,
-                        widgets::TooltipText("Menu: viewpoint, save / load, skip turns".into()),
+                        widgets::TooltipText(
+                            "Menu: save / load, display settings, quit to title".into(),
+                        ),
                     ));
 
                     // The menu itself: a vertical popover under the button.
+                    // Capped to the viewport and scrollable so it never
+                    // overflows small windows at large UI scales.
+                    let mut scroll_content = Entity::PLACEHOLDER;
                     left.spawn((
                         BurgerMenu,
                         Node {
                             position_type: PositionType::Absolute,
                             top: Val::Px(40.0),
                             left: Val::Px(6.0),
+                            width: Val::Px(280.0),
+                            max_height: Val::Vh(82.0),
                             flex_direction: FlexDirection::Column,
-                            row_gap: Val::Px(8.0),
                             padding: UiRect::all(Val::Px(10.0)),
                             border: UiRect::all(Val::Px(1.0)),
                             border_radius: BorderRadius::all(Val::Px(4.0)),
@@ -163,6 +203,28 @@ pub fn setup_hud(mut commands: Commands, theme: Res<Theme>) {
                         GlobalZIndex(20),
                     ))
                     .with_children(|menu| {
+                        let scroll = widgets::spawn_scroll_area(
+                            menu,
+                            &theme,
+                            ScrollProps {
+                                flex_grow: 1.0,
+                                ..default()
+                            },
+                        );
+                        scroll_content = scroll.content;
+                    });
+                    let mut commands = left.commands();
+                    commands.entity(scroll_content).insert(Node {
+                        flex_grow: 1.0,
+                        min_width: Val::Px(0.0),
+                        min_height: Val::Px(0.0),
+                        height: Val::Percent(100.0),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(8.0),
+                        overflow: Overflow::scroll_y(),
+                        ..default()
+                    });
+                    commands.entity(scroll_content).with_children(|menu| {
                         // Observer viewpoint dropdown (synced from the roster).
                         menu.spawn((
                             ViewpointRow,
@@ -222,7 +284,38 @@ pub fn setup_hud(mut commands: Commands, theme: Res<Theme>) {
                             }
                         });
 
+                        // Leave the game for the title screen (confirmed) —
+                        // grouped with the other game actions above the
+                        // settings sections.
+                        let quit = widgets::spawn_button(
+                            menu,
+                            &theme,
+                            ButtonProps {
+                                label: "Quit to Title".into(),
+                                font_size: 11.5,
+                                ..default()
+                            },
+                        );
+                        menu.commands().entity(quit).insert((
+                            QuitToTitleBtn,
+                            widgets::TooltipText(
+                                "Leave this game and return to the title screen".into(),
+                            ),
+                        ));
+
+                        // Display settings + Debug toggles (moved here from
+                        // the map side panel).
+                        side_panel::spawn_display_and_debug(
+                            menu,
+                            &theme,
+                            &settings,
+                            &news_debug,
+                            ui_scale.0,
+                            debug_expanded.0,
+                        );
+
                         // Skip machinery (dev): Skip N / Skip Until.
+                        menu_section_title(menu, &theme, "Turns");
                         menu.spawn(Node {
                             flex_direction: FlexDirection::Row,
                             align_items: AlignItems::Center,
@@ -306,7 +399,7 @@ pub fn setup_hud(mut commands: Commands, theme: Res<Theme>) {
 
                     left.spawn((
                         Text::new("Imperialism"),
-                        theme.font_bold(15.0),
+                        theme.font_bold(14.0),
                         TextColor(theme::GOLD),
                     ));
                     left.spawn((
@@ -315,48 +408,76 @@ pub fn setup_hud(mut commands: Commands, theme: Res<Theme>) {
                         TextColor(theme::TEXT),
                         TurnDisplay,
                     ));
-                    left.spawn((
-                        Text::new("Political (M/Tab)"),
-                        theme.font(11.0),
-                        TextColor(Color::srgb(0.74, 0.77, 0.70)),
-                        ModeDisplay,
-                    ));
                 });
 
-            // Screen tabs (web header: F1 Map, F2 Transport, F3 Industry,
-            // F5 Trade).
+            // Screen tabs: pixel-art pictograms (Industry inner-tab
+            // behavior — unlabeled unless active, tooltip names the screen
+            // and its F-key). Icons are filled in by
+            // [`populate_screen_tab_icons`].
             bar.spawn((Node {
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
                 column_gap: Val::Px(2.0),
+                flex_shrink: 0.0,
                 ..default()
             },))
                 .with_children(|tabs| {
-                    for (screen, label, hotkey) in SCREEN_TABS {
+                    let active = Screen::default();
+                    for (screen, label, hotkey, icon) in SCREEN_TABS {
                         let button = widgets::spawn_button(
                             tabs,
                             &theme,
                             ButtonProps {
-                                label: format!("{label} {hotkey}"),
-                                font_size: 11.5,
+                                label: String::new(),
                                 flat: true,
                                 auto_label_tint: false,
                                 ..default()
                             },
                         );
-                        tabs.commands().entity(button).insert((
+                        let is_active = screen == active;
+                        let mut commands = tabs.commands();
+                        let mut entity = commands.entity(button);
+                        entity.insert((
                             ScreenTabButton(screen),
                             // Tighter than the kit default so ten tabs fit.
                             Node {
-                                height: Val::Px(30.0),
-                                padding: UiRect::horizontal(Val::Px(6.0)),
-                                justify_content: JustifyContent::Center,
+                                height: Val::Px(32.0),
+                                flex_direction: FlexDirection::Row,
                                 align_items: AlignItems::Center,
-                                border_radius: BorderRadius::all(Val::Px(3.0)),
+                                column_gap: Val::Px(4.0),
+                                padding: UiRect::axes(Val::Px(5.0), Val::Px(2.0)),
+                                border: UiRect::bottom(Val::Px(2.0)),
                                 flex_shrink: 0.0,
                                 ..default()
                             },
+                            BorderColor::all(if is_active { theme::GOLD } else { Color::NONE }),
+                            widgets::TooltipText(format!("{label} ({hotkey})")),
                         ));
+                        entity.with_children(|tab| {
+                            tab.spawn((
+                                ScreenTabIcon(icon),
+                                Node {
+                                    width: Val::Px(20.0),
+                                    height: Val::Px(20.0),
+                                    flex_shrink: 0.0,
+                                    ..default()
+                                },
+                            ));
+                            tab.spawn((
+                                ScreenTabLabel(screen),
+                                Text::new(label),
+                                theme.font_bold(12.5),
+                                TextColor(theme::GOLD),
+                                Node {
+                                    display: if is_active {
+                                        Display::Flex
+                                    } else {
+                                        Display::None
+                                    },
+                                    ..default()
+                                },
+                            ));
+                        });
                     }
                 });
 
@@ -365,7 +486,7 @@ pub fn setup_hud(mut commands: Commands, theme: Res<Theme>) {
                 &theme,
                 ButtonProps {
                     label: "End Turn".into(),
-                    width: Some(Val::Px(110.0)),
+                    width: Some(Val::Px(100.0)),
                     ..default()
                 },
             );
@@ -374,6 +495,37 @@ pub fn setup_hud(mut commands: Commands, theme: Res<Theme>) {
                 widgets::TooltipText("Resolve the turn (Space)".into()),
             ));
         });
+}
+
+/// Small gold heading inside the burger menu.
+fn menu_section_title(parent: &mut ChildSpawnerCommands, theme: &Theme, title: &str) {
+    parent.spawn((
+        Text::new(title.to_string()),
+        theme.font_bold(12.5),
+        TextColor(theme::GOLD),
+        Node {
+            margin: UiRect::top(Val::Px(4.0)),
+            ..default()
+        },
+    ));
+}
+
+/// Fill each screen tab's icon slot once `IconAssets` is available (the
+/// HUD may spawn before `Startup` finishes when a debug shortcut boots
+/// straight into `InGame`).
+pub fn populate_screen_tab_icons(
+    mut commands: Commands,
+    icons: Option<Res<crate::map::icons::IconAssets>>,
+    slots: Query<(Entity, &ScreenTabIcon), Without<ImageNode>>,
+) {
+    let Some(icons) = icons else {
+        return;
+    };
+    for (entity, slot) in &slots {
+        if let Some(image) = icons.get("ui", slot.0) {
+            commands.entity(entity).insert(ImageNode::new(image));
+        }
+    }
 }
 
 /// The busy overlay lives outside the HUD so the setup flow's async world
@@ -487,10 +639,17 @@ pub fn handle_convenience_buttons(
     count_inputs: Query<&UiTextInput, With<SkipCountInput>>,
     until_inputs: Query<&UiTextInput, With<SkipUntilInput>>,
     session: Res<crate::game::resources::SessionRes>,
+    screen: Res<State<Screen>>,
     mut commands_out: MessageWriter<GameCommand>,
 ) {
+    // Advancing turns (Skip N / Until) shares the newspaper wedge with End
+    // Turn: dismiss the paper before resolving anything else.
+    let parked = *screen.get() == Screen::News;
     for ButtonActivated(entity) in activations.read() {
         if skip_n.contains(*entity) {
+            if parked {
+                continue;
+            }
             let count = count_inputs
                 .iter()
                 .next()
@@ -499,6 +658,9 @@ pub fn handle_convenience_buttons(
                 .clamp(1, 500);
             commands_out.write(GameCommand::SkipTurns { count });
         } else if skip_until.contains(*entity) {
+            if parked {
+                continue;
+            }
             let text = until_inputs
                 .iter()
                 .next()
@@ -518,21 +680,23 @@ pub fn handle_convenience_buttons(
 
 /// Keep the viewpoint dropdown's options in step with the Great-Power
 /// roster (names change on re-roll / restart / load) and its selection on
-/// the current viewpoint. Hidden entirely in non-observer games.
+/// the current viewpoint. Removed from the layout entirely in non-observer
+/// games (`Display::None`, not `Visibility` — a hidden row would still
+/// leave a blank gap at the top of the burger menu).
 pub fn sync_viewpoint_dropdown(
     meta: Res<GameMeta>,
     vms: Res<ViewModels>,
-    mut rows: Query<&mut Visibility, With<ViewpointRow>>,
+    mut rows: Query<&mut Node, With<ViewpointRow>>,
     mut dropdowns: Query<&mut UiDropdown, With<ViewpointDropdown>>,
 ) {
     let target = if meta.observer {
-        Visibility::Inherited
+        Display::Flex
     } else {
-        Visibility::Hidden
+        Display::None
     };
-    for mut visibility in &mut rows {
-        if *visibility != target {
-            *visibility = target;
+    for mut node in &mut rows {
+        if node.display != target {
+            node.display = target;
         }
     }
     if !meta.observer {
@@ -577,13 +741,20 @@ pub fn handle_viewpoint_dropdown(
 
 /// End-turn button (kit widget): sends [`GameCommand::EndTurn`] on
 /// activation. Visual feedback comes from the widget kit.
+///
+/// The newspaper interstitial parks End Turn: ending a turn while the paper
+/// is still open used to start a fresh resolution behind the overlay, and
+/// the between-turns session that opened underneath the paper could never be
+/// reached — the UI wedged. The paper must be dismissed first.
 pub fn end_turn_button(
     mut activations: MessageReader<ButtonActivated>,
     buttons: Query<(), With<EndTurnButton>>,
+    screen: Res<State<Screen>>,
     mut commands_out: MessageWriter<GameCommand>,
 ) {
+    let parked = *screen.get() == Screen::News;
     for ButtonActivated(entity) in activations.read() {
-        if buttons.contains(*entity) {
+        if buttons.contains(*entity) && !parked {
             commands_out.write(GameCommand::EndTurn);
         }
     }
@@ -626,11 +797,23 @@ pub fn handle_screen_tabs(
 /// screen once no modal is open (web `isFullScreen` Esc parity).
 pub fn screen_hotkeys(
     keys: Res<ButtonInput<KeyCode>>,
-    focus: Res<InputFocus>,
+    mut focus: ResMut<InputFocus>,
     screen: Res<State<Screen>>,
     modal_stack: Res<ModalStack>,
     mut next_screen: ResMut<NextState<Screen>>,
 ) {
+    // Esc exits the full-screen views (e.g. the newspaper's "Close (Esc)")
+    // even while one of their filter inputs holds keyboard focus — releasing
+    // that focus on the way out. Transport keeps the map live, so its Esc
+    // belongs to the map's cancel cascade, not here.
+    if keys.just_pressed(KeyCode::Escape) && modal_stack.is_empty() && screen.get().is_full_screen()
+    {
+        focus.clear();
+        next_screen.set(Screen::Map);
+        return;
+    }
+    // A focused text input otherwise owns the keyboard (typing in a filter
+    // must not trigger screen navigation).
     if focus.0.is_some() {
         return;
     }
@@ -650,15 +833,11 @@ pub fn screen_hotkeys(
             next_screen.set(target);
         }
     }
-    // Web parity: Esc only exits the full-screen views (Transport keeps the
-    // map live; its Esc belongs to the map's cancel cascade).
-    if keys.just_pressed(KeyCode::Escape) && modal_stack.is_empty() && screen.get().is_full_screen()
-    {
-        next_screen.set(Screen::Map);
-    }
 }
 
-/// Toggle the burger menu; triggering any action in it closes it.
+/// Toggle the burger menu; triggering any action in it closes it (display
+/// toggles and the Debug disclosure keep it open so several can be
+/// flipped in one visit).
 pub fn handle_burger_menu(
     mut activations: MessageReader<widgets::ButtonActivated>,
     toggles: Query<(), With<BurgerMenuBtn>>,
@@ -670,6 +849,7 @@ pub fn handle_burger_menu(
             With<SaveBtn>,
             With<LoadBtn>,
             With<RestartBtn>,
+            With<QuitToTitleBtn>,
         )>,
     >,
     mut menus: Query<&mut Node, With<BurgerMenu>>,
@@ -691,42 +871,57 @@ pub fn handle_burger_menu(
     }
 }
 
-/// Gold-tint the active screen tab.
+/// Industry inner-tab behavior for the top bar: the active tab grows a
+/// gold underline and shows its text label; inactive tabs are icon-only.
 pub fn update_screen_tabs(
     screen: Res<State<Screen>>,
-    buttons: Query<(&ScreenTabButton, &Children)>,
-    mut labels: Query<&mut TextColor>,
+    mut buttons: Query<(&ScreenTabButton, &mut BorderColor)>,
+    mut labels: Query<(&ScreenTabLabel, &mut Node)>,
 ) {
     if !screen.is_changed() {
         return;
     }
-    for (tab, children) in &buttons {
+    for (tab, mut border) in &mut buttons {
         let color = if tab.0 == *screen.get() {
             theme::GOLD
         } else {
-            theme::TEXT_DIM
+            Color::NONE
         };
-        for child in children {
-            if let Ok(mut text_color) = labels.get_mut(*child)
-                && text_color.0 != color
-            {
-                text_color.0 = color;
-            }
+        let target = BorderColor::all(color);
+        if *border != target {
+            *border = target;
+        }
+    }
+    for (label, mut node) in &mut labels {
+        let display = if label.0 == *screen.get() {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if node.display != display {
+            node.display = display;
         }
     }
 }
 
-/// While a turn resolves the End Turn button is disabled (and re-enabled on
-/// exit); the busy overlay communicates why.
-pub fn disable_end_turn(mut commands: Commands, buttons: Query<Entity, With<EndTurnButton>>) {
-    for button in &buttons {
-        widgets::set_enabled(&mut commands, button, false);
+/// The End Turn button is live only when the player can actually resolve a
+/// turn: the phase is idle (no resolution in flight — the busy overlay
+/// communicates why otherwise) and the newspaper interstitial is not parked
+/// on screen (dismiss it first, else the second resolution wedges the
+/// between-turns session). One state-driven source of truth keeps the button
+/// and the click handler in agreement.
+pub fn sync_end_turn_enabled(
+    phase: Res<State<crate::state::TurnPhase>>,
+    screen: Res<State<Screen>>,
+    mut commands: Commands,
+    buttons: Query<Entity, With<EndTurnButton>>,
+) {
+    if !phase.is_changed() && !screen.is_changed() {
+        return;
     }
-}
-
-pub fn enable_end_turn(mut commands: Commands, buttons: Query<Entity, With<EndTurnButton>>) {
+    let enabled = *phase.get() == crate::state::TurnPhase::Idle && *screen.get() != Screen::News;
     for button in &buttons {
-        widgets::set_enabled(&mut commands, button, true);
+        widgets::set_enabled(&mut commands, button, enabled);
     }
 }
 
@@ -759,15 +954,6 @@ pub fn update_turn_display(
     }
 }
 
-pub fn update_mode_display(mode: Res<MapMode>, mut texts: Query<&mut Text, With<ModeDisplay>>) {
-    if !mode.is_changed() {
-        return;
-    }
-    for mut text in &mut texts {
-        **text = format!("{} (M/Tab)", mode.label());
-    }
-}
-
 pub fn show_busy_overlay(mut overlays: Query<&mut Visibility, With<BusyOverlay>>) {
     for mut visibility in &mut overlays {
         *visibility = Visibility::Visible;
@@ -777,5 +963,146 @@ pub fn show_busy_overlay(mut overlays: Query<&mut Visibility, With<BusyOverlay>>
 pub fn hide_busy_overlay(mut overlays: Query<&mut Visibility, With<BusyOverlay>>) {
     for mut visibility in &mut overlays {
         *visibility = Visibility::Hidden;
+    }
+}
+
+// ── Quit to Title ────────────────────────────────────────────────────────
+
+/// "Quit to Title" opens a small confirm modal (abandoning an unsaved game
+/// deserves one); confirming leaves `InGame` for the title screen.
+pub fn handle_quit_to_title(
+    mut activations: MessageReader<ButtonActivated>,
+    quit_buttons: Query<(), With<QuitToTitleBtn>>,
+    confirm_buttons: Query<&QuitConfirmBtn>,
+    mut commands: Commands,
+    theme: Res<Theme>,
+    mut stack: ResMut<ModalStack>,
+    mut next_app_state: ResMut<NextState<AppState>>,
+    mut next_screen: ResMut<NextState<Screen>>,
+) {
+    for ButtonActivated(entity) in activations.read() {
+        if quit_buttons.contains(*entity) {
+            open_quit_modal(&mut commands, &mut stack, &theme);
+        } else if let Ok(button) = confirm_buttons.get(*entity) {
+            commands.entity(button.modal).despawn();
+            // Back to the map screen first so any full-screen overlay's
+            // OnExit teardown runs, then out to the title splash.
+            next_screen.set(Screen::Map);
+            next_app_state.set(AppState::Intro);
+        }
+    }
+}
+
+fn open_quit_modal(commands: &mut Commands, stack: &mut ModalStack, theme: &Theme) {
+    let handles = open_modal(
+        commands,
+        stack,
+        theme,
+        ModalProps {
+            title: "Quit to Title".into(),
+            width: Val::Px(380.0),
+        },
+    );
+    let modal = handles.root;
+    commands.entity(handles.content).with_children(|content| {
+        content.spawn((
+            Text::new("Return to the title screen? Unsaved progress is lost."),
+            theme.font(12.5),
+            TextColor(theme::TEXT),
+        ));
+        content
+            .spawn((Node {
+                flex_direction: FlexDirection::Row,
+                justify_content: JustifyContent::FlexEnd,
+                column_gap: Val::Px(10.0),
+                ..default()
+            },))
+            .with_children(|row| {
+                let quit = widgets::spawn_button(
+                    row,
+                    theme,
+                    ButtonProps {
+                        label: "Quit".into(),
+                        width: Some(Val::Px(120.0)),
+                        ..default()
+                    },
+                );
+                row.commands().entity(quit).insert(QuitConfirmBtn { modal });
+            });
+    });
+}
+
+/// Despawn the in-game chrome (top bar, side panel, map tooltip) when the
+/// player leaves the game for the title screen; entering `InGame` again
+/// respawns it fresh.
+pub fn cleanup_ingame_chrome(mut commands: Commands, roots: Query<Entity, With<InGameChrome>>) {
+    for entity in &roots {
+        commands.entity(entity).despawn();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::Screen;
+    use bevy::state::app::StatesPlugin;
+
+    /// Minimal app exercising only `screen_hotkeys` against the `Screen`
+    /// state, keyboard input, keyboard focus and the modal stack.
+    fn hotkey_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(StatesPlugin);
+        app.init_state::<Screen>();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.init_resource::<InputFocus>();
+        app.init_resource::<ModalStack>();
+        app.add_systems(Update, screen_hotkeys);
+        app
+    }
+
+    fn goto(app: &mut App, screen: Screen) {
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(screen);
+        app.update();
+    }
+
+    fn current(app: &App) -> Screen {
+        *app.world().resource::<State<Screen>>().get()
+    }
+
+    #[test]
+    fn esc_closes_newspaper_even_with_a_focused_filter() {
+        let mut app = hotkey_app();
+        goto(&mut app, Screen::News);
+        assert_eq!(current(&app), Screen::News);
+
+        // A filter input (e.g. the newspaper search box) holds focus.
+        let focused = app.world_mut().spawn_empty().id();
+        app.world_mut().resource_mut::<InputFocus>().0 = Some(focused);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+        // One update runs `screen_hotkeys` (queues the transition + releases
+        // focus); a second applies the queued `Screen` transition.
+        app.update();
+        app.update();
+
+        assert_eq!(current(&app), Screen::Map, "Esc must dismiss the newspaper");
+        assert!(
+            app.world().resource::<InputFocus>().0.is_none(),
+            "Esc must release the filter focus on the way out"
+        );
+    }
+
+    #[test]
+    fn esc_leaves_map_to_the_cancel_cascade() {
+        let mut app = hotkey_app();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+        app.update();
+        // The map is not a full-screen view; screen_hotkeys must not act.
+        assert_eq!(current(&app), Screen::Map);
     }
 }

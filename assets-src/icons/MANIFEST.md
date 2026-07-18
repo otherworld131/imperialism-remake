@@ -138,7 +138,7 @@ on a tile the map marker plays the three images ping-pong
 | Grant | `crates/presentation/assets/icons/diplomacy/Grant.png` | Tied money sack with gold coin |
 | BreakTreaty | `crates/presentation/assets/icons/diplomacy/BreakTreaty.png` | Document torn in two, wax seal |
 
-## ui/ (13)
+## ui/ (18)
 
 | Name | Output | Pictogram |
 |------|--------|-----------|
@@ -155,6 +155,11 @@ on a tile the map marker plays the three images ping-pong
 | WorkerUntrained | `crates/presentation/assets/icons/ui/WorkerUntrained.png` | Bare-headed labourer bust, denim shirt (labor tier) |
 | WorkerTrained | `crates/presentation/assets/icons/ui/WorkerTrained.png` | Flat-capped worker bust, navy shirt (labor tier) |
 | WorkerExpert | `crates/presentation/assets/icons/ui/WorkerExpert.png` | Top-hatted foreman bust, gold pin (labor tier) |
+| Map | `crates/presentation/assets/icons/ui/Map.png` | Folded field map with teal water and red dashed route (Map screen tab) |
+| Diplomacy | `crates/presentation/assets/icons/ui/Diplomacy.png` | Treaty document with wax seal and gold quill (Diplomacy screen tab) |
+| Trade | `crates/presentation/assets/icons/ui/Trade.png` | Gold merchant balance scales (Trade screen tab) |
+| Ledger | `crates/presentation/assets/icons/ui/Ledger.png` | Open ledger book with entry lines and red bookmark (Ledger screen tab) |
+| Legend | `crates/presentation/assets/icons/ui/Legend.png` | Map-key card with color chips and caption lines (Legend screen tab) |
 
 ## terrain/ (7)
 
