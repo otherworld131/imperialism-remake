@@ -9,7 +9,7 @@ use crate::game::resources::{
     DataVersion, DeployMode, GameMeta, PerspectiveNation, ProposalPrompt, QueuedDiplomacyAction,
     SelectedCivilian, SelectedShips, SelectedUnits, SessionRes,
 };
-use crate::game::turn_runner::{self, ActiveSkip, ActiveTurn, SkipSpec};
+use crate::game::turn_runner::{self, ActiveBegin, ActiveSkip, ActiveTurn, SkipSpec};
 use crate::game::vm;
 use crate::state::TurnPhase;
 use crate::widgets::Toast;
@@ -127,10 +127,11 @@ pub enum GameCommand {
         resource: String,
         quantity: u32,
     },
-    SetBuyOrder {
+    /// Toggle a resource on the buy wishlist (card #494): wishlisted
+    /// resources are offered seller-by-seller in the end-turn trade session.
+    SetBuyWishlist {
         resource: String,
-        quantity: u32,
-        max_price: i64,
+        wanted: bool,
     },
     // ── M8: Diplomacy screen ─────────────────────────────────────────
     /// Fire an armed diplomatic action at a target nation. The action only
@@ -175,12 +176,19 @@ fn report(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Turn-runner handles bundled to stay under the system-param limit.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct TurnRunnerParams<'w> {
+    pub session: ResMut<'w, SessionRes>,
+    pub active: ResMut<'w, ActiveTurn>,
+    pub active_begin: ResMut<'w, ActiveBegin>,
+    pub active_skip: ResMut<'w, ActiveSkip>,
+    pub next_phase: ResMut<'w, NextState<TurnPhase>>,
+}
+
 pub fn apply_command(
     mut messages: MessageReader<GameCommand>,
-    mut session: ResMut<SessionRes>,
-    mut active: ResMut<ActiveTurn>,
-    mut active_skip: ResMut<ActiveSkip>,
-    mut next_phase: ResMut<NextState<TurnPhase>>,
+    mut runner: TurnRunnerParams,
     mut meta: ResMut<GameMeta>,
     mut perspective: ResMut<PerspectiveNation>,
     mut data_version: ResMut<DataVersion>,
@@ -203,27 +211,29 @@ pub fn apply_command(
         }
     };
     for command in messages.read() {
+        let TurnRunnerParams {
+            session,
+            active,
+            active_begin,
+            active_skip,
+            next_phase,
+        } = &mut runner;
         if let GameCommand::EndTurn = command {
             cancel_deploy_ui(&mut deploy, &mut engineer_prompt, &mut commands);
-            turn_runner::start_end_turn(&mut session, &mut active, &mut next_phase);
+            turn_runner::start_end_turn(session, active_begin, active, next_phase);
             continue;
         }
         if let GameCommand::SkipTurns { count } = command {
             cancel_deploy_ui(&mut deploy, &mut engineer_prompt, &mut commands);
-            turn_runner::start_skip(
-                &mut session,
-                &mut active_skip,
-                &mut next_phase,
-                SkipSpec::Count(*count),
-            );
+            turn_runner::start_skip(session, active_skip, next_phase, SkipSpec::Count(*count));
             continue;
         }
         if let GameCommand::SkipUntil { text } = command {
             cancel_deploy_ui(&mut deploy, &mut engineer_prompt, &mut commands);
             turn_runner::start_skip(
-                &mut session,
-                &mut active_skip,
-                &mut next_phase,
+                session,
+                active_skip,
+                next_phase,
                 SkipSpec::Until(text.clone()),
             );
             continue;
@@ -606,16 +616,10 @@ pub fn apply_command(
                 );
             }
 
-            GameCommand::SetBuyOrder {
-                resource,
-                quantity,
-                max_price,
-            } => {
+            GameCommand::SetBuyWishlist { resource, wanted } => {
                 bump = report(
-                    frontend_api::trade::set_player_buy_order(
-                        game, nation, "resource", resource, *quantity, *max_price,
-                    ),
-                    "Buy order failed",
+                    frontend_api::trade::set_buy_wishlist(game, nation, resource, *wanted),
+                    "Wishlist update failed",
                     &mut toasts,
                 );
             }

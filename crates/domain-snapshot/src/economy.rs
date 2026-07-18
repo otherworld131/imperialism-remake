@@ -308,13 +308,6 @@ pub struct PlayerSellOrder {
     pub quantity: u32,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct PlayerBuyOrder {
-    pub resource: ResourceType,
-    pub quantity: u32,
-    pub max_price_per_unit: Money,
-}
-
 // ── Observability ─────────────────────────────────────────────────
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -1140,25 +1133,6 @@ impl From<PlayerSellOrder> for d::trade::PlayerSellOrder {
         Self {
             resource: v.resource.into(),
             quantity: v.quantity,
-        }
-    }
-}
-
-impl From<&d::trade::PlayerBuyOrder> for PlayerBuyOrder {
-    fn from(v: &d::trade::PlayerBuyOrder) -> Self {
-        Self {
-            resource: v.resource.into(),
-            quantity: v.quantity,
-            max_price_per_unit: v.max_price_per_unit.into(),
-        }
-    }
-}
-impl From<PlayerBuyOrder> for d::trade::PlayerBuyOrder {
-    fn from(v: PlayerBuyOrder) -> Self {
-        Self {
-            resource: v.resource.into(),
-            quantity: v.quantity,
-            max_price_per_unit: v.max_price_per_unit.into(),
         }
     }
 }

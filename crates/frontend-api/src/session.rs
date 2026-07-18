@@ -8,6 +8,9 @@ use std::path::{Path, PathBuf};
 
 pub struct Session {
     game: GameState,
+    /// Paused mid-turn session (card #494): present between
+    /// `turn_session::begin_turn` and `turn_session::finish_turn`.
+    pending_turn: Option<domain::turn::TurnSession>,
 }
 
 /// Metadata card for one save file in a saves directory (native save
@@ -61,7 +64,10 @@ pub fn list_saves(dir: &Path) -> Vec<SaveSummary> {
 impl Session {
     /// Wrap an already-created game (see [`crate::setup`] constructors).
     pub fn from_game(game: GameState) -> Self {
-        Session { game }
+        Session {
+            game,
+            pending_turn: None,
+        }
     }
 
     /// Load a session from a native save file (SaveFile v4, CLI-compatible).
@@ -71,7 +77,10 @@ impl Session {
             infrastructure::data_loader::load_embedded_game_data(),
         )
         .map_err(|e| ApiError::json(format!("load: {e}")))?;
-        Ok(Session { game })
+        Ok(Session {
+            game,
+            pending_turn: None,
+        })
     }
 
     /// Save to a native save file (compressed JSON envelope).
@@ -129,5 +138,15 @@ impl Session {
     /// Move the game out (used by async turn processing).
     pub fn into_game(self) -> GameState {
         self.game
+    }
+
+    /// The paused mid-turn session, if `turn_session::begin_turn` ran and
+    /// `turn_session::finish_turn` hasn't yet.
+    pub fn pending_turn(&self) -> Option<&domain::turn::TurnSession> {
+        self.pending_turn.as_ref()
+    }
+
+    pub(crate) fn pending_turn_mut(&mut self) -> &mut Option<domain::turn::TurnSession> {
+        &mut self.pending_turn
     }
 }

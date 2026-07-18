@@ -17,7 +17,7 @@ use bevy::tasks::{AsyncComputeTaskPool, Task, block_on};
 use frontend_api::Session;
 
 use crate::game::resources::{
-    CurrentTurnNews, DataVersion, DeferredProposals, GameMeta, SessionRes, TurnInfo,
+    CurrentTurnNews, DataVersion, DeferredProposals, GameMeta, SessionRes, TurnInfo, TurnSessionUi,
 };
 use crate::game::vm;
 use crate::state::{Screen, TurnPhase};
@@ -28,8 +28,18 @@ pub struct TurnOutcome {
     pub report: serde_json::Value,
 }
 
+/// In-flight `finish_turn` task (the second half of a single end turn).
 #[derive(Resource, Default)]
 pub struct ActiveTurn(pub Option<Task<TurnOutcome>>);
+
+pub struct BeginOutcome {
+    pub session: Session,
+}
+
+/// In-flight `begin_turn` task (the first half of a single end turn — up to
+/// the between-turns session pause, card #494).
+#[derive(Resource, Default)]
+pub struct ActiveBegin(pub Option<Task<BeginOutcome>>);
 
 /// What a skip run is asked to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,8 +77,36 @@ pub struct SkipRun {
 #[derive(Resource, Default)]
 pub struct BusyProgress(pub String);
 
-/// Move the session into an async end-turn task and enter `Processing`.
+/// Kick off an end turn: run the first half of the pipeline on the compute
+/// pool, pausing at the between-turns session (card #494). `poll_begin_task`
+/// routes to the diplomatic/trade sessions or straight to the finish half.
 pub fn start_end_turn(
+    session_res: &mut SessionRes,
+    begin: &mut ActiveBegin,
+    active: &mut ActiveTurn,
+    next_phase: &mut NextState<TurnPhase>,
+) {
+    if begin.0.is_some() || active.0.is_some() {
+        return;
+    }
+    let Some(mut session) = session_res.0.take() else {
+        return;
+    };
+    let task = AsyncComputeTaskPool::get().spawn(async move {
+        if let Err(err) = frontend_api::turn_session::begin_turn(&mut session) {
+            // Only reachable if a session were already pending — the phase
+            // machine prevents that, but don't lose the game if it happens.
+            warn!("begin_turn failed: {}", err.message());
+        }
+        BeginOutcome { session }
+    });
+    begin.0 = Some(task);
+    next_phase.set(TurnPhase::Processing);
+}
+
+/// Resume the paused turn: run the second half (trade resolution, combat,
+/// economy, newspaper) on the compute pool.
+pub fn start_finish_turn(
     session_res: &mut SessionRes,
     active: &mut ActiveTurn,
     next_phase: &mut NextState<TurnPhase>,
@@ -80,11 +118,56 @@ pub fn start_end_turn(
         return;
     };
     let task = AsyncComputeTaskPool::get().spawn(async move {
-        let report = frontend_api::turn::process_turn(session.game_mut());
+        let report = frontend_api::turn_session::finish_turn(&mut session)
+            .unwrap_or_else(|err| serde_json::json!({"error": err.message()}));
         TurnOutcome { session, report }
     });
     active.0 = Some(task);
     next_phase.set(TurnPhase::Processing);
+}
+
+/// Poll the in-flight begin task; on completion reinstate the session and
+/// enter the between-turns sessions — or, when there is nothing to show or
+/// decide, go straight into the finish half.
+pub fn poll_begin_task(
+    mut begin: ResMut<ActiveBegin>,
+    mut active: ResMut<ActiveTurn>,
+    mut session_res: ResMut<SessionRes>,
+    mut session_ui: ResMut<TurnSessionUi>,
+    mut data_version: ResMut<DataVersion>,
+    meta: Res<GameMeta>,
+    mut next_phase: ResMut<NextState<TurnPhase>>,
+) {
+    let Some(task) = begin.0.as_mut() else {
+        return;
+    };
+    let Some(outcome) = block_on(future::poll_once(task)) else {
+        return;
+    };
+    begin.0 = None;
+
+    let session = outcome.session;
+    let view = frontend_api::turn_session::session_view(&session)
+        .ok()
+        .and_then(|v| vm::parse_session_view(v).ok());
+    session_res.0 = Some(session);
+    // The map may now show mid-turn state (AI moves, new wars) behind the
+    // session panels.
+    data_version.0 += 1;
+
+    *session_ui = TurnSessionUi::default();
+    session_ui.view = view;
+
+    if crate::screens::session::sessions_suppressed() {
+        // Debug/perf flows expect Idle right after resolution.
+        start_finish_turn(&mut session_res, &mut active, &mut next_phase);
+    } else if session_ui.has_diplo_items() {
+        next_phase.set(TurnPhase::DiploSession);
+    } else if !meta.observer && session_ui.current_offer().is_some() {
+        next_phase.set(TurnPhase::TradeSession);
+    } else {
+        start_finish_turn(&mut session_res, &mut active, &mut next_phase);
+    }
 }
 
 /// Move the session into a multi-turn skip task and enter `Processing`.
@@ -173,25 +256,20 @@ fn headlines_match(report: &serde_json::Value, needle: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Poll the in-flight turn task; on completion reinstate the session, bump
-/// the data version so view models and layers refresh, and return to `Idle`.
-/// The resolved turn's headlines and battles are stashed in
-/// [`CurrentTurnNews`] and the newspaper interstitial opens. War declarations
-/// addressed to the player are auto-acknowledged with a toast; any remaining
-/// proposals are deferred until the newspaper is dismissed (web end-turn
-/// order: turn → newspaper → proposal modal).
+/// Poll the in-flight finish task; on completion reinstate the session,
+/// stash the resolved turn's news, and show the trade summary (card #494)
+/// before the newspaper interstitial. Proposals were already answered in
+/// the diplomatic session, so no proposal modal is deferred here.
 #[allow(clippy::too_many_arguments)]
 pub fn poll_turn_task(
     mut active: ResMut<ActiveTurn>,
     mut session_res: ResMut<SessionRes>,
+    mut session_ui: ResMut<TurnSessionUi>,
     mut data_version: ResMut<DataVersion>,
     mut turn_info: ResMut<TurnInfo>,
     mut next_phase: ResMut<NextState<TurnPhase>>,
     mut next_screen: ResMut<NextState<Screen>>,
-    meta: Res<GameMeta>,
-    mut deferred: ResMut<DeferredProposals>,
     mut news: ResMut<CurrentTurnNews>,
-    mut toasts: MessageWriter<Toast>,
 ) {
     let Some(task) = active.0.as_mut() else {
         return;
@@ -200,19 +278,34 @@ pub fn poll_turn_task(
         return;
     };
     active.0 = None;
-    finish_resolved_turns(
-        outcome.session,
-        Some(&outcome.report),
-        &mut session_res,
-        &mut data_version,
-        &mut turn_info,
-        &mut next_phase,
-        &mut next_screen,
-        &meta,
-        &mut deferred,
+
+    let session = outcome.session;
+    let turn = session.game().turn;
+    turn_info.label = format!("{turn}");
+    turn_info.year = turn.year();
+    stash_report(
         &mut news,
-        &mut toasts,
+        &outcome.report,
+        turn.0,
+        turn.year(),
+        turn.quarter(),
     );
+
+    let player_trades = vm::parse_player_trades(outcome.report["report"]["player_trades"].clone())
+        .unwrap_or_default();
+
+    session_res.0 = Some(session);
+    data_version.0 += 1;
+
+    if player_trades.is_empty() || crate::screens::session::sessions_suppressed() {
+        *session_ui = TurnSessionUi::default();
+        next_phase.set(TurnPhase::Idle);
+        next_screen.set(Screen::News);
+    } else {
+        *session_ui = TurnSessionUi::default();
+        session_ui.summary = player_trades;
+        next_phase.set(TurnPhase::Summary);
+    }
 }
 
 /// Poll the in-flight skip task: stream progress into [`BusyProgress`], and

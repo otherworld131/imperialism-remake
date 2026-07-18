@@ -22,9 +22,9 @@ use crate::screens::common::{full_screen_root, spawn_icon, split_camel};
 use crate::state::Screen;
 use crate::theme::{self, Theme};
 use crate::widgets::{
-    self, ButtonActivated, ButtonProps, CheckboxProps, CheckboxToggled, ColumnSpec, ModalProps,
-    ModalStack, MultiDropdownChanged, MultiDropdownProps, ScrollProps, SliderCommitted,
-    SliderProps, TableProps, TooltipText, UiMultiDropdown, UiTable,
+    self, ButtonActivated, ButtonProps, CheckboxProps, CheckboxToggled, ColumnSpec,
+    MultiDropdownChanged, MultiDropdownProps, ScrollProps, SliderCommitted, SliderProps,
+    TableProps, TooltipText, UiMultiDropdown, UiTable,
 };
 
 const IMPORT_RED: Color = Color::srgb_u8(0xe6, 0x39, 0x46);
@@ -61,10 +61,10 @@ pub struct TradeHeaderStats;
 pub struct SellColumn;
 
 #[derive(Component)]
-pub struct OffersFilterBar;
+pub struct WishlistAnchor;
 
 #[derive(Component)]
-pub struct OffersTableAnchor;
+pub struct LastSessionAnchor;
 
 #[derive(Component)]
 pub struct PartnersAnchor;
@@ -103,24 +103,16 @@ pub struct SubsidyButton {
 #[derive(Component)]
 pub struct TradeSellSlider(pub String);
 
+/// Wishlist checkbox for one resource (card #494): toggling emits
+/// [`GameCommand::SetBuyWishlist`].
 #[derive(Component)]
-pub struct TradeBuyButton(pub String);
-
-#[derive(Component)]
-pub struct BuyQtySlider;
-
-#[derive(Component)]
-pub struct BuyConfirmButton;
-
-#[derive(Component)]
-pub struct CancelBuyButton;
+pub struct WishlistCheckbox(pub String);
 
 #[derive(Component)]
 pub struct HistSplitCheckbox;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FilterTable {
-    Offers,
     History,
     Market,
 }
@@ -156,18 +148,9 @@ pub struct TurnButton {
     pub turn: u32,
 }
 
-#[derive(Clone)]
-pub struct BuyModalState {
-    pub resource: String,
-    pub price: i64,
-    pub qty: u32,
-}
-
 /// Screen-local trade UI state (filters, selected turns, buy modal).
 #[derive(Resource, Default)]
 pub struct TradeUi {
-    pub offer_commodity: HashSet<String>,
-    pub offer_country: HashSet<u32>,
     pub hist_commodity: HashSet<String>,
     pub hist_country: HashSet<u32>,
     pub market_commodity: HashSet<String>,
@@ -175,18 +158,11 @@ pub struct TradeUi {
     pub hist_split: bool,
     pub hist_turn: Option<u32>,
     pub market_turn: Option<u32>,
-    pub buy: Option<BuyModalState>,
 }
 
 impl TradeUi {
     fn filter_set(&mut self, table: FilterTable, kind: FilterKind) -> FilterSetMut<'_> {
         match (table, kind) {
-            (FilterTable::Offers, FilterKind::Commodity) => {
-                FilterSetMut::Commodity(&mut self.offer_commodity)
-            }
-            (FilterTable::Offers, FilterKind::Country) => {
-                FilterSetMut::Country(&mut self.offer_country)
-            }
             (FilterTable::History, FilterKind::Commodity) => {
                 FilterSetMut::Commodity(&mut self.hist_commodity)
             }
@@ -309,7 +285,12 @@ pub fn enter_trade(mut commands: Commands, theme: Res<Theme>, mut ui: ResMut<Tra
         let tabs = widgets::spawn_tabs(
             panel,
             &theme,
-            &["Orders", "Historical Country", "Historical Market"],
+            &[
+                "Orders",
+                "Last Session",
+                "Historical Country",
+                "Historical Market",
+            ],
             0,
         );
         let mut commands = panel.commands();
@@ -350,7 +331,7 @@ pub fn enter_trade(mut commands: Commands, theme: Res<Theme>, mut ui: ResMut<Tra
                         row,
                         &theme,
                         ScrollProps {
-                            width: Val::Percent(40.0),
+                            width: Val::Percent(46.0),
                             height: Val::Percent(100.0),
                             ..default()
                         },
@@ -360,34 +341,37 @@ pub fn enter_trade(mut commands: Commands, theme: Res<Theme>, mut ui: ResMut<Tra
                         row,
                         &theme,
                         ScrollProps {
-                            width: Val::Percent(60.0),
+                            width: Val::Percent(54.0),
                             height: Val::Percent(100.0),
                             ..default()
                         },
                     );
                     row.commands().entity(buy.content).with_children(|col| {
                         col.spawn((
-                            Text::new("Buy Orders"),
+                            Text::new("Buy Wishlist"),
                             theme.font_bold(15.0),
                             TextColor(theme::GOLD),
                         ));
                         col.spawn((
-                            Text::new("AVAILABLE ON MARKET"),
-                            theme.font(9.5),
+                            Text::new(
+                                "Tick what you want to import. Sellers approach \
+                                 you one by one during the end turn — you pick \
+                                 amounts and prices there.",
+                            ),
+                            theme.font(11.0),
                             TextColor(theme::TEXT_DIM),
                             Node {
                                 margin: UiRect::vertical(Val::Px(4.0)),
                                 ..default()
                             },
                         ));
-                        col.spawn((filter_bar_node(), OffersFilterBar));
                         col.spawn((
                             Node {
                                 flex_direction: FlexDirection::Column,
                                 width: Val::Percent(100.0),
                                 ..default()
                             },
-                            OffersTableAnchor,
+                            WishlistAnchor,
                         ));
                         col.spawn((
                             Node {
@@ -402,8 +386,25 @@ pub fn enter_trade(mut commands: Commands, theme: Res<Theme>, mut ui: ResMut<Tra
                 });
         });
 
+        // Last Session tab (card #494): read-only report of the last end
+        // turn's trades.
+        commands.entity(tabs.panels[1]).with_children(|session| {
+            let table = widgets::spawn_scroll_area(
+                session,
+                &theme,
+                ScrollProps {
+                    flex_grow: 1.0,
+                    ..default()
+                },
+            );
+            session
+                .commands()
+                .entity(table.content)
+                .insert(LastSessionAnchor);
+        });
+
         // Historical Country tab.
-        commands.entity(tabs.panels[1]).with_children(|hist| {
+        commands.entity(tabs.panels[2]).with_children(|hist| {
             hist.spawn(Node {
                 flex_direction: FlexDirection::Row,
                 column_gap: Val::Px(12.0),
@@ -448,7 +449,7 @@ pub fn enter_trade(mut commands: Commands, theme: Res<Theme>, mut ui: ResMut<Tra
         });
 
         // Historical Market tab.
-        commands.entity(tabs.panels[2]).with_children(|market| {
+        commands.entity(tabs.panels[3]).with_children(|market| {
             market
                 .spawn(Node {
                     flex_direction: FlexDirection::Row,
@@ -525,7 +526,6 @@ pub fn update_trade_static(
     added: Query<(), Added<TradeRoot>>,
     header: Query<Entity, With<TradeHeaderStats>>,
     sell: Query<Entity, With<SellColumn>>,
-    offers_bar: Query<Entity, With<OffersFilterBar>>,
     partners: Query<Entity, With<PartnersAnchor>>,
     hist_controls: Query<Entity, With<HistControls>>,
 ) {
@@ -636,40 +636,6 @@ pub fn update_trade_static(
         commands.entity(sell).despawn_children();
         commands.entity(sell).with_children(|col| {
             build_sell_column(col, &theme, icons, trade, observer);
-        });
-    }
-
-    // Offer filters.
-    if let Ok(bar) = offers_bar.single() {
-        commands.entity(bar).despawn_children();
-        let mut commodities: Vec<String> = trade
-            .available_offers
-            .iter()
-            .map(|o| o.resource.clone())
-            .collect();
-        commodities.sort();
-        commodities.dedup();
-        let mut countries: Vec<(u32, String, bool)> = Vec::new();
-        for offer in &trade.available_offers {
-            if !countries.iter().any(|(id, _, _)| *id == offer.seller_id) {
-                countries.push((
-                    offer.seller_id,
-                    offer.seller_name.clone(),
-                    offer.is_great_power,
-                ));
-            }
-        }
-        countries.sort_by(|a, b| a.1.cmp(&b.1));
-        commands.entity(bar).with_children(|bar| {
-            build_filter_bar(
-                bar,
-                &theme,
-                FilterTable::Offers,
-                &commodities,
-                &countries,
-                &ui.offer_commodity,
-                &ui.offer_country,
-            );
         });
     }
 
@@ -887,7 +853,7 @@ fn build_sell_column(
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
                 column_gap: Val::Px(4.0),
-                width: Val::Px(110.0),
+                width: Val::Px(88.0),
                 flex_shrink: 0.0,
                 ..default()
             })
@@ -908,7 +874,7 @@ fn build_sell_column(
                     item.stock
                 )),
                 Node {
-                    width: Val::Px(36.0),
+                    width: Val::Px(30.0),
                     flex_shrink: 0.0,
                     ..default()
                 },
@@ -918,7 +884,7 @@ fn build_sell_column(
                 theme.font(11.5),
                 TextColor(theme::GOLD),
                 Node {
-                    width: Val::Px(44.0),
+                    width: Val::Px(38.0),
                     flex_shrink: 0.0,
                     ..default()
                 },
@@ -932,7 +898,7 @@ fn build_sell_column(
                     max: item.stock as f32,
                     step: 1.0,
                     value: qty as f32,
-                    width: Val::Px(120.0),
+                    width: Val::Px(80.0),
                     format: Some(Arc::new(move |v| format!("{v:.0}/{stock_for_label}"))),
                     ..default()
                 },
@@ -1080,7 +1046,8 @@ pub fn update_trade_tables(
     icons: Option<Res<IconAssets>>,
     mut commands: Commands,
     added: Query<(), Added<TradeRoot>>,
-    offers_anchor: Query<Entity, With<OffersTableAnchor>>,
+    wishlist_anchor: Query<Entity, With<WishlistAnchor>>,
+    session_anchor: Query<Entity, With<LastSessionAnchor>>,
     hist_sidebar: Query<Entity, With<HistSidebar>>,
     hist_anchor: Query<Entity, With<HistTableAnchor>>,
     market_sidebar: Query<Entity, With<MarketSidebar>>,
@@ -1092,7 +1059,7 @@ pub fn update_trade_tables(
     if !vms.is_changed() && !ui.is_changed() && added.is_empty() {
         return;
     }
-    let Ok(offers_anchor) = offers_anchor.single() else {
+    let Ok(wishlist_anchor) = wishlist_anchor.single() else {
         return;
     };
     let Some(trade) = vms.trade.as_ref() else {
@@ -1107,12 +1074,20 @@ pub fn update_trade_tables(
             .and_then(|(_, table)| table.sort)
     };
 
-    // Offers table.
-    let sort = prev_sort(offers_anchor).or(Some((0, true)));
-    commands.entity(offers_anchor).despawn_children();
-    commands.entity(offers_anchor).with_children(|anchor| {
-        build_offers_table(anchor, &theme, icons, trade, &ui, observer, sort);
+    // Buy wishlist (card #494).
+    commands.entity(wishlist_anchor).despawn_children();
+    commands.entity(wishlist_anchor).with_children(|anchor| {
+        build_wishlist_column(anchor, &theme, icons, trade, observer);
     });
+
+    // Last Session report.
+    if let Ok(anchor) = session_anchor.single() {
+        let sort = prev_sort(anchor).or(Some((0, true)));
+        commands.entity(anchor).despawn_children();
+        commands.entity(anchor).with_children(|anchor| {
+            build_last_session_table(anchor, &theme, icons, trade, sort);
+        });
+    }
 
     // History sidebar + table.
     if let Ok(sidebar) = hist_sidebar.single() {
@@ -1278,72 +1253,113 @@ fn turn_button(
     }
 }
 
-fn build_offers_table(
+/// The buy-wishlist checklist (card #494): one row per resource with a
+/// checkbox, the commodity icon, and the current market price as a hint.
+fn build_wishlist_column(
     anchor: &mut ChildSpawnerCommands,
     theme: &Theme,
     icons: Option<&IconAssets>,
     trade: &TradeVm,
-    ui: &TradeUi,
     observer: bool,
+) {
+    let icon_map = commodity_icon_map(icons);
+    for &resource in RESOURCES {
+        let wanted = trade.buy_wishlist.iter().any(|r| r == resource);
+        let price = trade
+            .market_prices
+            .iter()
+            .find(|m| m.resource == resource)
+            .map(|m| m.base_price)
+            .unwrap_or(0);
+        anchor
+            .spawn(Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(8.0),
+                padding: UiRect::vertical(Val::Px(3.0)),
+                ..default()
+            })
+            .with_children(|row| {
+                let checkbox = widgets::spawn_checkbox(
+                    row,
+                    theme,
+                    widgets::CheckboxProps {
+                        label: String::new(),
+                        checked: wanted,
+                        enabled: !observer,
+                    },
+                );
+                row.commands()
+                    .entity(checkbox)
+                    .insert(WishlistCheckbox(resource.to_string()));
+                commodity_cell(row, theme, &icon_map, resource);
+                row.spawn((
+                    Text::new(format!("mkt ~${price}")),
+                    theme.font(11.5),
+                    TextColor(theme::TEXT_DIM),
+                ));
+            });
+    }
+}
+
+/// Read-only report of the last end turn's trades (card #494): the same
+/// rows the trade-summary interstitial showed, kept browsable here.
+fn build_last_session_table(
+    anchor: &mut ChildSpawnerCommands,
+    theme: &Theme,
+    icons: Option<&IconAssets>,
+    trade: &TradeVm,
     sort: Option<(usize, bool)>,
 ) {
-    let rows: Vec<Vec<String>> = trade
-        .available_offers
-        .iter()
-        .filter(|o| {
-            (ui.offer_commodity.is_empty() || ui.offer_commodity.contains(&o.resource))
-                && (ui.offer_country.is_empty() || ui.offer_country.contains(&o.seller_id))
-        })
-        .map(|o| {
-            vec![
-                o.resource.clone(),
-                o.seller_name.clone(),
-                o.quantity.to_string(),
-                o.price.to_string(),
-                if o.is_great_power { "1" } else { "0" }.to_string(),
-                o.resource.clone(),
-            ]
-        })
-        .collect();
-    if rows.is_empty() {
+    let Some(last_turn) = trade.trade_history.iter().map(|h| h.turn).max() else {
         anchor.spawn((
-            Text::new("No offers match the filters."),
+            Text::new("No trades yet — the report fills in after the next end turn."),
             theme.font_italic(12.0),
             TextColor(theme::TEXT_DIM),
         ));
         return;
-    }
+    };
+    let rows: Vec<Vec<String>> = trade
+        .trade_history
+        .iter()
+        .filter(|h| h.turn == last_turn)
+        .map(|h| {
+            vec![
+                h.resource.clone(),
+                if h.bought { "Bought" } else { "Sold" }.to_string(),
+                h.partner_name.clone(),
+                h.quantity.to_string(),
+                if h.bought {
+                    format!("-{}", h.total_cost)
+                } else {
+                    h.total_cost.to_string()
+                },
+            ]
+        })
+        .collect();
+    anchor.spawn((
+        Text::new(format!("Trades resolved on turn {last_turn}")),
+        theme.font(11.0),
+        TextColor(theme::TEXT_DIM),
+        Node {
+            margin: UiRect::bottom(Val::Px(6.0)),
+            ..default()
+        },
+    ));
     let icon_map = commodity_icon_map(icons);
     let builder: widgets::CellBuilder = Arc::new(move |cell, theme, _row, col, value| match col {
         0 => commodity_cell(cell, theme, &icon_map, value),
-        3 => {
+        1 => {
+            let bought = value == "Bought";
             cell.spawn((
-                Text::new(format!("${value}")),
-                theme.font(12.5),
-                TextColor(theme::GOLD),
+                Text::new(value),
+                theme.font_bold(11.5),
+                TextColor(if bought { IMPORT_RED } else { EXPORT_GREEN }),
             ));
         }
         4 => {
-            cell.spawn((
-                Text::new(if value == "1" { "GP" } else { "" }),
-                theme.font_bold(10.5),
-                TextColor(theme::GOLD),
-            ));
-        }
-        5 => {
-            let button = widgets::spawn_button(
-                cell,
-                theme,
-                ButtonProps {
-                    label: "Buy".into(),
-                    font_size: 11.0,
-                    enabled: !observer,
-                    ..default()
-                },
-            );
-            cell.commands()
-                .entity(button)
-                .insert(TradeBuyButton(value.to_string()));
+            let (label, color) = signed_cost(value);
+            cell.spawn((Text::new(label), theme.font(12.5), TextColor(color)));
         }
         _ => {
             cell.spawn((Text::new(value), theme.font(12.5), TextColor(theme::TEXT)));
@@ -1355,12 +1371,10 @@ fn build_offers_table(
         TableProps {
             columns: vec![
                 ColumnSpec::new("Item", 1.6),
-                ColumnSpec::new("Seller", 1.8),
-                ColumnSpec::new("Avail", 0.8).numeric(),
-                ColumnSpec::new("Price", 0.8).numeric(),
-                ColumnSpec::new("GP", 0.35)
-                    .with_tooltip("Great Power — badge marks trades with the seven major nations"),
-                ColumnSpec::new("", 0.8),
+                ColumnSpec::new("Direction", 0.9),
+                ColumnSpec::new("Partner", 1.8),
+                ColumnSpec::new("Qty", 0.6).numeric(),
+                ColumnSpec::new("Amount", 0.9).numeric(),
             ],
             sortable: true,
             rows,
@@ -1750,25 +1764,18 @@ fn signed_cost(value: &str) -> (String, Color) {
 
 pub fn handle_trade_buttons(
     mut activations: MessageReader<ButtonActivated>,
-    vms: Res<ViewModels>,
-    theme: Res<Theme>,
     mut ui: ResMut<TradeUi>,
-    mut commands: Commands,
-    mut modal_stack: ResMut<ModalStack>,
     mut out: MessageWriter<GameCommand>,
     mut next_screen: ResMut<NextState<Screen>>,
     buttons: (
         Query<(), With<TradeCloseButton>>,
         Query<&SubsidyButton>,
-        Query<&TradeBuyButton>,
-        Query<(), With<BuyConfirmButton>>,
-        Query<(), With<CancelBuyButton>>,
         Query<&TurnButton>,
         Query<&TradeChip>,
     ),
     mut dropdowns: Query<(&TradeFilterDropdown, &FilterValues, &mut UiMultiDropdown)>,
 ) {
-    let (close, subsidy, buy, confirm, cancel, turns, chips) = buttons;
+    let (close, subsidy, turns, chips) = buttons;
     for ButtonActivated(entity) in activations.read() {
         let entity = *entity;
         if close.contains(entity) {
@@ -1778,29 +1785,6 @@ pub fn handle_trade_buttons(
                 nation_id: subsidy.nation_id,
                 amount: subsidy.amount,
             });
-        } else if let Ok(buy) = buy.get(entity) {
-            open_buy_modal(
-                &buy.0,
-                &vms,
-                &theme,
-                &mut ui,
-                &mut commands,
-                &mut modal_stack,
-            );
-        } else if confirm.contains(entity) {
-            if let Some(state) = ui.buy.take() {
-                // Web parity: max price = ceil(offer price × 1.2).
-                let max_price = (state.price * 6 + 4) / 5;
-                out.write(GameCommand::SetBuyOrder {
-                    resource: state.resource,
-                    quantity: state.qty,
-                    max_price,
-                });
-            }
-            widgets::close_top_modal(&mut commands, &mut modal_stack);
-        } else if cancel.contains(entity) {
-            ui.buy = None;
-            widgets::close_top_modal(&mut commands, &mut modal_stack);
         } else if let Ok(turn) = turns.get(entity) {
             match turn.table {
                 FilterTable::History => {
@@ -1811,7 +1795,6 @@ pub fn handle_trade_buttons(
                     };
                 }
                 FilterTable::Market => ui.market_turn = Some(turn.turn),
-                FilterTable::Offers => {}
             }
         } else if let Ok(chip) = chips.get(entity) {
             let mut set = ui.filter_set(chip.table, chip.kind);
@@ -1839,103 +1822,9 @@ pub fn handle_trade_buttons(
     }
 }
 
-fn open_buy_modal(
-    resource: &str,
-    vms: &ViewModels,
-    theme: &Theme,
-    ui: &mut TradeUi,
-    commands: &mut Commands,
-    modal_stack: &mut ModalStack,
-) {
-    let Some(trade) = vms.trade.as_ref() else {
-        return;
-    };
-    // Web parity: the modal keys off the first offer with this resource.
-    let Some(offer) = trade
-        .available_offers
-        .iter()
-        .find(|o| o.resource == resource)
-    else {
-        return;
-    };
-    let max_qty = offer.quantity.min(trade.remaining_cargo).max(1);
-    ui.buy = Some(BuyModalState {
-        resource: resource.to_string(),
-        price: offer.price,
-        qty: 1,
-    });
-    let handles = widgets::open_modal(
-        commands,
-        modal_stack,
-        theme,
-        ModalProps {
-            title: format!("Buy {}", split_camel(resource)),
-            width: Val::Px(380.0),
-        },
-    );
-    let price = offer.price;
-    commands.entity(handles.content).with_children(|content| {
-        content
-            .spawn(Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(8.0),
-                ..default()
-            })
-            .with_children(|row| {
-                row.spawn((
-                    Text::new("Quantity:"),
-                    theme.font(13.0),
-                    TextColor(theme::TEXT),
-                ));
-                let max = max_qty;
-                let slider = widgets::spawn_slider(
-                    row,
-                    theme,
-                    SliderProps {
-                        min: 1.0,
-                        max: max as f32,
-                        step: 1.0,
-                        value: 1.0,
-                        width: Val::Px(170.0),
-                        format: Some(Arc::new(move |v| format!("{v:.0} / {max}"))),
-                        unlimited: false,
-                    },
-                );
-                row.commands().entity(slider).insert(BuyQtySlider);
-            });
-        content.spawn((
-            Text::new(format!("Market price: ${price} per unit")),
-            theme.font(12.0),
-            TextColor(theme::TEXT_DIM),
-        ));
-        content
-            .spawn(Node {
-                flex_direction: FlexDirection::Row,
-                justify_content: JustifyContent::FlexEnd,
-                column_gap: Val::Px(8.0),
-                ..default()
-            })
-            .with_children(|row| {
-                let cancel = widgets::spawn_button(row, theme, ButtonProps::label("Cancel"));
-                row.commands().entity(cancel).insert(CancelBuyButton);
-                let confirm = widgets::spawn_button(
-                    row,
-                    theme,
-                    ButtonProps::label(format!("Buy 1 for ~${price}")),
-                );
-                row.commands().entity(confirm).insert(BuyConfirmButton);
-            });
-    });
-}
-
 pub fn handle_trade_sliders(
     mut commits: MessageReader<SliderCommitted>,
     sell: Query<&TradeSellSlider>,
-    buy_qty: Query<(), With<BuyQtySlider>>,
-    confirm_buttons: Query<&Children, With<BuyConfirmButton>>,
-    mut labels: Query<&mut Text>,
-    mut ui: ResMut<TradeUi>,
     mut out: MessageWriter<GameCommand>,
 ) {
     for commit in commits.read() {
@@ -1944,21 +1833,6 @@ pub fn handle_trade_sliders(
                 resource: slider.0.clone(),
                 quantity: commit.as_u32(),
             });
-        } else if buy_qty.contains(commit.entity) {
-            let qty = commit.as_u32().max(1);
-            let price = if let Some(buy) = ui.buy.as_mut() {
-                buy.qty = qty;
-                buy.price
-            } else {
-                continue;
-            };
-            for children in &confirm_buttons {
-                for child in children {
-                    if let Ok(mut text) = labels.get_mut(*child) {
-                        **text = format!("Buy {qty} for ~${}", price * qty as i64);
-                    }
-                }
-            }
         }
     }
 }
@@ -1999,12 +1873,18 @@ pub fn handle_hist_split(
 pub fn handle_auto_trade_checkbox(
     mut toggles: MessageReader<widgets::CheckboxToggled>,
     boxes: Query<(), With<AutoTradeCheckbox>>,
+    wishlist: Query<&WishlistCheckbox>,
     mut out: MessageWriter<GameCommand>,
 ) {
     for toggle in toggles.read() {
         if boxes.contains(toggle.entity) {
             out.write(GameCommand::SetAutoTradeWithMinors {
                 enabled: toggle.checked,
+            });
+        } else if let Ok(entry) = wishlist.get(toggle.entity) {
+            out.write(GameCommand::SetBuyWishlist {
+                resource: entry.0.clone(),
+                wanted: toggle.checked,
             });
         }
     }

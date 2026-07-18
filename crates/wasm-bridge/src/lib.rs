@@ -599,23 +599,14 @@ pub fn wasm_set_player_sell_order(
 }
 
 #[wasm_bindgen]
-pub fn wasm_set_player_buy_order(
+pub fn wasm_set_buy_wishlist(
     game_json: &str,
     nation_id: u32,
-    commodity_type: &str,
-    commodity_name: &str,
-    quantity: u32,
-    max_price: i64,
+    resource_name: &str,
+    wanted: bool,
 ) -> String {
     run_command(game_json, |g| {
-        frontend_api::trade::set_player_buy_order(
-            g,
-            nation_id,
-            commodity_type,
-            commodity_name,
-            quantity,
-            max_price,
-        )
+        frontend_api::trade::set_buy_wishlist(g, nation_id, resource_name, wanted)
     })
 }
 

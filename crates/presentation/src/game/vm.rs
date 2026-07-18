@@ -552,6 +552,9 @@ pub struct FoodRequirementVm {
 pub struct TradeVm {
     #[serde(default = "default_true")]
     pub auto_trade_with_minors: bool,
+    /// Current market price per resource (wishlist price hints).
+    #[serde(default)]
+    pub market_prices: Vec<MarketPriceVm>,
     pub available_offers: Vec<TradeOfferVm>,
     #[serde(default)]
     pub market_archive: Vec<MarketTurnVm>,
@@ -559,8 +562,10 @@ pub struct TradeVm {
     pub sellable_resources: Vec<SellableVm>,
     #[serde(default)]
     pub player_sell_orders: Vec<PlayerSellOrderVm>,
+    /// Resources the player wants offered in the end-turn trade session
+    /// (card #494), as `ResourceType` debug names.
     #[serde(default)]
-    pub player_buy_orders: Vec<PlayerBuyOrderVm>,
+    pub buy_wishlist: Vec<String>,
     pub remaining_cargo: u32,
     pub total_cargo: u32,
     #[serde(default)]
@@ -572,6 +577,13 @@ pub struct TradeVm {
 
 fn default_true() -> bool {
     true
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct MarketPriceVm {
+    pub resource: String,
+    pub base_price: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -638,15 +650,6 @@ pub struct PlayerSellOrderVm {
     pub quantity: u32,
     #[serde(default)]
     pub price: i64,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
-pub struct PlayerBuyOrderVm {
-    pub commodity_name: String,
-    pub quantity: u32,
-    #[serde(default)]
-    pub max_price: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -757,6 +760,53 @@ pub struct ProposalVm {
     pub display_text: String,
     pub turn_proposed: u32,
     pub turns_until_expiry: u32,
+}
+
+// ── Between-turns session (`frontend_api::turn_session::session_view`) ──
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct SessionViewVm {
+    pub observer: bool,
+    pub diplo_events: Vec<DiploEventVm>,
+    pub proposals: Vec<ProposalVm>,
+    pub offers: Vec<SessionOfferVm>,
+    pub treasury: i64,
+    pub money_committed: i64,
+    pub cargo_capacity: u32,
+    pub cargo_committed: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct DiploEventVm {
+    pub text: String,
+    /// Headline category (`"War" | "Diplomacy" | "Politics"`).
+    pub category: String,
+    pub nation_ids: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SessionOfferVm {
+    pub seller_id: u32,
+    pub seller_name: String,
+    pub resource: String,
+    pub remaining: u32,
+    pub price: i64,
+    pub relation_score: i64,
+}
+
+/// One row of the post-turn trade summary (`report.player_trades`).
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct PlayerTradeVm {
+    pub resource: String,
+    pub quantity: u32,
+    pub partner_id: u32,
+    pub partner_name: String,
+    pub price_per_unit: i64,
+    pub total_cost: i64,
+    pub bought: bool,
 }
 
 // ── Tech screen (`frontend_api::tech::get_tech_screen_data`) ────────────
@@ -1264,6 +1314,16 @@ pub fn parse_diplomacy_screen(
 }
 
 pub fn parse_proposals(value: serde_json::Value) -> Result<ProposalsVm, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
+pub fn parse_session_view(value: serde_json::Value) -> Result<SessionViewVm, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
+pub fn parse_player_trades(
+    value: serde_json::Value,
+) -> Result<Vec<PlayerTradeVm>, serde_json::Error> {
     serde_json::from_value(value)
 }
 

@@ -22,6 +22,7 @@ pub mod tech;
 pub mod trade;
 pub mod transport;
 pub mod turn;
+pub mod turn_session;
 pub mod units;
 
 pub mod guards;

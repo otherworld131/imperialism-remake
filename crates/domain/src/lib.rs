@@ -112,6 +112,7 @@ macro_rules! test_game_state {
                 market_archive: Vec::new(),
             },
             transient: $crate::game_state::TransientState {
+                trade_session: None,
                 events: $events,
                 pending_attacks: $pending_attacks,
                 pending_moves: $pending_moves,

@@ -31,6 +31,7 @@ use crate::turn::economy_phase::{apply_blockade_effects, apply_maintenance, tick
 use crate::turn::news_phase::generate_newspaper;
 use crate::turn::rewards_phase::resolve_rewards;
 use crate::turn::scoring::{CouncilVoteResult, calculate_score, run_council_vote};
+use crate::turn::session::TurnSession;
 use crate::types::*;
 use std::collections::{HashMap, HashSet};
 
@@ -276,7 +277,20 @@ fn clear_economy_batch_reservations(game: &mut GameState) {
 }
 
 /// Process one turn of the game.
+/// Process one full turn atomically: the two session halves composed with
+/// no interactive decisions. Batch runs, observers, skip runs, and tests
+/// all use this path; the interactive GUI calls `begin_turn` / `finish_turn`
+/// directly with the player's session decisions in between (card #494).
 pub fn process_turn(game: &mut GameState) -> TurnReport {
+    let session = begin_turn(game);
+    finish_turn(game, session)
+}
+
+/// First half of the turn: player pending diplomacy, AI decisions,
+/// diplomacy resolution, civilian/unit upkeep, and the pre-trade economy
+/// phases (collection, transport, production). Pauses with a [`TurnSession`]
+/// carrying the frozen trade-offer pool and the diplomatic changes to show.
+pub fn begin_turn(game: &mut GameState) -> TurnSession {
     let turn = game.turn;
     let mut report = TurnReport {
         turn,
@@ -382,7 +396,44 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // 0d. Resolve civilian actions (tick working civilians, apply improvements)
     resolve_civilian_actions(game, &mut report);
 
-    run_pre_immigration_phases(game, &mut report);
+    // Economy phases up to (not including) trade: collection, transport,
+    // monetary conversion, production, town production.
+    run_economy_pre_trade(game, &mut report);
+
+    // Freeze the trade-offer pool — the interactive trade session shows
+    // exactly these offers, and `finish_turn` resolves against them.
+    let offers = super::trade_phase::build_offer_pool(game);
+    let human_id = game.human_player_nation;
+    let player_cargo_capacity = {
+        let blockade = super::economy_phase::compute_blockade_capacity(game);
+        blockade.get(&human_id).copied().unwrap_or_else(|| {
+            game.get_nation(human_id)
+                .map(|n| n.total_cargo_capacity(&game.game_data))
+                .unwrap_or(0)
+        })
+    };
+    let diplo_events = super::session::collect_diplo_events(&report);
+
+    TurnSession {
+        report,
+        offers,
+        accepted: Vec::new(),
+        interactive: false,
+        diplo_events,
+        player_cargo_capacity,
+    }
+}
+
+/// Second half of the turn: trade resolution (honoring the session's
+/// accepted trades), the post-trade economy phases, military movement and
+/// combat, tech, scoring, the newspaper, and turn advancement.
+pub fn finish_turn(game: &mut GameState, session: TurnSession) -> TurnReport {
+    let turn = session.report.turn;
+    let (mut report, prepared) = session.into_finish_parts();
+    game.transient.trade_session = Some(prepared);
+
+    // 3b–5. Trade phase (plan → reserve → execute) + buildings + food.
+    run_economy_trade_and_post(game, &mut report);
 
     // 5b. Pending immigration: process queued worker recruitment orders.
     process_pending_immigration(game, &mut report);
@@ -682,7 +733,9 @@ fn resolve_pending_direct_diplomacy_actions(game: &mut GameState, report: &mut T
     }
 }
 
-fn run_pre_immigration_phases(game: &mut GameState, report: &mut TurnReport) {
+/// Economy phases up to (not including) trade — the part that runs inside
+/// `begin_turn`, before the session pause.
+fn run_economy_pre_trade(game: &mut GameState, report: &mut TurnReport) {
     // 1. Economy phase: collect tile resources (plan → reserve → execute, Trello #161)
     // Only collect_resources fires here; production and trade run after their
     // interleaved steps (transport, monetary conversion, town production).
@@ -714,7 +767,14 @@ fn run_pre_immigration_phases(game: &mut GameState, report: &mut TurnReport) {
 
     // 3a. Town production: Villages and Towns produce materials and goods autonomously
     resolve_town_production(game, report);
+}
 
+/// Trade resolution and the remaining economy phases — the part that runs
+/// inside `finish_turn`, after the session pause.
+fn run_economy_trade_and_post(game: &mut GameState, report: &mut TurnReport) {
+    use crate::turn::economy_phase::{
+        EconomicOrderKind, collect_economic_orders, execute_reserved_economy, validate_and_reserve,
+    };
     // 3b. Trade phase (plan → reserve → execute; blockade capacity computed inside)
     let trade_orders: Vec<_> = collect_economic_orders(game)
         .into_iter()
@@ -729,6 +789,13 @@ fn run_pre_immigration_phases(game: &mut GameState, report: &mut TurnReport) {
 
     // 5. Food consumption
     food_consumption(game, report);
+}
+
+/// Atomic composition of the economy phases around the trade pause point,
+/// kept for the immigration-capacity projection (which runs on a clone).
+fn run_pre_immigration_phases(game: &mut GameState, report: &mut TurnReport) {
+    run_economy_pre_trade(game, report);
+    run_economy_trade_and_post(game, report);
 }
 
 pub fn projected_immigration_queue_capacity(game: &GameState, nation_id: NationId) -> u32 {

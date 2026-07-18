@@ -178,21 +178,13 @@ pub fn get_trade_data(game: &GameState, nation_id: u32) -> Result<serde_json::Va
         })
         .collect();
 
-    // Player buy orders (resources only)
-    let player_buy_orders: Vec<serde_json::Value> = nation
+    // Buy wishlist (card #494): resources the player wants offered in the
+    // end-turn trade session.
+    let buy_wishlist: Vec<serde_json::Value> = nation
         .diplomacy
-        .player_buy_orders
+        .buy_wishlist
         .iter()
-        .map(|o| {
-            let name = format!("{:?}", o.resource);
-            serde_json::json!({
-                "commodity_type": "resource",
-                "commodity_name": name.clone(),
-                "resource": name,
-                "quantity": o.quantity,
-                "max_price": o.max_price_per_unit.as_dollars(),
-            })
-        })
+        .map(|r| serde_json::json!(format!("{r:?}")))
         .collect();
 
     // Available offers from minor nations — use the same seeded withholding path as trade resolution
@@ -274,19 +266,13 @@ pub fn get_trade_data(game: &GameState, nation_id: u32) -> Result<serde_json::Va
         })
         .collect();
 
-    // Remaining cargo after current orders
+    // Remaining cargo after current sell orders. Session buys are capped
+    // against cargo at accept time, not here.
     let orders_qty: u32 = nation
         .diplomacy
         .player_sell_orders
         .iter()
         .map(|o| o.quantity)
-        .chain(
-            nation
-                .diplomacy
-                .player_buy_orders
-                .iter()
-                .map(|o| o.quantity),
-        )
         .sum();
     let remaining_cargo = total_cargo.saturating_sub(orders_qty);
 
@@ -369,7 +355,7 @@ pub fn get_trade_data(game: &GameState, nation_id: u32) -> Result<serde_json::Va
         "minor_nations": minor_nations,
         "treasury": nation.economy.treasury.as_dollars(),
         "player_sell_orders": player_sell_orders,
-        "player_buy_orders": player_buy_orders,
+        "buy_wishlist": buy_wishlist,
         "available_offers": available_offers,
         "sellable_resources": sellable_resources,
         "auto_trade_with_minors": nation.economy.auto_trade_with_minors,
@@ -472,13 +458,6 @@ pub fn set_player_sell_order(
         .iter()
         .filter(|o| o.resource != resource)
         .map(|o| o.quantity)
-        .chain(
-            nation
-                .diplomacy
-                .player_buy_orders
-                .iter()
-                .map(|o| o.quantity),
-        )
         .sum();
     if other_orders + quantity > total_cargo {
         return Err(ApiError::raw(r#"{"error":"exceeds cargo capacity"}"#));
@@ -498,87 +477,26 @@ pub fn set_player_sell_order(
     Ok(())
 }
 
-/// Set a player buy order for a resource. Filled from the offer pool of
-/// Minor Nation offers and GP surplus.
-pub fn set_player_buy_order(
+/// Toggle a resource on the player's buy wishlist (card #494). Wishlisted
+/// resources are offered seller-by-seller during the end-turn trade session.
+pub fn set_buy_wishlist(
     game: &mut GameState,
     nation_id: u32,
-    commodity_type: &str,
-    commodity_name: &str,
-    quantity: u32,
-    max_price: i64,
+    resource_name: &str,
+    wanted: bool,
 ) -> Result<(), ApiError> {
     let nid = NationId(nation_id);
-
-    if commodity_type != "resource" {
-        return Err(ApiError::raw(
-            r#"{"error":"only resources can be bought (world market removed)"}"#,
-        ));
-    }
-    let resource = match parse_resource_type(commodity_name) {
+    let resource = match parse_resource_type(resource_name) {
         Some(r) => r,
         None => return Err(ApiError::raw(r#"{"error":"invalid resource"}"#)),
     };
-
-    let total_cargo: u32 = match game.get_nation(nid) {
-        Some(n) => n.total_cargo_capacity(&game.game_data),
-        None => return Err(ApiError::raw(r#"{"error":"nation not found"}"#)),
-    };
-
-    // Snapshot the market price before taking the mutable nation borrow so the
-    // immutable read of `game.world.market_state` doesn't conflict.
-    let default_max_price = Money::dollars(
-        game.world
-            .market_state
-            .current_price(Commodity::Resource(resource))
-            .as_dollars()
-            * 120
-            / 100,
-    );
-
     let nation = match game.get_nation_mut(nid) {
         Some(n) => n,
         None => return Err(ApiError::raw(r#"{"error":"nation not found"}"#)),
     };
-
-    let other_orders: u32 = nation
-        .diplomacy
-        .player_sell_orders
-        .iter()
-        .map(|o| o.quantity)
-        .chain(
-            nation
-                .diplomacy
-                .player_buy_orders
-                .iter()
-                .filter(|o| o.resource != resource)
-                .map(|o| o.quantity),
-        )
-        .sum();
-    if other_orders + quantity > total_cargo {
-        return Err(ApiError::raw(r#"{"error":"exceeds cargo capacity"}"#));
+    nation.diplomacy.buy_wishlist.retain(|r| *r != resource);
+    if wanted {
+        nation.diplomacy.buy_wishlist.push(resource);
     }
-
-    let max_price_per_unit = if max_price > 0 {
-        Money::dollars(max_price)
-    } else {
-        default_max_price
-    };
-
-    nation
-        .diplomacy
-        .player_buy_orders
-        .retain(|o| o.resource != resource);
-    if quantity > 0 {
-        nation
-            .diplomacy
-            .player_buy_orders
-            .push(domain::economy::trade::PlayerBuyOrder {
-                resource,
-                quantity,
-                max_price_per_unit,
-            });
-    }
-
     Ok(())
 }

@@ -187,13 +187,11 @@ cargo run --release --bin imperialism -- [map_key] [nation_index]
 # formats, so GUI and CLI saves interchange freely.
 cargo run --release --features gui --bin imperialism-gui
 
-# Web frontend — rebuild WASM and (re)start the dev server.
-# Default to --opt: optimized WASM is the right build for gameplay,
-# runtime performance, and any user-facing testing.
-./web/restart-web-server.sh --opt
-# Faster rebuild for inner-loop UI/glue iteration only (unoptimized):
-./web/restart-web-server.sh
-# Then open http://localhost:43173
+# Web frontend — ⚠ PAUSED (2026-07): the web UI is not maintained for
+# the moment; the native Bevy GUI is the frontend of record. Keep the
+# Rust wasm-bridge crate compiling, but do not build new features in
+# web/src or spend effort on web parity.
+./web/restart-web-server.sh --opt   # only if explicitly asked
 ```
 
 ### Native GUI env flags
@@ -207,7 +205,8 @@ cargo run --release --features gui --bin imperialism-gui
 | `PERF_STATS=1` | FPS diagnostics + automated perf run (end turn, zoom-out pan, frame-pacing summary, exit) |
 | `MAP_SCREENSHOT=<path>` | Capture the window after settling, then exit (`MAP_DEBUG_MODE`, `MAP_DEBUG_ZOOM`, `MAP_DEBUG_FOG`, `MAP_DEBUG_STRAIGHT`, `MAP_SCREENSHOT_FRAME` tweak the shot) |
 | `INTRO_DEBUG=1` | Keep the title splash under `MAP_SCREENSHOT` (which otherwise skips straight into a game) so the intro screen can be captured |
-| `M6_DEBUG`…`M10_DEBUG` | Scripted interaction drivers (units/trade/diplomacy/battles/setup flows) for screenshot verification — see `crates/presentation/src/app.rs` |
+| `M6_DEBUG`…`M11_DEBUG` | Scripted interaction drivers (units/trade/diplomacy/battles/setup/between-turns-session flows) for screenshot verification — see `crates/presentation/src/app.rs` |
+| `SESSION_AUTO_SKIP=1` | Suppress the interactive between-turns sessions (card #494) — end turns resolve straight through, as the `M6`–`M10` drivers and `PERF_STATS` runs expect (those set this implicitly) |
 
 Linux/Wayland users can opt into the native Wayland backend with
 `--features gui,wayland` (off by default; needs libwayland dev packages).
@@ -220,7 +219,7 @@ icon-replacement workflow (quick PNG swap needs no recompile).
 
 After implementing any plan that touches game logic, **run a short headless smoke test** to verify the full game loop works end-to-end, not just unit tests. Default to **`--batch 1 --batch-max-turns 20`** — one game, capped at 20 turns, finishes in well under a minute. A full 1-game run goes to 1915 (~70 turns) and 3 games take 3–6 minutes; only run that long form when you specifically need late-game state.
 
-After any changes to Rust code that affect the web frontend, use `./web/restart-web-server.sh --opt` to rebuild the WASM bridge (optimized) and restart the dev server. Use the unoptimized `./web/restart-web-server.sh` only for fast inner-loop iteration on UI/glue code.
+**Web frontend paused (2026-07):** the browser UI is not maintained for the moment — the native Bevy GUI is the frontend of record. Keep `wasm-bridge` compiling, but don't develop or verify features in `web/`; only rebuild/restart the web server if explicitly asked.
 
 ## Reference: Original Game Manual
 
@@ -280,7 +279,7 @@ Sections: `summary`, `trade`, `warehouse`, `materials`, `paper`,
 - **All AI and game-mechanics variables live in Lua** — tunables for AI behavior (thresholds, weights, personality knobs) and game mechanics (economic rates, combat modifiers, diplomatic thresholds, tech effects, balance parameters) belong in Lua scripts or data files loaded by Lua, not as Rust constants. Rust holds the engine (turn pipeline, hex math, pathfinding, resolution); Lua holds the numbers. If you find a magic number in Rust that controls game feel or AI choices, move it to Lua.
 - Every checklist item in `plan/` has a verification strategy runnable from the command line
 - **No backward compatibility**: Old saves are not supported. Do not write migration code, save-version fallback paths, or compatibility shims. If you encounter existing backward-compat code, remove it.
-- **Resource/material/goods names in the UI must include the emoji from `web/src/resourceEmoji.ts`** — use `resourceLabel(name)` for inline text like `"🌾 Grain"`, or `resourceEmoji(name)` for the symbol alone. Do not hardcode emoji or maintain a second mapping in a component. If a kind is missing from `resourceEmoji.ts`, add it there.
+- **(Web UI only — currently paused)** Resource/material/goods names in the web UI must include the emoji from `web/src/resourceEmoji.ts` via `resourceLabel(name)` / `resourceEmoji(name)`. The native Bevy GUI never uses emoji — commodity icons come from `crates/presentation/assets/icons/` via `IconAssets`.
 
 ## Known Bugs
 
@@ -337,5 +336,4 @@ All implementation checklists live in `plan/`:
 ## Workflow
 
 - After every implementation, run `/adversarial-review` before considering the task complete
-- **When the work is ready for the user to test in the browser**, run `./web/restart-web-server.sh --opt` to rebuild WASM (optimized) and restart the dev server, then tell the user it's up at http://localhost:43173. Do this proactively at the end of any change that touches Rust code reachable from the WASM bridge (domain, application, infrastructure, wasm-bridge, or AI/game-config Lua) — don't wait for the user to ask.
-- After committing and pushing, run `./web/restart-web-server.sh` to rebuild WASM and restart the dev server
+- **When the work is ready for the user to test**, verify it in the native Bevy GUI (`cargo run --release --features gui --bin imperialism-gui`) — the web dev-server steps are suspended while the web UI is paused

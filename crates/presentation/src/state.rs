@@ -19,11 +19,35 @@ pub enum AppState {
 /// Whether the player can act or a turn is resolving on a background thread.
 /// Setup's async world generation also parks in `Processing` so input,
 /// debug-screenshot frame counting, and the busy overlay behave uniformly.
+///
+/// Card #494 splits end-turn resolution around interactive sessions: the
+/// first half of the turn resolves (`Processing`), then the diplomatic and
+/// trade sessions collect player decisions, the second half resolves
+/// (`Processing` again), and the trade summary closes the sequence before
+/// the newspaper opens and the phase returns to `Idle`.
 #[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum TurnPhase {
     #[default]
     Idle,
     Processing,
+    /// Between-turns diplomatic session: proposals + notifications over
+    /// the live map, chrome hidden.
+    DiploSession,
+    /// Between-turns trade session: wishlist offers one seller at a time.
+    TradeSession,
+    /// Post-resolution trade summary (read-only report).
+    Summary,
+}
+
+impl TurnPhase {
+    /// The interactive between-turns screens (chrome hidden, normal input
+    /// suspended).
+    pub fn is_session(self) -> bool {
+        matches!(
+            self,
+            TurnPhase::DiploSession | TurnPhase::TradeSession | TurnPhase::Summary
+        )
+    }
 }
 
 /// Active game screen (web `ScreenTab` parity). `Industry`, `Trade`, `Tech`,

@@ -21,7 +21,8 @@ pub use market::{MarketState, MarketTick, Trend};
 pub use observability::BlockReason;
 pub use production::{ProductionChain, ProductionResult};
 pub use trade::{
-    Commodity, PlayerBuyOrder, PlayerSellOrder, TradeBid, TradeOffer, TradeTransaction,
+    AcceptedTrade, Commodity, PlayerSellOrder, PreparedTradeSession, TradeBid, TradeOffer,
+    TradeTransaction,
 };
 pub use transport::{
     FreightDemand, FreightTarget, LogisticsState, TransportSystem, allocate_town_output_freight,
