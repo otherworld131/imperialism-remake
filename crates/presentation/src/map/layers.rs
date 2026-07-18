@@ -115,9 +115,15 @@ pub struct HoverRing;
 
 /// Ghost rail-link preview (card #497): one persistent textured quad shown
 /// while a settled engineer is armed and the cursor hovers a neighbouring
-/// hex. Green tint = click lays the link; red = refused (tooltip explains).
+/// hex. Rendered like the real track (locked decision #7), slightly
+/// translucent; red tint when refused (tooltip explains).
 #[derive(Component)]
 pub struct RailPreviewGhost;
+
+/// The ghost's endpoint ballast pads — same `rail/Node` texture as built
+/// rail, so the preview matches the finished composition (codex F-003).
+#[derive(Component)]
+pub struct RailPreviewGhostPads;
 
 #[derive(Component)]
 pub struct SelectionRing;
@@ -171,8 +177,17 @@ pub fn setup_rings(
         Visibility::Hidden,
         SelectionRing,
     ));
-    // Rail-link ghost: mesh and texture are filled lazily by
-    // `update_rail_preview` (IconAssets may not exist yet at startup).
+    // Rail-link ghost (track + endpoint pads): meshes and textures are
+    // filled lazily by `update_rail_preview` (IconAssets may not exist yet
+    // at startup). Pads sit just under the track, mirroring the real
+    // renderer's node-under-track layering.
+    commands.spawn((
+        Mesh2d(meshes.add(MeshBuilder2d::default().build())),
+        MeshMaterial2d(materials.add(ColorMaterial::default())),
+        Transform::from_xyz(0.0, 0.0, 1.34),
+        Visibility::Hidden,
+        RailPreviewGhostPads,
+    ));
     commands.spawn((
         Mesh2d(meshes.add(MeshBuilder2d::default().build())),
         MeshMaterial2d(materials.add(ColorMaterial::default())),
@@ -1177,23 +1192,38 @@ pub fn update_rail_preview(
     rail: Res<RailLinkOptions>,
     icons: Option<Res<IconAssets>>,
     bounds: Option<Res<MapBounds>>,
-    camera: Query<&Transform, (With<GameCamera>, Without<RailPreviewGhost>)>,
+    camera: Query<
+        &Transform,
+        (
+            With<GameCamera>,
+            Without<RailPreviewGhost>,
+            Without<RailPreviewGhostPads>,
+        ),
+    >,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    mut ghost: Query<
-        (
-            &Mesh2d,
-            &MeshMaterial2d<ColorMaterial>,
-            &mut Transform,
-            &mut Visibility,
-        ),
-        With<RailPreviewGhost>,
-    >,
+    mut ghosts: ParamSet<(
+        Query<
+            (
+                &Mesh2d,
+                &MeshMaterial2d<ColorMaterial>,
+                &mut Transform,
+                &mut Visibility,
+            ),
+            With<RailPreviewGhost>,
+        >,
+        Query<
+            (
+                &Mesh2d,
+                &MeshMaterial2d<ColorMaterial>,
+                &mut Transform,
+                &mut Visibility,
+            ),
+            With<RailPreviewGhostPads>,
+        >,
+    )>,
     mut cache: Local<Option<((i32, i32), (i32, i32), bool)>>,
 ) {
-    let Ok((mesh2d, material2d, mut transform, mut visibility)) = ghost.single_mut() else {
-        return;
-    };
     let desired = rail.0.as_ref().and_then(|state| {
         let hov = hovered.0?;
         let opt = state.options.iter().find(|o| (o.q, o.r) == hov)?;
@@ -1201,37 +1231,75 @@ pub fn update_rail_preview(
     });
     let Some((origin, target, ok)) = desired else {
         *cache = None;
-        *visibility = Visibility::Hidden;
+        if let Ok((_, _, _, mut visibility)) = ghosts.p0().single_mut() {
+            *visibility = Visibility::Hidden;
+        }
+        if let Ok((_, _, _, mut visibility)) = ghosts.p1().single_mut() {
+            *visibility = Visibility::Hidden;
+        }
         return;
     };
-    if *cache != Some((origin, target, ok)) {
+
+    // Allowed: the ghost looks like the real track, only slightly translucent
+    // so it reads as "not built yet". Refused: red tint. Shared by track and
+    // pads so the whole composite tints together.
+    let tint = if ok {
+        Color::srgba(1.0, 1.0, 1.0, 0.8)
+    } else {
+        Color::srgba(1.0, 0.4, 0.35, 0.65)
+    };
+    let rebuild = *cache != Some((origin, target, ok));
+    if rebuild {
         *cache = Some((origin, target, ok));
-        let a = geometry::hex_to_world(origin.0, origin.1);
-        let b = geometry::hex_to_world(target.0, target.1);
-        let mut builder = MeshBuilder2d::default();
-        builder.add_textured_segment(Vec2::ZERO, b - a, RAIL_TRACK_WIDTH, RAIL_TRACK_U_PERIOD);
-        let _ = meshes.insert(mesh2d.0.id(), builder.build());
-        if let Some(mat) = materials.get_mut(material2d.0.id()) {
-            // Allowed: the ghost looks like the real track, only slightly
-            // translucent so it reads as "not built yet". Refused: red tint.
-            mat.color = if ok {
-                Color::srgba(1.0, 1.0, 1.0, 0.8)
-            } else {
-                Color::srgba(1.0, 0.4, 0.35, 0.65)
-            };
-            if mat.texture.is_none() {
-                mat.texture = icons.as_deref().and_then(|i| i.get("rail", "Track"));
-            }
-        }
     }
+    let a = geometry::hex_to_world(origin.0, origin.1);
+    let b_rel = geometry::hex_to_world(target.0, target.1) - a;
     let camera_x = camera.single().map(|t| t.translation.x).unwrap_or(0.0);
-    let mut pos = geometry::hex_to_world(origin.0, origin.1);
+    let mut pos = a;
     if let Some(bounds) = bounds.as_deref() {
         pos.x += ((camera_x - pos.x) / bounds.width_px).round() * bounds.width_px;
     }
-    transform.translation.x = pos.x;
-    transform.translation.y = pos.y;
-    *visibility = Visibility::Visible;
+
+    // Track quad plus the two endpoint ballast pads, mirroring the real
+    // renderer's composition. The closure is applied to both ghost entities
+    // (their ParamSet queries have distinct types, so no loop over them).
+    let mut apply = |mesh2d: &Mesh2d,
+                     material2d: &MeshMaterial2d<ColorMaterial>,
+                     transform: &mut Transform,
+                     visibility: &mut Visibility,
+                     is_track: bool| {
+        if rebuild {
+            let mut builder = MeshBuilder2d::default();
+            if is_track {
+                builder.add_textured_segment(
+                    Vec2::ZERO,
+                    b_rel,
+                    RAIL_TRACK_WIDTH,
+                    RAIL_TRACK_U_PERIOD,
+                );
+            } else {
+                builder.add_textured_quad(Vec2::ZERO, HEX_SIZE * 0.5);
+                builder.add_textured_quad(b_rel, HEX_SIZE * 0.5);
+            }
+            let _ = meshes.insert(mesh2d.0.id(), builder.build());
+        }
+        if let Some(mat) = materials.get_mut(material2d.0.id()) {
+            mat.color = tint;
+            if mat.texture.is_none() {
+                let tex_name = if is_track { "Track" } else { "Node" };
+                mat.texture = icons.as_deref().and_then(|i| i.get("rail", tex_name));
+            }
+        }
+        transform.translation.x = pos.x;
+        transform.translation.y = pos.y;
+        *visibility = Visibility::Visible;
+    };
+    if let Ok((mesh2d, material2d, mut transform, mut visibility)) = ghosts.p0().single_mut() {
+        apply(mesh2d, material2d, &mut transform, &mut visibility, true);
+    }
+    if let Ok((mesh2d, material2d, mut transform, mut visibility)) = ghosts.p1().single_mut() {
+        apply(mesh2d, material2d, &mut transform, &mut visibility, false);
+    }
 }
 
 fn place_ring<F: bevy::ecs::query::QueryFilter>(

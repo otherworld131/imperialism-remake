@@ -1274,6 +1274,22 @@ pub fn connected_provinces_with_reach(
             continue;
         };
 
+        // Seed shortcut (codex review F-001): a province holding an owned
+        // country-capital tile is a connectivity hub in its own right —
+        // captured foreign capitals stay connected even if their game-start
+        // depot were ever absent. (In practice every `is_country_capital`
+        // tile carries a depot from setup; this pins the invariant
+        // structurally instead of relying on that.)
+        if province.tiles.iter().any(|&t| {
+            game.world
+                .hex_map
+                .get_tile(t)
+                .is_some_and(|tile| tile.is_country_capital)
+        }) {
+            connected.insert(pid);
+            continue;
+        }
+
         // Infrastructure connection: the shared reach set touches a depot or
         // effective-port hex of this province. Ports under undisputed enemy
         // blockade are skipped (card #408).
@@ -14961,6 +14977,37 @@ mod tests {
             game.world.hex_map.get_tile(far).unwrap().assigned_civilian,
             Some(eng_id),
             "far tile slot is claimed by the advanced engineer"
+        );
+    }
+
+    #[test]
+    fn captured_country_capital_province_connected_without_depot_or_rail() {
+        // Codex review F-001: a province holding an owned country-capital
+        // tile is a hub in its own right. Strip the depot the setup would
+        // normally place to prove connectivity doesn't depend on it.
+        let mut game = test_game_state();
+        let remote = HexCoord::new(5, 5);
+        let mut tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        tile.is_country_capital = true;
+        tile.infrastructure.has_depot = false;
+        game.world.hex_map.set_tile(remote, tile);
+        game.world.provinces.push(Province::new(
+            ProvinceId(2),
+            "Captured".to_string(),
+            NationId(1),
+            remote,
+            vec![remote],
+            3,
+        ));
+        game.get_nation_mut(NationId(1))
+            .unwrap()
+            .province_ids
+            .push(ProvinceId(2));
+
+        let connected = connected_provinces(&game, NationId(1));
+        assert!(
+            connected.contains(&ProvinceId(2)),
+            "owned country-capital province must be connected even with no depot and no rail"
         );
     }
 

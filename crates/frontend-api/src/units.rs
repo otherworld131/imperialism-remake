@@ -948,6 +948,25 @@ fn check_engineer_task(
             if game.world.hex_map.has_rail_link(pos, to) {
                 return Err("rail link already exists".into());
             }
+            // Codex review F-002: reject a second same-turn order for the
+            // same physical edge (e.g. two engineers on opposite endpoints) —
+            // without this the duplicate only fails at completion, wasting
+            // the second engineer's turn.
+            let wanted = domain::map::canonical_link(pos, to);
+            let duplicate_pending = game.world.nations.iter().any(|n| {
+                n.military.civilians.iter().any(|c| {
+                    matches!(
+                        (c.position, c.build_task),
+                        (
+                            Some(p),
+                            Some(domain::economy::BuildTask::Railroad { to: t })
+                        ) if c.working && domain::map::canonical_link(p, t) == wanted
+                    )
+                })
+            });
+            if duplicate_pending {
+                return Err("another engineer is already laying this link".into());
+            }
             let to_tile = match game.world.hex_map.get_tile(to) {
                 Some(t) => t,
                 None => return Err("target tile not found".into()),

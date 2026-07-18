@@ -2810,6 +2810,61 @@ fn engineer_rail_link_order_flow() {
 }
 
 #[test]
+fn duplicate_rail_link_order_from_opposite_endpoint_rejected() {
+    // Codex review F-002: engineer A orders P→Q; engineer B standing on Q
+    // must not be able to order Q→P for the same physical edge in the same
+    // turn — the duplicate would only fail at completion, wasting B's turn.
+    let mut game = new_game("default", Difficulty::Normal, 0);
+    let nid = game.human_player_nation;
+    let (eng_a, p) = engineer_and_redeploy_target(&game);
+
+    frontend_api::units::recall_civilian(&mut game, eng_a).expect("recall");
+    frontend_api::units::deploy_civilian(&mut game, eng_a, p.q, p.r).expect("deploy A");
+    // Settle A, then find its first allowed link target Q.
+    if let Some(civ) = game
+        .get_nation_mut(nid)
+        .unwrap()
+        .military
+        .civilians
+        .iter_mut()
+        .find(|c| c.id.0 == eng_a)
+    {
+        civ.arrived_this_turn = false;
+    }
+    let opts = frontend_api::units::get_rail_link_options(&game, eng_a).expect("options");
+    let allowed = opts["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["allowed"] == true && o["affordable"] == true)
+        .expect("an allowed neighbour");
+    let q = domain::hex::HexCoord::new(
+        allowed["q"].as_i64().unwrap() as i32,
+        allowed["r"].as_i64().unwrap() as i32,
+    );
+
+    // Second engineer standing on Q, settled.
+    let eng_b = domain::map::UnitId(3_950_000);
+    let mut b = domain::economy::Civilian::new(eng_b, domain::economy::CivilianType::Engineer, nid);
+    b.deploy(q);
+    b.arrived_this_turn = false;
+    game.get_nation_mut(nid).unwrap().military.civilians.push(b);
+    if let Some(tile) = game.world.hex_map.get_tile_mut(q) {
+        tile.assigned_civilian = Some(eng_b);
+    }
+
+    frontend_api::units::engineer_build_rail_link(&mut game, eng_a, q.q, q.r)
+        .expect("A's order is accepted");
+    let err = frontend_api::units::engineer_build_rail_link(&mut game, eng_b.0, p.q, p.r)
+        .expect_err("B's opposite-endpoint duplicate must be rejected at order time");
+    assert!(
+        err.message().contains("already laying"),
+        "unexpected error: {}",
+        err.message()
+    );
+}
+
+#[test]
 fn deploy_rejected_on_tile_with_idle_civilian() {
     let mut game = new_game("default", Difficulty::Normal, 0);
     let nid = game.human_player_nation;
