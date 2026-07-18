@@ -2741,6 +2741,73 @@ fn engineer_build_waits_a_turn_after_placement() {
 }
 
 #[test]
+fn engineer_rail_link_order_flow() {
+    let mut game = new_game("default", Difficulty::Normal, 0);
+    let nid = game.human_player_nation;
+    let (eng_id, target) = engineer_and_redeploy_target(&game);
+
+    frontend_api::units::recall_civilian(&mut game, eng_id).expect("recall");
+    frontend_api::units::deploy_civilian(&mut game, eng_id, target.q, target.r).expect("deploy");
+
+    // Placement turn: the arrival gate blocks link orders too.
+    let err = frontend_api::units::engineer_build_rail_link(&mut game, eng_id, target.q + 1, target.r)
+        .expect_err("link order on the placement turn must fail");
+    assert!(err.message().contains("arrives this turn"));
+
+    // Settle the engineer (the turn processor clears the flag at turn start).
+    if let Some(civ) = game
+        .get_nation_mut(nid)
+        .unwrap()
+        .military
+        .civilians
+        .iter_mut()
+        .find(|c| c.id.0 == eng_id)
+    {
+        civ.arrived_this_turn = false;
+    }
+
+    // The options query names all six neighbours with dir indices.
+    let opts = frontend_api::units::get_rail_link_options(&game, eng_id).expect("options");
+    assert_eq!(opts["deployed"], true);
+    assert_eq!(opts["can_build_now"], true);
+    assert_eq!(opts["origin"]["q"], target.q);
+    let options = opts["options"].as_array().expect("options array");
+    assert_eq!(options.len(), 6);
+    let allowed = options
+        .iter()
+        .find(|o| o["allowed"] == true && o["affordable"] == true)
+        .expect("at least one buildable neighbour from an owned grassland tile");
+    let (to_q, to_r) = (
+        allowed["q"].as_i64().unwrap() as i32,
+        allowed["r"].as_i64().unwrap() as i32,
+    );
+
+    // Non-adjacent target is rejected outright.
+    let err = frontend_api::units::engineer_build_rail_link(&mut game, eng_id, target.q + 3, target.r)
+        .expect_err("non-adjacent link must fail");
+    assert!(err.message().contains("adjacent"), "got: {}", err.message());
+
+    // Valid order: engineer starts the link build with the target embedded.
+    frontend_api::units::engineer_build_rail_link(&mut game, eng_id, to_q, to_r)
+        .expect("link order");
+    let civ = game
+        .get_nation(nid)
+        .unwrap()
+        .military
+        .civilians
+        .iter()
+        .find(|c| c.id.0 == eng_id)
+        .unwrap();
+    assert!(civ.working);
+    assert_eq!(
+        civ.build_task,
+        Some(domain::economy::BuildTask::Railroad {
+            to: domain::hex::HexCoord::new(to_q, to_r)
+        })
+    );
+}
+
+#[test]
 fn deploy_rejected_on_tile_with_idle_civilian() {
     let mut game = new_game("default", Difficulty::Normal, 0);
     let nid = game.human_player_nation;
