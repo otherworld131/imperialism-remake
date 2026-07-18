@@ -68,8 +68,15 @@ pub enum GameCommand {
     /// #495: the engineer was placed on an earlier turn).
     EngineerBuild {
         civilian_id: u32,
-        /// "railroad" | "depot" | "port".
+        /// "depot" | "port".
         kind: &'static str,
+    },
+    /// Order a deployed engineer to lay a rail link from its hex to the
+    /// adjacent `(to_q, to_r)` (card #497: railroads are edge links).
+    EngineerBuildRailLink {
+        civilian_id: u32,
+        to_q: i32,
+        to_r: i32,
     },
     MoveFleet {
         from_zone: u32,
@@ -199,13 +206,17 @@ pub fn apply_command(
     mut deploy: ResMut<DeployMode>,
     mut proposal_prompt: ResMut<ProposalPrompt>,
     mut engineer_prompt: ResMut<crate::game::resources::EngineerPrompt>,
+    mut rail_options: ResMut<crate::game::resources::RailLinkOptions>,
     mut commands: Commands,
 ) {
-    // Turn resolution invalidates an armed deploy / engineer popover.
+    // Turn resolution invalidates an armed deploy / engineer popover /
+    // rail-link preview.
     let cancel_deploy_ui = |deploy: &mut DeployMode,
                             engineer_prompt: &mut crate::game::resources::EngineerPrompt,
+                            rail_options: &mut crate::game::resources::RailLinkOptions,
                             commands: &mut Commands| {
         deploy.0 = None;
+        rail_options.0 = None;
         if let Some(state) = engineer_prompt.0.take() {
             commands.entity(state.root).despawn();
         }
@@ -219,17 +230,32 @@ pub fn apply_command(
             next_phase,
         } = &mut runner;
         if let GameCommand::EndTurn = command {
-            cancel_deploy_ui(&mut deploy, &mut engineer_prompt, &mut commands);
+            cancel_deploy_ui(
+                &mut deploy,
+                &mut engineer_prompt,
+                &mut rail_options,
+                &mut commands,
+            );
             turn_runner::start_end_turn(session, active_begin, active, next_phase);
             continue;
         }
         if let GameCommand::SkipTurns { count } = command {
-            cancel_deploy_ui(&mut deploy, &mut engineer_prompt, &mut commands);
+            cancel_deploy_ui(
+                &mut deploy,
+                &mut engineer_prompt,
+                &mut rail_options,
+                &mut commands,
+            );
             turn_runner::start_skip(session, active_skip, next_phase, SkipSpec::Count(*count));
             continue;
         }
         if let GameCommand::SkipUntil { text } = command {
-            cancel_deploy_ui(&mut deploy, &mut engineer_prompt, &mut commands);
+            cancel_deploy_ui(
+                &mut deploy,
+                &mut engineer_prompt,
+                &mut rail_options,
+                &mut commands,
+            );
             turn_runner::start_skip(
                 session,
                 active_skip,
@@ -462,6 +488,27 @@ pub fn apply_command(
                     }
                     Err(err) => {
                         toasts.write(Toast::error(format!("Build failed: {}", err.message())));
+                    }
+                }
+            }
+
+            GameCommand::EngineerBuildRailLink {
+                civilian_id,
+                to_q,
+                to_r,
+            } => {
+                match frontend_api::units::engineer_build_rail_link(
+                    game,
+                    *civilian_id,
+                    *to_q,
+                    *to_r,
+                ) {
+                    Ok(()) => {
+                        bump = true;
+                        deploy.0 = None;
+                    }
+                    Err(err) => {
+                        toasts.write(Toast::error(format!("Rail link failed: {}", err.message())));
                     }
                 }
             }

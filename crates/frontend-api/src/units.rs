@@ -1286,12 +1286,7 @@ pub fn get_rail_link_options(
                 .enumerate()
                 .map(|(dir, d)| {
                     let to = pos + *d;
-                    match check_engineer_task(
-                        game,
-                        human_nid,
-                        pos,
-                        BuildTask::Railroad { to },
-                    ) {
+                    match check_engineer_task(game, human_nid, pos, BuildTask::Railroad { to }) {
                         Ok(cost) => serde_json::json!({
                             "q": to.q, "r": to.r, "dir": dir,
                             "allowed": true,
@@ -1309,10 +1304,7 @@ pub fn get_rail_link_options(
                     }
                 })
                 .collect();
-            (
-                serde_json::json!({"q": pos.q, "r": pos.r}),
-                opts,
-            )
+            (serde_json::json!({"q": pos.q, "r": pos.r}), opts)
         }
         None => (serde_json::Value::Null, Vec::new()),
     };

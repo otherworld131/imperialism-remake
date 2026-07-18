@@ -12,7 +12,9 @@ use bevy::prelude::*;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
-use crate::game::resources::{DeployMode, FleetTargets, MoveTargets, RenderSettings, ViewModels};
+use crate::game::resources::{
+    DeployMode, FleetTargets, MoveTargets, RailLinkOptions, RenderSettings, ViewModels,
+};
 use crate::game::vm::MapTile;
 use crate::map::borders::{self, MapBorders};
 use crate::map::camera::GameCamera;
@@ -103,6 +105,12 @@ pub struct HighlightLayer;
 #[derive(Component)]
 pub struct HoverRing;
 
+/// Ghost rail-link preview (card #497): one persistent textured quad shown
+/// while a settled engineer is armed and the cursor hovers a neighbouring
+/// hex. Green tint = click lays the link; red = refused (tooltip explains).
+#[derive(Component)]
+pub struct RailPreviewGhost;
+
 #[derive(Component)]
 pub struct SelectionRing;
 
@@ -154,6 +162,15 @@ pub fn setup_rings(
         Transform::from_xyz(0.0, 0.0, 6.0),
         Visibility::Hidden,
         SelectionRing,
+    ));
+    // Rail-link ghost: mesh and texture are filled lazily by
+    // `update_rail_preview` (IconAssets may not exist yet at startup).
+    commands.spawn((
+        Mesh2d(meshes.add(MeshBuilder2d::default().build())),
+        MeshMaterial2d(materials.add(ColorMaterial::default())),
+        Transform::from_xyz(0.0, 0.0, 1.35),
+        Visibility::Hidden,
+        RailPreviewGhost,
     ));
 }
 
@@ -1142,6 +1159,71 @@ pub fn update_rings(
     let bounds = bounds.as_deref().copied();
     place_ring(&mut rings.p0(), hovered.0, camera_x, bounds);
     place_ring(&mut rings.p1(), selected.0, camera_x, bounds);
+}
+
+/// Show/refresh the rail-link ghost (card #497): visible only while an armed
+/// settled engineer's `RailLinkOptions` are live and the hovered hex is one
+/// of its six neighbours. The mesh is regenerated only when the
+/// (origin, target, verdict) triple changes; position follows the ring
+/// wrap-normalization.
+pub fn update_rail_preview(
+    hovered: Res<HoveredHex>,
+    rail: Res<RailLinkOptions>,
+    icons: Option<Res<IconAssets>>,
+    bounds: Option<Res<MapBounds>>,
+    camera: Query<&Transform, (With<GameCamera>, Without<RailPreviewGhost>)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut ghost: Query<
+        (
+            &Mesh2d,
+            &MeshMaterial2d<ColorMaterial>,
+            &mut Transform,
+            &mut Visibility,
+        ),
+        With<RailPreviewGhost>,
+    >,
+    mut cache: Local<Option<((i32, i32), (i32, i32), bool)>>,
+) {
+    let Ok((mesh2d, material2d, mut transform, mut visibility)) = ghost.single_mut() else {
+        return;
+    };
+    let desired = rail.0.as_ref().and_then(|state| {
+        let hov = hovered.0?;
+        let opt = state.options.iter().find(|o| (o.q, o.r) == hov)?;
+        Some((state.origin, hov, opt.allowed && opt.affordable))
+    });
+    let Some((origin, target, ok)) = desired else {
+        *cache = None;
+        *visibility = Visibility::Hidden;
+        return;
+    };
+    if *cache != Some((origin, target, ok)) {
+        *cache = Some((origin, target, ok));
+        let a = geometry::hex_to_world(origin.0, origin.1);
+        let b = geometry::hex_to_world(target.0, target.1);
+        let mut builder = MeshBuilder2d::default();
+        builder.add_textured_segment(Vec2::ZERO, b - a, RAIL_TRACK_WIDTH, RAIL_TRACK_U_PERIOD);
+        let _ = meshes.insert(mesh2d.0.id(), builder.build());
+        if let Some(mat) = materials.get_mut(material2d.0.id()) {
+            mat.color = if ok {
+                Color::srgba(0.6, 1.0, 0.65, 0.6)
+            } else {
+                Color::srgba(1.0, 0.45, 0.4, 0.6)
+            };
+            if mat.texture.is_none() {
+                mat.texture = icons.as_deref().and_then(|i| i.get("rail", "Track"));
+            }
+        }
+    }
+    let camera_x = camera.single().map(|t| t.translation.x).unwrap_or(0.0);
+    let mut pos = geometry::hex_to_world(origin.0, origin.1);
+    if let Some(bounds) = bounds.as_deref() {
+        pos.x += ((camera_x - pos.x) / bounds.width_px).round() * bounds.width_px;
+    }
+    transform.translation.x = pos.x;
+    transform.translation.y = pos.y;
+    *visibility = Visibility::Visible;
 }
 
 fn place_ring<F: bevy::ecs::query::QueryFilter>(

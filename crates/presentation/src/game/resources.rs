@@ -238,9 +238,9 @@ pub struct DeployState {
 }
 
 /// Engineer build popover state (card #495): a compact icon strip
-/// (Railroad / Depot / Port + costs) anchored near the click, opened when a
-/// deployed idle engineer is clicked on the map. Esc or any map click
-/// dismisses it; redeploy highlights stay active alongside it.
+/// (Depot / Port + costs) anchored near the click, opened when a deployed
+/// idle engineer is clicked on the map. Esc or any map click dismisses it;
+/// redeploy highlights stay active alongside it.
 #[derive(Resource, Default)]
 pub struct EngineerPrompt(pub Option<EngineerPromptState>);
 
@@ -249,6 +249,32 @@ pub struct EngineerPromptState {
     pub civilian_id: i64,
     /// Popover root node; despawning it closes the popover.
     pub root: Entity,
+}
+
+/// Rail-link options for the currently armed, settled engineer (card #497):
+/// one entry per neighbouring hex, driving the hover ghost preview and the
+/// adjacent-click link order. Filled by `arm_civilian_deploy`, cleared
+/// whenever deploy mode ends.
+#[derive(Resource, Default)]
+pub struct RailLinkOptions(pub Option<RailLinkState>);
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RailLinkState {
+    pub civilian_id: i64,
+    pub origin: (i32, i32),
+    pub options: Vec<RailLinkOption>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RailLinkOption {
+    pub q: i32,
+    pub r: i32,
+    pub allowed: bool,
+    pub affordable: bool,
+    /// Dollars, present when `allowed`.
+    pub cost: Option<i64>,
+    /// Human-readable refusal, present when not `allowed`.
+    pub reason: Option<String>,
 }
 
 /// Checked warships in the naval panel (scoped to the selected fleet).

@@ -2750,8 +2750,9 @@ fn engineer_rail_link_order_flow() {
     frontend_api::units::deploy_civilian(&mut game, eng_id, target.q, target.r).expect("deploy");
 
     // Placement turn: the arrival gate blocks link orders too.
-    let err = frontend_api::units::engineer_build_rail_link(&mut game, eng_id, target.q + 1, target.r)
-        .expect_err("link order on the placement turn must fail");
+    let err =
+        frontend_api::units::engineer_build_rail_link(&mut game, eng_id, target.q + 1, target.r)
+            .expect_err("link order on the placement turn must fail");
     assert!(err.message().contains("arrives this turn"));
 
     // Settle the engineer (the turn processor clears the flag at turn start).
@@ -2783,8 +2784,9 @@ fn engineer_rail_link_order_flow() {
     );
 
     // Non-adjacent target is rejected outright.
-    let err = frontend_api::units::engineer_build_rail_link(&mut game, eng_id, target.q + 3, target.r)
-        .expect_err("non-adjacent link must fail");
+    let err =
+        frontend_api::units::engineer_build_rail_link(&mut game, eng_id, target.q + 3, target.r)
+            .expect_err("non-adjacent link must fail");
     assert!(err.message().contains("adjacent"), "got: {}", err.message());
 
     // Valid order: engineer starts the link build with the target embedded.
