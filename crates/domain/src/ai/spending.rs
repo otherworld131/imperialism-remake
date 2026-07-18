@@ -176,22 +176,25 @@ pub(crate) fn ai_scored_spending(
         // collectable). Only kicks in when an idle engineer is on hand —
         // otherwise the depot can't be built anyway and we shouldn't starve
         // other categories.
-        let saving_for_depot = depot_plans.iter().any(|p| p.path.is_empty()) && {
-            let nation = game.get_nation(nation_id);
-            let any_idle_engineer = nation.is_some_and(|n| {
-                n.military.civilians.iter().any(|c| {
-                    c.civilian_type == CivilianType::Engineer
-                        && !c.working
-                        && c.turns_remaining == 0
-                })
-            });
-            let depot_total =
-                weights.reserve + Money::dollars(game.game_data.game_config.depot_cost);
-            let cant_afford_yet = nation
-                .map(|n| n.economy.treasury < depot_total)
-                .unwrap_or(false);
-            any_idle_engineer && cant_afford_yet
-        };
+        let saving_for_depot = depot_plans
+            .iter()
+            .any(|p| p.is_fully_railed(&game.world.hex_map))
+            && {
+                let nation = game.get_nation(nation_id);
+                let any_idle_engineer = nation.is_some_and(|n| {
+                    n.military.civilians.iter().any(|c| {
+                        c.civilian_type == CivilianType::Engineer
+                            && !c.working
+                            && c.turns_remaining == 0
+                    })
+                });
+                let depot_total =
+                    weights.reserve + Money::dollars(game.game_data.game_config.depot_cost);
+                let cant_afford_yet = nation
+                    .map(|n| n.economy.treasury < depot_total)
+                    .unwrap_or(false);
+                any_idle_engineer && cant_afford_yet
+            };
         if !saving_for_depot && let Some(mut opt) = score_civilian(game, nation_id, &weights) {
             opt.score += backlog_bonus(
                 game,
@@ -834,15 +837,21 @@ fn score_infrastructure(
     let plan = plans.first()?;
 
     // Minimum cost the AI can afford right now to keep progressing: the
-    // cheapest next hex on the path, or the depot cost if the path is empty.
-    let next_cost = if let Some(next_coord) = plan.path.first() {
-        game.world
-            .hex_map
-            .get_tile(*next_coord)
-            .and_then(|t| crate::map::infrastructure::railroad_cost(t.terrain(), cfg))
-            .unwrap_or_else(|| Money::dollars(cfg.railroad_cost_grassland))
-    } else {
-        Money::dollars(cfg.depot_cost)
+    // next unbuilt edge's average cost, or the depot cost if every edge on
+    // the path is already laid.
+    let next_cost = match plan.first_unbuilt_edge(&game.world.hex_map) {
+        Some((a, b)) => {
+            let terrains = game
+                .world
+                .hex_map
+                .get_tile(a)
+                .map(|t| t.terrain())
+                .zip(game.world.hex_map.get_tile(b).map(|t| t.terrain()));
+            terrains
+                .and_then(|(ta, tb)| crate::map::infrastructure::rail_link_cost(ta, tb, cfg))
+                .unwrap_or_else(|| Money::dollars(cfg.railroad_cost_grassland))
+        }
+        None => Money::dollars(cfg.depot_cost),
     };
     nation.economy.treasury.checked_sub(next_cost)?;
 
@@ -1248,7 +1257,12 @@ fn score_hire_engineer(
     }
 
     // Need a plan to justify hiring more engineers (no work → no need).
-    let path_len = plans.iter().map(|p| p.path.len()).sum::<usize>() as f64;
+    // "Work" is the number of unbuilt edges across all plans — a fully-railed
+    // plan (only the depot left) doesn't justify another engineer.
+    let path_len = plans
+        .iter()
+        .map(|p| p.unbuilt_edge_count(&game.world.hex_map))
+        .sum::<usize>() as f64;
     if path_len == 0.0 {
         return None;
     }
@@ -1831,10 +1845,8 @@ fn execute_infrastructure(
         return;
     }
 
-    // Where is the engineer? Default to capital if undeployed.
-    let engineer_civ_id = game
-        .get_nation(nation_id)
-        .map(|n| n.military.civilians[engineer_idx].id);
+    // Where is the engineer? Default to capital if undeployed (used only for
+    // AI-debug logging — routing is edge-driven off the plan path).
     let engineer_pos = game
         .get_nation(nation_id)
         .and_then(|n| n.military.civilians[engineer_idx].position)
@@ -1870,92 +1882,39 @@ fn execute_infrastructure(
             continue;
         }
 
-        if plan.path.is_empty() {
-            if game.ai_debug {
-                eprintln!(
-                    "[AI:{}:infra] candidate already reached, starting depot at ({}, {})",
-                    nation_name, plan.candidate.q, plan.candidate.r
-                );
-            }
-            if start_engineer_task(
-                game,
-                nation_id,
-                engineer_idx,
-                plan.candidate,
-                BuildTask::Depot,
-                &cfg,
-            ) == EngineerTaskStart::Started
-            {
-                return;
-            }
-            continue;
-        }
-
-        // "Unassigned" tolerates the engineer's own tile assignment — a
-        // parked engineer (card #495 move-then-build) must be able to build
-        // on the very hex it is standing on next turn, not step past it.
-        let unbuilt_unassigned = |c: HexCoord| -> bool {
-            game.world.hex_map.rail_link_count(c) == 0
-                && game.world.hex_map.get_tile(c).is_some_and(|t| {
-                    !t.infrastructure.has_depot
-                        && (t.assigned_civilian.is_none() || t.assigned_civilian == engineer_civ_id)
-                })
-        };
-        let build_coord = plan
-            .path
-            .iter()
-            .copied()
-            // Standing on an unbuilt path hex → build right here.
-            .find(|c| *c == engineer_pos && unbuilt_unassigned(*c))
-            .or_else(|| {
-                plan.path
-                    .iter()
-                    .copied()
-                    .find(|c| engineer_pos.neighbors().contains(c) && unbuilt_unassigned(*c))
-            })
-            .or_else(|| plan.path.iter().copied().find(|c| unbuilt_unassigned(*c)));
-
-        // Choose the far endpoint of the link to lay from `coord`: the next hex
-        // along the plan path if adjacent, else the owned land neighbour closest
-        // to the candidate that isn't already linked. (Phase 1 compile-level
-        // routing; Phase 2 will use proper consecutive-edge path logic.)
-        let rail_target = |coord: HexCoord| -> Option<HexCoord> {
-            let succ = plan
-                .path
-                .iter()
-                .position(|c| *c == coord)
-                .and_then(|i| plan.path.get(i + 1))
-                .copied()
-                .filter(|n| coord.distance(*n) == 1);
-            succ.or_else(|| {
-                coord
-                    .neighbors()
-                    .into_iter()
-                    .filter(|n| !game.world.hex_map.has_rail_link(coord, *n))
-                    .filter(|n| {
-                        game.world
-                            .hex_map
-                            .get_tile(*n)
-                            .is_some_and(|t| t.terrain().is_land())
-                    })
-                    .filter(|n| {
-                        game.world
-                            .provinces
-                            .iter()
-                            .any(|p| p.owner == nation_id && p.tiles.contains(n))
-                    })
-                    .min_by_key(|n| n.distance(plan.candidate))
-            })
-        };
-
-        let attempt = match build_coord.and_then(|c| rail_target(c).map(|to| (c, to))) {
-            Some((coord, to)) => {
+        // Edge model: the first consecutive path pair without a rail link is
+        // the next link to lay. `None` ⇒ every edge is built ⇒ the candidate
+        // is reached and it's time to drop the depot.
+        let attempt = match plan.first_unbuilt_edge(&game.world.hex_map) {
+            None => {
                 if game.ai_debug {
                     eprintln!(
-                        "[AI:{}:infra] starting rail ({}, {})->({}, {}) engineer_pos=({}, {}) candidate=({}, {}) path_len={}",
+                        "[AI:{}:infra] candidate already reached, starting depot at ({}, {})",
+                        nation_name, plan.candidate.q, plan.candidate.r
+                    );
+                }
+                start_engineer_task(
+                    game,
+                    nation_id,
+                    engineer_idx,
+                    plan.candidate,
+                    BuildTask::Depot,
+                    &cfg,
+                )
+            }
+            Some((from, to)) => {
+                // Lay the link from `from` to `to`. `start_engineer_task`
+                // starts the build when the engineer is already settled on
+                // `from` (card #495 gate: deployed, !arrived_this_turn), else
+                // it just deploys there this turn and the build begins next
+                // turn. After completion the turn processor auto-advances the
+                // engineer to `to`, so a multi-edge plan chains at 1 link/turn.
+                if game.ai_debug {
+                    eprintln!(
+                        "[AI:{}:infra] next unbuilt edge ({}, {})->({}, {}) engineer_pos=({}, {}) candidate=({}, {}) path_len={}",
                         nation_name,
-                        coord.q,
-                        coord.r,
+                        from.q,
+                        from.r,
                         to.q,
                         to.r,
                         engineer_pos.q,
@@ -1969,24 +1928,8 @@ fn execute_infrastructure(
                     game,
                     nation_id,
                     engineer_idx,
-                    coord,
+                    from,
                     BuildTask::Railroad { to },
-                    &cfg,
-                )
-            }
-            None => {
-                if game.ai_debug {
-                    eprintln!(
-                        "[AI:{}:infra] no open rail hex on path, falling back to depot at ({}, {})",
-                        nation_name, plan.candidate.q, plan.candidate.r
-                    );
-                }
-                start_engineer_task(
-                    game,
-                    nation_id,
-                    engineer_idx,
-                    plan.candidate,
-                    BuildTask::Depot,
                     &cfg,
                 )
             }
@@ -2267,25 +2210,25 @@ fn find_port_alternative(
     // (4) Compare depot+rail cost/turns vs. port cost/turns.
     let depot_cost = cfg.depot_cost;
     let port_cost = cfg.port_cost;
+    // Edge model: the remaining rail cost is the sum of the still-unbuilt
+    // links' average costs; the remaining rail *turns* is the count of those
+    // links (auto-advance lays one per turn).
     let path_cost_dollars = plan
         .path
-        .iter()
-        .filter(|c| {
-            game.world.hex_map.rail_link_count(**c) == 0
-                && game
-                    .world
-                    .hex_map
-                    .get_tile(**c)
-                    .is_some_and(|t| !t.infrastructure.has_depot)
+        .windows(2)
+        .filter(|w| !game.world.hex_map.has_rail_link(w[0], w[1]))
+        .filter_map(|w| {
+            let ta = game.world.hex_map.get_tile(w[0])?.terrain();
+            let tb = game.world.hex_map.get_tile(w[1])?.terrain();
+            crate::map::infrastructure::rail_link_cost(ta, tb, cfg)
         })
-        .filter_map(|c| game.world.hex_map.get_tile(*c))
-        .filter_map(|t| crate::map::infrastructure::railroad_cost(t.terrain(), cfg))
         .map(|m| m.as_dollars())
         .sum::<i64>();
     let depot_total_cost = depot_cost + path_cost_dollars;
 
+    let unbuilt_edges = plan.unbuilt_edge_count(&game.world.hex_map);
     let depot_turns: u32 =
-        cfg.build_turns_depot as u32 + plan.path.len() as u32 * cfg.build_turns_railroad as u32;
+        cfg.build_turns_depot as u32 + unbuilt_edges as u32 * cfg.build_turns_railroad as u32;
     let port_turns: u32 = cfg.build_turns_port as u32;
 
     if port_cost < depot_total_cost && port_turns < depot_turns {
@@ -2882,6 +2825,7 @@ pub(crate) fn ai_diplomatic_mop_up(game: &mut GameState, nation_id: NationId) {
 mod tests {
     use super::*;
     use crate::ai::common::test_helpers::{test_game_with_ai, test_game_with_ai_and_minor};
+    use crate::economy::buildings::{Building, BuildingType};
     use crate::economy::civilians::{Civilian, CivilianType, next_civilian_id};
     use crate::map::tile::Tile;
     use crate::types::{NationId, ProvinceId, ResourceType, TerrainType};
@@ -3114,15 +3058,14 @@ mod tests {
         cap_tile.infrastructure.has_depot = true;
         game.world.hex_map.set_tile(cap, cap_tile);
 
-        // Rail-connected candidate at (4,3): the path is empty (rail already
-        // there), so the next infra step is to plant the depot at (4,3).
+        // Rail-connected candidate at (4,3): a real rail link joins the
+        // capital to the candidate, so the plan path is fully railed (no
+        // unbuilt edge) and the next infra step is to plant the depot at (4,3).
         let candidate = crate::hex::HexCoord::new(4, 3);
         let mut cand_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
         cand_tile.set_resource(ResourceType::Grain);
         game.world.hex_map.set_tile(candidate, cand_tile);
-        game.world
-            .hex_map
-            .add_rail_link(candidate, candidate.neighbors()[0]);
+        game.world.hex_map.add_rail_link(cap, candidate);
 
         // Improvable visible tile far from rail to drive HireImprover demand
         // (uses the unconnected weight, so contribution is small but present).
@@ -3187,6 +3130,181 @@ mod tests {
             civs_after, civs_before,
             "AI must not hire improvers while saving for the depot (civs_before={}, civs_after={})",
             civs_before, civs_after,
+        );
+    }
+
+    /// Edge-model commitment invalidation: a commitment whose remaining path
+    /// runs through terrain the nation has no tech to rail (swamp) can no
+    /// longer be built. `refresh_infra_commitments` must drop it rather than
+    /// keep pointing the engineer at an unbuildable target (else the AI
+    /// stalls). The only owned resource tile sits behind the swamp, so after
+    /// the refresh there is no valid commitment left.
+    #[test]
+    fn refresh_drops_commitment_when_remaining_edge_is_tech_gated() {
+        let mut game = test_game_with_ai();
+        let cap = crate::hex::HexCoord::new(3, 3);
+        let swamp = crate::hex::HexCoord::new(4, 3);
+        let candidate = crate::hex::HexCoord::new(5, 3);
+
+        let mut cap_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        cap_tile.set_resource(ResourceType::Grain);
+        cap_tile.is_country_capital = true;
+        game.world.hex_map.set_tile(cap, cap_tile);
+
+        // Swamp intermediate — impassable without the (unresearched) bridge tech.
+        let mut swamp_tile = Tile::with_province(TerrainType::Swamp, ProvinceId(2));
+        swamp_tile.set_resource(ResourceType::Grain);
+        game.world.hex_map.set_tile(swamp, swamp_tile);
+
+        // Candidate behind the swamp with the timber the LumberMill wants.
+        let mut cand_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        cand_tile.set_resource(ResourceType::Timber);
+        game.world.hex_map.set_tile(candidate, cand_tile);
+
+        let prov = game
+            .world
+            .provinces
+            .iter_mut()
+            .find(|p| p.id == ProvinceId(2))
+            .expect("AI province");
+        for &c in &[swamp, candidate] {
+            if !prov.tiles.contains(&c) {
+                prov.tiles.push(c);
+            }
+        }
+
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::LumberMill, 2));
+        ai.economy.treasury = Money::dollars(50_000);
+        ai.military.civilians.clear();
+        ai.military.civilians.push(Civilian::new(
+            next_civilian_id(),
+            CivilianType::Engineer,
+            NationId(2),
+        ));
+        // Commit to the tech-gated candidate.
+        ai.diplomacy.ai_priority_state.committed_infra_target =
+            Some(crate::nation::CommittedInfraTarget {
+                candidate,
+                origin_capital: cap,
+                turn_committed: 1,
+            });
+
+        let plans = refresh_infra_commitments(&mut game, NationId(2), Money::dollars(1000));
+
+        // No surviving plan may target the unbuildable candidate.
+        assert!(
+            plans.iter().all(|p| p.candidate != candidate),
+            "tech-gated candidate must not survive as a plan"
+        );
+        let committed = game
+            .get_nation(NationId(2))
+            .unwrap()
+            .diplomacy
+            .ai_priority_state
+            .committed_infra_target
+            .clone();
+        assert!(
+            committed.as_ref().is_none_or(|t| t.candidate != candidate),
+            "refresh must drop the commitment to the tech-gated candidate, got {committed:?}"
+        );
+    }
+
+    /// Edge-model chaining: after the one-turn deploy, a single AI engineer
+    /// lays one rail link per turn along a multi-hex corridor (auto-advance),
+    /// never more, until the whole corridor is connected.
+    #[test]
+    fn ai_engineer_chains_multi_edge_plan_at_one_link_per_turn() {
+        use crate::turn::process_turn;
+
+        let mut game = test_game_with_ai();
+        // Only one engineer ever, so total links laid per turn == links laid
+        // by that engineer (isolates the 1-link/turn auto-advance cadence).
+        game.game_data.game_config.engineer_hire_max = 1;
+
+        let cap = crate::hex::HexCoord::new(3, 3);
+        let corridor = [
+            crate::hex::HexCoord::new(4, 3),
+            crate::hex::HexCoord::new(5, 3),
+            crate::hex::HexCoord::new(6, 3),
+        ];
+
+        let mut cap_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        cap_tile.set_resource(ResourceType::Grain);
+        cap_tile.is_country_capital = true;
+        game.world.hex_map.set_tile(cap, cap_tile);
+
+        for (i, &c) in corridor.iter().enumerate() {
+            let mut t = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+            // Put the LumberMill's timber at the far end so the planner routes
+            // the full corridor to reach it.
+            t.set_resource(if i == corridor.len() - 1 {
+                ResourceType::Timber
+            } else {
+                ResourceType::Grain
+            });
+            game.world.hex_map.set_tile(c, t);
+        }
+
+        let prov = game
+            .world
+            .provinces
+            .iter_mut()
+            .find(|p| p.id == ProvinceId(2))
+            .expect("AI province");
+        for &c in &corridor {
+            if !prov.tiles.contains(&c) {
+                prov.tiles.push(c);
+            }
+        }
+
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::LumberMill, 2));
+        ai.economy.treasury = Money::dollars(100_000);
+        ai.diplomacy.ai_personality = Some(super::super::common::AiPersonality::Balanced);
+        ai.military.civilians.clear();
+        ai.military.civilians.push(Civilian::new(
+            next_civilian_id(),
+            CivilianType::Engineer,
+            NationId(2),
+        ));
+
+        // Drive full turns. The single engineer must lay at most one link per
+        // turn (auto-advance cadence) and, over several turns, chain more than
+        // one edge — proving multi-edge plans progress one link at a time
+        // rather than teleporting or stalling after the first link.
+        let mut prev_total = game.world.hex_map.rail_link_total();
+        let mut max_delta = 0usize;
+        for turn in 1..=12u32 {
+            let _ = process_turn(&mut game);
+            let total = game.world.hex_map.rail_link_total();
+            let delta = total.saturating_sub(prev_total);
+            assert!(
+                delta <= 1,
+                "a single engineer must lay at most one link per turn \
+                 (turn {turn}: {prev_total} -> {total})"
+            );
+            max_delta = max_delta.max(delta);
+            prev_total = total;
+        }
+
+        // Every link the plan needed was cap-anchored and adjacent; with a
+        // radius-1 depot the planner may stop one hex short of the far tile,
+        // so require a genuine multi-edge chain (≥2 links) rather than the
+        // full corridor length.
+        assert!(
+            game.world.hex_map.rail_link_total() >= 2,
+            "AI engineer should chain at least two rail links over the turns \
+             (links laid: {})",
+            game.world.hex_map.rail_link_total()
+        );
+        assert_eq!(
+            max_delta, 1,
+            "links must appear one-per-turn, never in a burst (max per-turn delta was {max_delta})"
         );
     }
 
