@@ -220,7 +220,7 @@ pub fn enter_diplo_session(
             transform.translation.y = bounds.center.y - 60.0 * fit;
         }
     }
-    *mode = MapMode::Diplomatic;
+    *mode = MapMode::Political;
 
     commands.spawn((
         Node {
