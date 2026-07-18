@@ -72,6 +72,7 @@ pub struct MarkerKey {
     settings: RenderSettings,
     selected_navy: Option<String>,
     pending_moves: usize,
+    label_filter: Option<std::collections::BTreeSet<String>>,
 }
 
 fn rs(v: f32) -> f32 {
@@ -166,6 +167,7 @@ pub fn rebuild_marker_layers(
     selected_navy: Res<SelectedNavy>,
     pending_moves: Res<PendingMoves>,
     perspective: Res<PerspectiveNation>,
+    label_filter: Res<crate::game::resources::SessionLabelFilter>,
     theme: Res<Theme>,
     icons: Option<Res<IconAssets>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -190,6 +192,7 @@ pub fn rebuild_marker_layers(
         settings: *settings,
         selected_navy: selected_navy.0.clone(),
         pending_moves: pending_moves.0.len(),
+        label_filter: label_filter.0.clone(),
     };
     if built.as_ref() == Some(&key) && !pending_moves.is_changed() {
         return;
@@ -761,6 +764,7 @@ pub fn rebuild_marker_layers(
             &vms,
             *mode,
             &icons,
+            label_filter.0.as_ref(),
             &mut treaty_index.0,
             root,
             &mut |c, z, gate| {
@@ -922,6 +926,7 @@ fn spawn_labels(
     vms: &ViewModels,
     mode: MapMode,
     icons: &IconAssets,
+    label_filter: Option<&std::collections::BTreeSet<String>>,
     treaty_hits: &mut Vec<TreatyMarkerHit>,
     _root: Entity,
     group: &mut dyn FnMut(&mut Commands, f32, Option<LodGate>) -> Entity,
@@ -986,6 +991,11 @@ fn spawn_labels(
         // React pixel units (converted to world below).
         let emoji_react = 43.2_f64;
         for label in &nation_labels {
+            if let Some(filter) = label_filter
+                && !filter.contains(&label.name)
+            {
+                continue;
+            }
             let Some(rel) = overlay
                 .relations
                 .iter()
@@ -1029,6 +1039,13 @@ fn spawn_labels(
 
     let parent = group(commands, 2.6, Some(LodGate::NotPastLabels));
     for label in &nation_labels {
+        // Card #494: during the diplomatic session only the two nations
+        // involved in the current exchange keep their name on the map.
+        if let Some(filter) = label_filter
+            && !filter.contains(&label.name)
+        {
+            continue;
+        }
         let size = ((label.size as f32).sqrt() * 3.0).clamp(12.0, 28.0);
         let pos = react_to_world([label.cx, label.cy]);
         let (color, shadow) = if label.is_anarchic {

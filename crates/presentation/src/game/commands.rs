@@ -9,7 +9,7 @@ use crate::game::resources::{
     DataVersion, DeployMode, GameMeta, PerspectiveNation, ProposalPrompt, QueuedDiplomacyAction,
     SelectedCivilian, SelectedShips, SelectedUnits, SessionRes,
 };
-use crate::game::turn_runner::{self, ActiveSkip, ActiveTurn, SkipSpec};
+use crate::game::turn_runner::{self, ActiveBegin, ActiveSkip, ActiveTurn, SkipSpec};
 use crate::game::vm;
 use crate::state::TurnPhase;
 use crate::widgets::Toast;
@@ -127,10 +127,11 @@ pub enum GameCommand {
         resource: String,
         quantity: u32,
     },
-    SetBuyOrder {
+    /// Toggle a resource on the buy wishlist (card #494): wishlisted
+    /// resources are offered seller-by-seller in the end-turn trade session.
+    SetBuyWishlist {
         resource: String,
-        quantity: u32,
-        max_price: i64,
+        wanted: bool,
     },
     // ── M8: Diplomacy screen ─────────────────────────────────────────
     /// Fire an armed diplomatic action at a target nation. The action only
@@ -179,6 +180,7 @@ pub fn apply_command(
     mut messages: MessageReader<GameCommand>,
     mut session: ResMut<SessionRes>,
     mut active: ResMut<ActiveTurn>,
+    mut active_begin: ResMut<ActiveBegin>,
     mut active_skip: ResMut<ActiveSkip>,
     mut next_phase: ResMut<NextState<TurnPhase>>,
     mut meta: ResMut<GameMeta>,
@@ -193,7 +195,12 @@ pub fn apply_command(
 ) {
     for command in messages.read() {
         if let GameCommand::EndTurn = command {
-            turn_runner::start_end_turn(&mut session, &mut active, &mut next_phase);
+            turn_runner::start_end_turn(
+                &mut session,
+                &mut active_begin,
+                &mut active,
+                &mut next_phase,
+            );
             continue;
         }
         if let GameCommand::SkipTurns { count } = command {
@@ -592,16 +599,10 @@ pub fn apply_command(
                 );
             }
 
-            GameCommand::SetBuyOrder {
-                resource,
-                quantity,
-                max_price,
-            } => {
+            GameCommand::SetBuyWishlist { resource, wanted } => {
                 bump = report(
-                    frontend_api::trade::set_player_buy_order(
-                        game, nation, "resource", resource, *quantity, *max_price,
-                    ),
-                    "Buy order failed",
+                    frontend_api::trade::set_buy_wishlist(game, nation, resource, *wanted),
+                    "Wishlist update failed",
                     &mut toasts,
                 );
             }

@@ -1,16 +1,340 @@
-use crate::economy::trade::{self};
+use crate::economy::trade::{self, PreparedTradeSession};
 use crate::game_state::GameState;
 use crate::turn::processor::TurnReport;
 use crate::types::*;
 
-/// Resolve a trade session: generate offers from Minor Nations, handle player
-/// sell/buy orders, use smart bids for AI GPs, resolve trades, and apply results.
+/// Build the frozen trade-offer pool for this turn (card #494): Minor Nation
+/// offers (with the withholding roll), the human player's resource sell
+/// offers, and every GP's manufactured surplus. Called at the end of
+/// `begin_turn` so the interactive trade session shows the exact offers that
+/// `finish_turn`'s resolution will consume; the atomic path builds it at the
+/// same pipeline position via the `PreparedTradeSession` fallback.
+pub(super) fn build_offer_pool(game: &mut GameState) -> Vec<trade::TradeOffer> {
+    let human_id = game.human_player_nation;
+
+    // Minor Nation offers (with optional random withholding).
+    let minor_offer_seed = game.next_rng_u64();
+    let withhold_chance = game
+        .game_data
+        .game_config
+        .minor_resource_skip_chance
+        .min(100);
+    let mut offers = trade::generate_minor_nation_offers_with_seed(
+        &game.world.nations,
+        &game.world.provinces,
+        &game.world.hex_map,
+        withhold_chance,
+        minor_offer_seed,
+        &game.world.market_state,
+    );
+
+    // Human player's resource sell offers join the pool.
+    if let Some(human) = game.get_nation(human_id) {
+        let sell_orders: Vec<trade::PlayerSellOrder> = human.diplomacy.player_sell_orders.clone();
+        for order in &sell_orders {
+            if human.resource_amount(order.resource) >= order.quantity && order.quantity > 0 {
+                offers.push(trade::TradeOffer {
+                    seller: human_id,
+                    commodity: trade::Commodity::Resource(order.resource),
+                    quantity: order.quantity,
+                    price_per_unit: game
+                        .world
+                        .market_state
+                        .current_price(trade::Commodity::Resource(order.resource)),
+                });
+            }
+        }
+    }
+
+    // Each GP offers its manufactured-commodity surplus (stock − reserve)
+    // at the current market price. Deterministic ordering: by GP id, then
+    // commodity enum order.
+    let gp_ids: Vec<NationId> = game
+        .world
+        .nations
+        .iter()
+        .filter(|n| n.is_great_power() && !n.diplomacy.is_in_anarchy)
+        .map(|n| n.id)
+        .collect();
+    for gp_id in &gp_ids {
+        // The human player can disable auto-trade with minors entirely.
+        if *gp_id == human_id {
+            let allow = game
+                .get_nation(human_id)
+                .map(|n| n.economy.auto_trade_with_minors)
+                .unwrap_or(true);
+            if !allow {
+                continue;
+            }
+        }
+        let reserves = gp_trade_reserves(game, *gp_id);
+        let Some(nation) = game.get_nation(*gp_id) else {
+            continue;
+        };
+        for &commodity in trade::ALL_MANUFACTURED {
+            let (stock, reserve) = match commodity {
+                trade::ManufacturedCommodity::Material(m) => {
+                    let stock = nation.economy.materials.get(&m).copied().unwrap_or(0);
+                    (stock, reserves.for_material(m))
+                }
+                trade::ManufacturedCommodity::Goods(g) => {
+                    let stock = nation.economy.goods.get(&g).copied().unwrap_or(0);
+                    (stock, reserves.for_goods(g))
+                }
+            };
+            let surplus = stock.saturating_sub(reserve);
+            if surplus > 0 {
+                let unified = match commodity {
+                    trade::ManufacturedCommodity::Material(m) => trade::Commodity::Material(m),
+                    trade::ManufacturedCommodity::Goods(g) => trade::Commodity::Goods(g),
+                };
+                offers.push(trade::TradeOffer {
+                    seller: *gp_id,
+                    commodity: unified,
+                    quantity: surplus,
+                    price_per_unit: game.world.market_state.current_price(unified),
+                });
+            }
+        }
+    }
+
+    offers
+}
+
+/// Wishlist auto-bids for the human seat on non-interactive paths (skip
+/// runs, batch): bid for everything on offer per wishlisted resource, capped
+/// by cargo, at 120% of market price (mirroring `generate_smart_bids`).
+pub(super) fn human_wishlist_auto_bids(
+    game: &GameState,
+    human_id: NationId,
+    offers: &[trade::TradeOffer],
+    cargo_capacity: u32,
+) -> Vec<trade::TradeBid> {
+    let Some(human) = game.get_nation(human_id) else {
+        return Vec::new();
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut bids = Vec::new();
+    let mut remaining_cargo = cargo_capacity;
+    for &resource in &human.diplomacy.buy_wishlist {
+        if remaining_cargo == 0 {
+            break;
+        }
+        if !seen.insert(resource) {
+            continue;
+        }
+        let commodity = trade::Commodity::Resource(resource);
+        let available: u32 = offers
+            .iter()
+            .filter(|o| o.commodity == commodity && o.seller != human_id)
+            .map(|o| o.quantity)
+            .sum();
+        if available == 0 {
+            continue;
+        }
+        let bp = game.world.market_state.current_price(commodity);
+        if bp == Money::ZERO {
+            continue;
+        }
+        let quantity = available.min(remaining_cargo);
+        bids.push(trade::TradeBid {
+            buyer: human_id,
+            commodity,
+            quantity,
+            max_price_per_unit: Money::dollars(bp.as_dollars() * 120 / 100),
+        });
+        remaining_cargo -= quantity;
+    }
+    bids
+}
+
+/// Per-GP stock reserves the trade phase holds back from sale, shared by
+/// the surplus-offer half (`build_offer_pool`) and the material-bid half of
+/// the resolution so both see identical numbers.
+struct GpTradeReserves {
+    lumber: u32,
+    steel: u32,
+    fabric: u32,
+    canned_food: u32,
+    paper: u32,
+    arms: u32,
+    clothing: u32,
+    furniture: u32,
+}
+
+impl GpTradeReserves {
+    fn for_material(&self, m: MaterialType) -> u32 {
+        match m {
+            MaterialType::Lumber => self.lumber,
+            MaterialType::Steel => self.steel,
+            MaterialType::Fabric => self.fabric,
+            MaterialType::CannedFood => self.canned_food,
+            MaterialType::Paper => self.paper,
+        }
+    }
+
+    fn for_goods(&self, g: GoodsType) -> u32 {
+        match g {
+            GoodsType::Arms => self.arms,
+            GoodsType::Clothing => self.clothing,
+            GoodsType::Furniture => self.furniture,
+            GoodsType::Hardware => 0,
+        }
+    }
+}
+
+fn gp_trade_reserves(game: &GameState, gp_id: NationId) -> GpTradeReserves {
+    let human_id = game.human_player_nation;
+    let personality = crate::ai::common::get_personality(game, gp_id);
+    // Human doesn't have a personality — use Balanced as the most
+    // conservative preset for human reserves.
+    let reserve_personality = if gp_id == human_id {
+        crate::ai::common::AiPersonality::Balanced
+    } else {
+        personality
+    };
+    let per_turn = crate::ai::economy::expansions_per_turn_target(game, reserve_personality);
+    let buildings_factor =
+        crate::ai::economy::expansion_reserve_buildings_factor(game, reserve_personality);
+    let (lumber_reserve, steel_reserve) =
+        crate::ai::economy::reserve_for_expansion(game, gp_id, per_turn, buildings_factor);
+    let (m_fabric_reserve, m_lumber_reserve, m_steel_reserve, _m_coal) =
+        crate::ai::naval::merchant_navy_material_reserve(game, gp_id);
+    let arms_reserve_total: u32 = {
+        let pending = game
+            .get_nation(gp_id)
+            .map(|n| n.pending_recruits_arms_cost())
+            .unwrap_or(0);
+        pending.saturating_add(crate::ai::economy::arms_sell_reserve(
+            game,
+            reserve_personality,
+        ))
+    };
+
+    let Some(nation) = game.get_nation(gp_id) else {
+        return GpTradeReserves {
+            lumber: 0,
+            steel: 0,
+            fabric: 0,
+            canned_food: 0,
+            paper: 0,
+            arms: 0,
+            clothing: 0,
+            furniture: 0,
+        };
+    };
+
+    // Hold back the goods queued immigration this turn will consume.
+    let cfg_immig = &game.game_data.game_config;
+    let pending_immig = nation.economy.pending_immigration;
+    let immig_canned_food_reserve = pending_immig.saturating_mul(cfg_immig.immigration_canned_food);
+    let immig_clothing_reserve = pending_immig.saturating_mul(cfg_immig.immigration_clothing);
+    let immig_furniture_reserve = pending_immig.saturating_mul(cfg_immig.immigration_furniture);
+
+    // Physical-capacity floors: reserve 2× the factory's per-turn ceiling
+    // so the AI keeps a one-turn buffer instead of liquidating finished
+    // goods the moment production catches up. The "real demand"
+    // (immigration / training) numbers above are tiny in the early game
+    // and were getting drained immediately, blocking worker growth.
+    let cap_of = |bt: crate::economy::BuildingType| -> u32 {
+        nation
+            .economy
+            .buildings
+            .iter()
+            .find(|b| b.building_type == bt)
+            .map(|b| b.effective_capacity())
+            .unwrap_or(0)
+    };
+    let furniture_cap_floor = cap_of(crate::economy::BuildingType::FurnitureFactory) * 2;
+    let clothing_cap_floor = cap_of(crate::economy::BuildingType::ClothingFactory) * 2;
+    let armory_cap_floor = cap_of(crate::economy::BuildingType::Armory) * 2;
+    let paper_cap_floor = cap_of(crate::economy::BuildingType::PaperFactory) * 2;
+
+    // AI stockpile target for canned food: held back from sale on top
+    // of immigration demand so the cannery isn't liquidated the moment
+    // production catches up. Production-side aim lives in
+    // `ai_set_production_targets`; without mirroring it here, the
+    // surplus is offered to minors as soon as a single unit lands.
+    let canned_food_stockpile_target: u32 =
+        crate::ai::lua_bridge::get_personality_config(game, reserve_personality)
+            .as_ref()
+            .and_then(|c| c.canned_food_stockpile_target)
+            .unwrap_or(20);
+    let canned_food_reserve_total =
+        immig_canned_food_reserve.saturating_add(canned_food_stockpile_target);
+
+    // Paper reserve: queued worker training + strategic floor for
+    // tech research and emergency training, with a 2× factory-cap
+    // floor so the chain has a one-turn buffer to back training.
+    let pending_train_paper = nation
+        .economy
+        .pending_train_to_trained
+        .saturating_mul(cfg_immig.train_to_trained_paper_cost)
+        .saturating_add(
+            nation
+                .economy
+                .pending_train_to_expert
+                .saturating_mul(cfg_immig.train_to_expert_paper_cost),
+        );
+    let paper_reserve = pending_train_paper
+        .saturating_add(cfg_immig.strategic_paper_reserve)
+        .max(paper_cap_floor);
+
+    // Chain-input reserve for Fabric: protect next turn's Clothing
+    // Factory feed so we don't liquidate Fabric and stall the chain.
+    // Sized to the planned ClothingFactory output × materials_per_good,
+    // but clamped by the factory's physical capacity — a target of 8
+    // with capacity 1 can never actually consume more than 2 fabric,
+    // so reserving 16 would falsely flag stock as undersupplied.
+    let clothing_cap = nation
+        .economy
+        .buildings
+        .iter()
+        .find(|b| b.building_type == crate::economy::BuildingType::ClothingFactory)
+        .map(|b| b.effective_capacity())
+        .unwrap_or(0);
+    let fabric_chain_reserve = nation
+        .economy
+        .chain_targets
+        .garment_factory
+        .min(clothing_cap)
+        .saturating_mul(cfg_immig.materials_per_good);
+
+    GpTradeReserves {
+        lumber: lumber_reserve.saturating_add(m_lumber_reserve),
+        steel: steel_reserve.saturating_add(m_steel_reserve),
+        fabric: m_fabric_reserve.saturating_add(fabric_chain_reserve),
+        canned_food: canned_food_reserve_total,
+        paper: paper_reserve,
+        arms: arms_reserve_total.max(armory_cap_floor),
+        clothing: immig_clothing_reserve.max(clothing_cap_floor),
+        furniture: immig_furniture_reserve.max(furniture_cap_floor),
+    }
+}
+
+/// Resolve a trade session: consume the frozen offer pool (built by
+/// `begin_turn`, or here as a fallback), execute the player's interactively
+/// accepted trades first, generate AI bids, resolve the remaining pool with
+/// seller preference, and apply results.
 pub(super) fn resolve_trade_session(
     game: &mut GameState,
     report: &mut TurnReport,
     blockade_capacity: &std::collections::HashMap<NationId, u32>,
 ) {
     let human_id = game.human_player_nation;
+
+    // The frozen pool + player decisions from the interactive session; the
+    // atomic path (no session ran) builds the pool here instead — the same
+    // pipeline position, so RNG order and offer content are identical.
+    let prepared = match game.transient.trade_session.take() {
+        Some(prepared) => prepared,
+        None => PreparedTradeSession {
+            offers: build_offer_pool(game),
+            accepted: Vec::new(),
+            interactive: false,
+        },
+    };
+    let offers = prepared.offers;
 
     // 0. Deduct subsidy costs from Great Powers (skip anarchic nations)
     let gp_ids: Vec<NationId> = game
@@ -44,60 +368,60 @@ pub(super) fn resolve_trade_session(
 
     let current_turn = game.turn;
 
-    // 1. Generate offers from Minor Nations (with optional random withholding)
-    let minor_offer_seed = game.next_rng_u64();
-    let withhold_chance = game
-        .game_data
-        .game_config
-        .minor_resource_skip_chance
-        .min(100);
-    let mut offers = trade::generate_minor_nation_offers_with_seed(
-        &game.world.nations,
-        &game.world.provinces,
-        &game.world.hex_map,
-        withhold_chance,
-        minor_offer_seed,
-        &game.world.market_state,
-    );
-
-    // 1b. Add human player's resource sell offers to the pool
-    if let Some(human) = game.get_nation(human_id) {
-        let sell_orders: Vec<trade::PlayerSellOrder> = human.diplomacy.player_sell_orders.clone();
-        for order in &sell_orders {
-            if human.resource_amount(order.resource) >= order.quantity && order.quantity > 0 {
-                offers.push(trade::TradeOffer {
-                    seller: human_id,
-                    commodity: trade::Commodity::Resource(order.resource),
-                    quantity: order.quantity,
-                    price_per_unit: game
-                        .world
-                        .market_state
-                        .current_price(trade::Commodity::Resource(order.resource)),
-                });
+    // 0b. Execute the player's session-accepted trades first (card #494):
+    // seller-pinned, at the offer's listed price, clamped to the offer's
+    // remaining quantity. AI bids then compete for what is left.
+    let mut pool = offers.clone();
+    let mut player_transactions: Vec<trade::TradeTransaction> = Vec::new();
+    for pick in &prepared.accepted {
+        let commodity = trade::Commodity::Resource(pick.resource);
+        let mut wanted = pick.quantity;
+        for offer in pool
+            .iter_mut()
+            .filter(|o| o.seller == pick.seller && o.commodity == commodity)
+        {
+            if wanted == 0 {
+                break;
             }
+            let take = wanted.min(offer.quantity);
+            if take == 0 {
+                continue;
+            }
+            offer.quantity -= take;
+            wanted -= take;
+            player_transactions.push(trade::TradeTransaction {
+                buyer: human_id,
+                seller: pick.seller,
+                commodity,
+                quantity: take,
+                price_per_unit: pick.price_per_unit,
+                total_cost: pick.price_per_unit * i64::from(take),
+            });
         }
     }
-    // 2. Generate bids: AI GPs use need-based auto-bids; the human-controlled
-    //    GP uses manual buy orders. In observer mode the human seat is a
-    //    viewpoint only — its nation is AI-controlled, so it must also use
-    //    auto-bids (otherwise it never imports anything).
+    pool.retain(|o| o.quantity > 0);
+
+    // 2. Generate bids: AI GPs use need-based auto-bids; the human seat uses
+    //    the interactive session's picks (already executed above) or, on
+    //    non-interactive paths, wishlist auto-bids. In observer mode the
+    //    human seat is a viewpoint only — its nation is AI-controlled, so it
+    //    must also use auto-bids (otherwise it never imports anything).
     let mut all_bids = Vec::new();
 
     for gp_id in &gp_ids {
         if *gp_id == human_id && !game.observer_mode {
-            // Use player's manual buy orders instead of auto-generated bids.
-            if let Some(human) = game.get_nation(*gp_id) {
-                for order in &human.diplomacy.player_buy_orders {
-                    if order.quantity == 0 {
-                        continue;
-                    }
-                    all_bids.push(trade::TradeBid {
-                        buyer: *gp_id,
-                        commodity: trade::Commodity::Resource(order.resource),
-                        quantity: order.quantity,
-                        max_price_per_unit: order.max_price_per_unit,
-                    });
-                }
+            if !prepared.interactive {
+                let cargo_capacity = blockade_capacity.get(gp_id).copied().unwrap_or_else(|| {
+                    game.get_nation(*gp_id)
+                        .map(|n| n.total_cargo_capacity(&game.game_data))
+                        .unwrap_or(0)
+                });
+                all_bids.extend(human_wishlist_auto_bids(
+                    game,
+                    human_id,
+                    &pool,
+                    cargo_capacity,
+                ));
             }
             continue;
         }
@@ -129,7 +453,7 @@ pub(super) fn resolve_trade_session(
             let bids = trade::generate_need_based_bids(
                 nation,
                 &game.world.nations,
-                &offers,
+                &pool,
                 &own_yield_vec,
                 cargo_capacity,
                 Money::dollars(treasury_floor),
@@ -139,7 +463,7 @@ pub(super) fn resolve_trade_session(
 
             if game.ai_debug {
                 let needs = trade::projected_resource_needs(nation);
-                let total_offer_qty: u32 = offers.iter().map(|o| o.quantity).sum();
+                let total_offer_qty: u32 = pool.iter().map(|o| o.quantity).sum();
                 let yield_for = |r: ResourceType| -> u32 {
                     own_yield_vec
                         .iter()
@@ -157,7 +481,7 @@ pub(super) fn resolve_trade_session(
                             None
                         } else {
                             let urgency = per_turn.saturating_sub(yield_for(*r));
-                            let avail: u32 = offers
+                            let avail: u32 = pool
                                 .iter()
                                 .filter(|o| {
                                     o.commodity == trade::Commodity::Resource(*r)
@@ -195,189 +519,25 @@ pub(super) fn resolve_trade_session(
         }
     }
 
-    // 2b. Each GP offers its manufactured-commodity surplus (stock - reserve)
-    // into the SAME unified offer pool that `resolve_trades_with_preference`
-    // consumes, priced at the current per-commodity market price (drifted from
-    // the material/goods tier base). In the same loop, each AI GP (and the
-    // observer-mode human seat) also places BUY bids for the 5 intermediate
-    // materials it is short of — sequenced after its resource bids so the
-    // shared cargo capacity and treasury floor are respected. Minors become
-    // bidders for the manufactured offers via the
-    // `generate_minor_manufactured_bids` helper.
+    // 2b. AI GP BUY bids for the 5 intermediate materials each is short of —
+    // sequenced after its resource bids so the shared cargo capacity and
+    // treasury floor are respected. (The matching surplus OFFERS were placed
+    // into the frozen pool by `build_offer_pool`.) Minors become bidders for
+    // the manufactured offers via the `generate_minor_manufactured_bids`
+    // helper.
     {
-        // Build (seller, commodity, quantity) surplus offers from every GP.
-        // Deterministic ordering: by GP id, then commodity enum order.
         for gp_id in &gp_ids {
-            let personality = crate::ai::common::get_personality(game, *gp_id);
-            // Human doesn't have a personality — use Balanced as the most
-            // conservative preset for human reserves.
-            let reserve_personality = if *gp_id == human_id {
-                crate::ai::common::AiPersonality::Balanced
-            } else {
-                personality
-            };
-            let per_turn =
-                crate::ai::economy::expansions_per_turn_target(game, reserve_personality);
-            let buildings_factor =
-                crate::ai::economy::expansion_reserve_buildings_factor(game, reserve_personality);
-            let (lumber_reserve, steel_reserve) =
-                crate::ai::economy::reserve_for_expansion(game, *gp_id, per_turn, buildings_factor);
-            let (m_fabric_reserve, m_lumber_reserve, m_steel_reserve, _m_coal) =
-                crate::ai::naval::merchant_navy_material_reserve(game, *gp_id);
-            let arms_reserve_total: u32 = {
-                let pending = game
-                    .get_nation(*gp_id)
-                    .map(|n| n.pending_recruits_arms_cost())
-                    .unwrap_or(0);
-                pending.saturating_add(crate::ai::economy::arms_sell_reserve(
-                    game,
-                    reserve_personality,
-                ))
-            };
-
-            // The human player can disable auto-trade with minors entirely.
-            if *gp_id == human_id {
-                let allow = game
-                    .get_nation(human_id)
-                    .map(|n| n.economy.auto_trade_with_minors)
-                    .unwrap_or(true);
-                if !allow {
-                    continue;
-                }
+            // The human-controlled (non-observer) seat buys only via the
+            // trade session / wishlist — same condition as the resource-bid
+            // loop.
+            if *gp_id == human_id && !game.observer_mode {
+                continue;
             }
-
+            let reserves = gp_trade_reserves(game, *gp_id);
             let nation = match game.get_nation(*gp_id) {
                 Some(n) => n,
                 None => continue,
             };
-            // Hold back the goods queued immigration this turn will consume.
-            let cfg_immig = &game.game_data.game_config;
-            let pending_immig = nation.economy.pending_immigration;
-            let immig_canned_food_reserve =
-                pending_immig.saturating_mul(cfg_immig.immigration_canned_food);
-            let immig_clothing_reserve =
-                pending_immig.saturating_mul(cfg_immig.immigration_clothing);
-            let immig_furniture_reserve =
-                pending_immig.saturating_mul(cfg_immig.immigration_furniture);
-
-            // Physical-capacity floors: reserve 2× the factory's per-turn ceiling
-            // so the AI keeps a one-turn buffer instead of liquidating finished
-            // goods the moment production catches up. The "real demand"
-            // (immigration / training) numbers above are tiny in the early game
-            // and were getting drained immediately, blocking worker growth.
-            let cap_of = |bt: crate::economy::BuildingType| -> u32 {
-                nation
-                    .economy
-                    .buildings
-                    .iter()
-                    .find(|b| b.building_type == bt)
-                    .map(|b| b.effective_capacity())
-                    .unwrap_or(0)
-            };
-            let furniture_cap_floor = cap_of(crate::economy::BuildingType::FurnitureFactory) * 2;
-            let clothing_cap_floor = cap_of(crate::economy::BuildingType::ClothingFactory) * 2;
-            let armory_cap_floor = cap_of(crate::economy::BuildingType::Armory) * 2;
-            let paper_cap_floor = cap_of(crate::economy::BuildingType::PaperFactory) * 2;
-
-            // AI stockpile target for canned food: held back from sale on top
-            // of immigration demand so the cannery isn't liquidated the moment
-            // production catches up. Production-side aim lives in
-            // `ai_set_production_targets`; without mirroring it here, the
-            // surplus is offered to minors as soon as a single unit lands.
-            let canned_food_stockpile_target: u32 =
-                crate::ai::lua_bridge::get_personality_config(game, reserve_personality)
-                    .as_ref()
-                    .and_then(|c| c.canned_food_stockpile_target)
-                    .unwrap_or(20);
-            let canned_food_reserve_total =
-                immig_canned_food_reserve.saturating_add(canned_food_stockpile_target);
-
-            // Paper reserve: queued worker training + strategic floor for
-            // tech research and emergency training, with a 2× factory-cap
-            // floor so the chain has a one-turn buffer to back training.
-            let pending_train_paper = nation
-                .economy
-                .pending_train_to_trained
-                .saturating_mul(cfg_immig.train_to_trained_paper_cost)
-                .saturating_add(
-                    nation
-                        .economy
-                        .pending_train_to_expert
-                        .saturating_mul(cfg_immig.train_to_expert_paper_cost),
-                );
-            let paper_reserve = pending_train_paper
-                .saturating_add(cfg_immig.strategic_paper_reserve)
-                .max(paper_cap_floor);
-
-            // Chain-input reserve for Fabric: protect next turn's Clothing
-            // Factory feed so we don't liquidate Fabric and stall the chain.
-            // Sized to the planned ClothingFactory output × materials_per_good,
-            // but clamped by the factory's physical capacity — a target of 8
-            // with capacity 1 can never actually consume more than 2 fabric,
-            // so reserving 16 would falsely flag stock as undersupplied.
-            let clothing_cap = nation
-                .economy
-                .buildings
-                .iter()
-                .find(|b| b.building_type == crate::economy::BuildingType::ClothingFactory)
-                .map(|b| b.effective_capacity())
-                .unwrap_or(0);
-            let fabric_chain_reserve = nation
-                .economy
-                .chain_targets
-                .garment_factory
-                .min(clothing_cap)
-                .saturating_mul(cfg_immig.materials_per_good);
-
-            let reserve_for_material = |m: MaterialType| -> u32 {
-                match m {
-                    MaterialType::Lumber => lumber_reserve.saturating_add(m_lumber_reserve),
-                    MaterialType::Steel => steel_reserve.saturating_add(m_steel_reserve),
-                    MaterialType::Fabric => m_fabric_reserve.saturating_add(fabric_chain_reserve),
-                    MaterialType::CannedFood => canned_food_reserve_total,
-                    MaterialType::Paper => paper_reserve,
-                }
-            };
-            for &commodity in trade::ALL_MANUFACTURED {
-                let (stock, reserve) = match commodity {
-                    trade::ManufacturedCommodity::Material(m) => {
-                        let stock = nation.economy.materials.get(&m).copied().unwrap_or(0);
-                        (stock, reserve_for_material(m))
-                    }
-                    trade::ManufacturedCommodity::Goods(g) => {
-                        let stock = nation.economy.goods.get(&g).copied().unwrap_or(0);
-                        let reserve = match g {
-                            GoodsType::Arms => arms_reserve_total.max(armory_cap_floor),
-                            GoodsType::Clothing => immig_clothing_reserve.max(clothing_cap_floor),
-                            GoodsType::Furniture => {
-                                immig_furniture_reserve.max(furniture_cap_floor)
-                            }
-                            GoodsType::Hardware => 0,
-                        };
-                        (stock, reserve)
-                    }
-                };
-                let surplus = stock.saturating_sub(reserve);
-                if surplus > 0 {
-                    let unified = match commodity {
-                        trade::ManufacturedCommodity::Material(m) => trade::Commodity::Material(m),
-                        trade::ManufacturedCommodity::Goods(g) => trade::Commodity::Goods(g),
-                    };
-                    offers.push(trade::TradeOffer {
-                        seller: *gp_id,
-                        commodity: unified,
-                        quantity: surplus,
-                        price_per_unit: game.world.market_state.current_price(unified),
-                    });
-                }
-            }
-
-            // GP BUY bids for the 5 intermediate materials it is short of.
-            // The human-controlled (non-observer) seat uses manual orders and
-            // is skipped here — same condition as the resource-bid loop.
-            if *gp_id == human_id && !game.observer_mode {
-                continue;
-            }
             // Cargo + treasury floor are SHARED with this GP's resource bids:
             // sequence material bids after the resource bids already pushed in
             // §2 so the combined projected spend respects the floor.
@@ -426,7 +586,7 @@ pub(super) fn resolve_trade_session(
             .into_iter()
             .map(|m| {
                 let stock = nation.economy.materials.get(&m).copied().unwrap_or(0);
-                (m, reserve_for_material(m), stock)
+                (m, reserves.for_material(m), stock)
             })
             .collect();
             all_bids.extend(material_buy_bids(
@@ -441,15 +601,14 @@ pub(super) fn resolve_trade_session(
         // Minors bid for the manufactured commodities currently on offer,
         // preserving the legacy per-(minor, commodity) skip roll.
         let minor_bid_seed = game.next_rng_u64();
-        let minor_bids = generate_minor_manufactured_bids(game, &offers, minor_bid_seed);
+        let minor_bids = generate_minor_manufactured_bids(game, &pool, minor_bid_seed);
         all_bids.extend(minor_bids);
     }
 
-    if offers.is_empty() && all_bids.is_empty() {
-        // Clear player orders and return
+    if offers.is_empty() && all_bids.is_empty() && player_transactions.is_empty() {
+        // Clear player sell orders and return (the buy wishlist persists).
         if let Some(human) = game.get_nation_mut(human_id) {
             human.diplomacy.player_sell_orders.clear();
-            human.diplomacy.player_buy_orders.clear();
         }
         return;
     }
@@ -486,13 +645,15 @@ pub(super) fn resolve_trade_session(
         }
     }
 
-    // 4. Resolve trades with preference system
-    let transactions = trade::resolve_trades_with_preference(
-        &offers,
+    // 4. Resolve trades with preference system on the post-pick pool; the
+    //    player's session-accepted transactions come first.
+    let mut transactions = player_transactions;
+    transactions.extend(trade::resolve_trades_with_preference(
+        &pool,
         &all_bids,
         &relationship_scores,
         &subsidies_map,
-    );
+    ));
 
     // 5. Apply transactions. Treasury delta + stockpile changes are uniform
     //    across resources, materials, and goods; cash-flow reporting is handled
@@ -700,6 +861,13 @@ pub(super) fn resolve_trade_session(
         for bid in &all_bids {
             *demand_map.entry(bid.commodity).or_insert(0) += bid.quantity;
         }
+        // The player's session-accepted trades are demand too — without them
+        // sold could exceed demand in the market ticks.
+        for pick in &prepared.accepted {
+            *demand_map
+                .entry(trade::Commodity::Resource(pick.resource))
+                .or_insert(0) += pick.quantity;
+        }
         for txn in transactions {
             *sold_map.entry(txn.commodity).or_insert(0) += txn.quantity;
             let (ps, pq) = price_sum_map.entry(txn.commodity).or_insert((0, 0));
@@ -750,10 +918,10 @@ pub(super) fn resolve_trade_session(
         }
     }
 
-    // 9. Clear player trade orders for next turn
+    // 9. Clear player sell orders for next turn (the buy wishlist persists
+    //    until the player unticks it — card #494).
     if let Some(human) = game.get_nation_mut(human_id) {
         human.diplomacy.player_sell_orders.clear();
-        human.diplomacy.player_buy_orders.clear();
     }
 }
 

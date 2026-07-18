@@ -740,18 +740,47 @@ fn reserve_trade_phase(game: &mut GameState) -> Vec<NationReservation> {
     let mut all_bids = Vec::new();
     for gp_id in &gp_ids {
         if *gp_id == human_id {
-            if let Some(human) = game.get_nation(*gp_id) {
-                for order in &human.diplomacy.player_buy_orders {
-                    if order.quantity == 0 {
-                        continue;
-                    }
+            // Estimate the human seat's spend for the treasury reservation:
+            // the session's accepted picks when a session ran, else wishlist
+            // auto-bids (card #494). Observer seats reserve nothing here —
+            // their AI bids are estimated by the smart-bid arm below only
+            // for AI-controlled GPs, mirroring the previous behavior where
+            // an observer human seat had no manual orders.
+            if let Some(prepared) = game.transient.trade_session.as_ref() {
+                for pick in &prepared.accepted {
                     all_bids.push(trade::TradeBid {
                         buyer: *gp_id,
-                        commodity: Commodity::Resource(order.resource),
-                        quantity: order.quantity,
-                        max_price_per_unit: order.max_price_per_unit,
+                        commodity: Commodity::Resource(pick.resource),
+                        quantity: pick.quantity,
+                        max_price_per_unit: pick.price_per_unit,
                     });
                 }
+                if !prepared.interactive && !game.observer_mode {
+                    let cargo_capacity =
+                        blockade_capacity.get(gp_id).copied().unwrap_or_else(|| {
+                            game.get_nation(*gp_id)
+                                .map(|n| n.total_cargo_capacity(&game.game_data))
+                                .unwrap_or(0)
+                        });
+                    all_bids.extend(super::trade_phase::human_wishlist_auto_bids(
+                        game,
+                        human_id,
+                        &prepared.offers,
+                        cargo_capacity,
+                    ));
+                }
+            } else if !game.observer_mode {
+                let cargo_capacity = blockade_capacity.get(gp_id).copied().unwrap_or_else(|| {
+                    game.get_nation(*gp_id)
+                        .map(|n| n.total_cargo_capacity(&game.game_data))
+                        .unwrap_or(0)
+                });
+                all_bids.extend(super::trade_phase::human_wishlist_auto_bids(
+                    game,
+                    human_id,
+                    &offers,
+                    cargo_capacity,
+                ));
             }
             continue;
         }

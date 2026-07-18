@@ -106,8 +106,10 @@ pub struct NationDiplomacy {
     pub integrated_by: Option<NationId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub player_sell_orders: Vec<crate::economy::PlayerSellOrder>,
+    /// Resources the player wants offered in the end-turn trade session
+    /// (card #494); persists across turns.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub player_buy_orders: Vec<crate::economy::PlayerBuyOrder>,
+    pub buy_wishlist: Vec<crate::types::ResourceType>,
     #[serde(default)]
     pub ai_priority_state: AiPriorityState,
 }
@@ -375,7 +377,7 @@ impl From<&dn::NationDiplomacy> for NationDiplomacy {
             is_in_anarchy: v.is_in_anarchy,
             integrated_by: v.integrated_by.map(Into::into),
             player_sell_orders: v.player_sell_orders.iter().map(Into::into).collect(),
-            player_buy_orders: v.player_buy_orders.iter().map(Into::into).collect(),
+            buy_wishlist: v.buy_wishlist.iter().map(|r| (*r).into()).collect(),
             ai_priority_state: (&v.ai_priority_state).into(),
         }
     }
@@ -393,7 +395,7 @@ impl From<NationDiplomacy> for dn::NationDiplomacy {
             is_in_anarchy: v.is_in_anarchy,
             integrated_by: v.integrated_by.map(Into::into),
             player_sell_orders: v.player_sell_orders.into_iter().map(Into::into).collect(),
-            player_buy_orders: v.player_buy_orders.into_iter().map(Into::into).collect(),
+            buy_wishlist: v.buy_wishlist.into_iter().map(Into::into).collect(),
             ai_priority_state: v.ai_priority_state.into(),
         }
     }

@@ -104,6 +104,7 @@ pub fn setup_side_panel(
             BackgroundColor(theme::PANEL_BG_SOLID),
             Interaction::default(),
             PickingBlocker,
+            crate::screens::session::SessionHiddenChrome,
         ))
         .with_children(|panel| {
             let scroll = widgets::spawn_scroll_area(
@@ -319,6 +320,7 @@ pub fn setup_side_panel(
             },
             Interaction::default(),
             PickingBlocker,
+            crate::screens::session::SessionHiddenChrome,
         ))
         .with_children(|anchor| {
             let dropdown = widgets::spawn_dropdown(

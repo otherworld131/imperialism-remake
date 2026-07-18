@@ -13,6 +13,7 @@ pub mod news;
 pub mod panels;
 pub mod proposals;
 pub mod saveload;
+pub mod session;
 pub mod side_panel;
 pub mod tech;
 pub mod trade;

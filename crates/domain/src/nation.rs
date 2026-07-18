@@ -807,8 +807,9 @@ pub struct NationDiplomacy {
     pub integrated_by: Option<NationId>,
     /// Player sell orders for this turn (cleared after turn resolution).
     pub player_sell_orders: Vec<crate::economy::trade::PlayerSellOrder>,
-    /// Player buy orders for this turn (cleared after turn resolution).
-    pub player_buy_orders: Vec<crate::economy::trade::PlayerBuyOrder>,
+    /// Resources the player wants to be offered during the end-turn trade
+    /// session (card #494). Persistent across turns until unticked.
+    pub buy_wishlist: Vec<ResourceType>,
     /// AI scratch state for the scored-spending loop.
     pub ai_priority_state: AiPriorityState,
 }

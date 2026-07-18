@@ -79,13 +79,27 @@ pub struct PlayerSellOrder {
     pub quantity: u32,
 }
 
-/// A player's order to buy a resource via the bid pool. Filled from Minor
-/// Nation offers and GP-placed offers; unmatched bids are discarded.
+/// A trade the player accepted during the interactive end-turn trade
+/// session (card #494). Executed verbatim — seller-pinned, at the offer's
+/// listed price — before AI bids compete for the remaining pool.
 #[derive(Debug, Clone)]
-pub struct PlayerBuyOrder {
+pub struct AcceptedTrade {
+    pub seller: NationId,
     pub resource: ResourceType,
     pub quantity: u32,
-    pub max_price_per_unit: Money,
+    pub price_per_unit: Money,
+}
+
+/// The frozen trade state handed from `begin_turn` to `finish_turn`
+/// (card #494): the offer pool built at the session pause plus whatever the
+/// player accepted interactively. `interactive == false` means no session
+/// ran (skip runs, batch, observer) and the human seat falls back to
+/// wishlist auto-bids.
+#[derive(Debug, Clone, Default)]
+pub struct PreparedTradeSession {
+    pub offers: Vec<TradeOffer>,
+    pub accepted: Vec<AcceptedTrade>,
+    pub interactive: bool,
 }
 
 /// Apply subsidy to trade prices. Subsidized nations get better prices.

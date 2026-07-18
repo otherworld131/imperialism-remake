@@ -24,7 +24,7 @@ use crate::map::picking::{self, HoverTarget, HoveredHex, MapClick, SelectedHex};
 use crate::map::tooltip::{self, MapTooltipState};
 use crate::screens::{
     battles, diplomacy, gallery, industry, ledger, legend, map_hud, news, panels, proposals,
-    saveload, side_panel, tech, trade, transport,
+    saveload, session, side_panel, tech, trade, transport,
 };
 use crate::setup::{self, SetupAction, SetupConfig, SetupUi};
 use crate::state::{AppState, Screen, TurnPhase, map_interactive};
@@ -52,7 +52,10 @@ fn debug_screenshot(
     let Ok(path) = std::env::var("MAP_SCREENSHOT") else {
         return;
     };
-    if *phase.get() != TurnPhase::Idle {
+    // Only pause the frame counter while a turn resolves asynchronously —
+    // the between-turns session phases (card #494) render steady UI that
+    // the M11 scripts capture.
+    if *phase.get() == TurnPhase::Processing {
         return;
     }
     // Skip mode wants the map: dismiss the newspaper the skip lands on.
@@ -242,7 +245,7 @@ fn m7_debug_driver(
     mut next_screen: ResMut<NextState<Screen>>,
     mut game_commands: MessageWriter<GameCommand>,
     mut activations: MessageWriter<ButtonActivated>,
-    buy_buttons: Query<Entity, With<trade::TradeBuyButton>>,
+
     autofill_buttons: Query<Entity, With<transport::AutoFillButton>>,
     mut tab_groups: Query<&mut TabGroup>,
     mut industry_ui: ResMut<industry::IndustryUi>,
@@ -324,12 +327,12 @@ fn m7_debug_driver(
             }
             "tradehist" => {
                 for mut group in &mut tab_groups {
-                    group.active = 1;
+                    group.active = 2;
                 }
             }
             "trademarket" => {
                 for mut group in &mut tab_groups {
-                    group.active = 2;
+                    group.active = 3;
                 }
             }
             "queueendturn" => {
@@ -338,11 +341,14 @@ fn m7_debug_driver(
             _ => {}
         }
     }
-    if *frames == 100
-        && script == "tradebuy"
-        && let Some(button) = buy_buttons.iter().next()
-    {
-        activations.write(ButtonActivated(button));
+    if *frames == 100 && script == "tradebuy" {
+        // Wishlist a couple of resources so the screenshot shows ticked rows.
+        for resource in ["Coal", "Iron"] {
+            game_commands.write(GameCommand::SetBuyWishlist {
+                resource: resource.to_string(),
+                wanted: true,
+            });
+        }
     }
     if *frames == 100
         && script == "transportfill"
@@ -362,7 +368,7 @@ fn m7_debug_driver(
         }
         if *frames == 100 {
             for mut group in &mut tab_groups {
-                group.active = if script == "histdata" { 1 } else { 2 };
+                group.active = if script == "histdata" { 2 } else { 3 };
             }
         }
     }
@@ -640,6 +646,137 @@ fn m9_debug_driver(
             if script == "legendflags" && *frames == 60 {
                 for mut position in &mut scroll_areas {
                     position.y = 100_000.0;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Debug driver for the between-turns session screens (card #494):
+/// `M11_DEBUG=<script>` with `MAP_SCREENSHOT` captures live state. Scripts:
+/// `diplosession` / `tradesession` / `tradesummary` (synthetic content —
+/// AI proposals and offers aren't deterministic in a 1-turn run),
+/// `sessionflow` (real: wishlist + sell order queued, then End Turn — the
+/// screenshot catches whichever session the first turn produces).
+#[allow(clippy::too_many_arguments)]
+fn m11_debug_driver(
+    mut frames: Local<u32>,
+    mut session_ui: ResMut<crate::game::resources::TurnSessionUi>,
+    mut next_phase: ResMut<NextState<TurnPhase>>,
+    mut game_commands: MessageWriter<GameCommand>,
+    mut activations: MessageWriter<ButtonActivated>,
+    phase: Res<State<TurnPhase>>,
+    session_continue: Query<Entity, With<session::DiploContinueBtn>>,
+    session_buy: Query<Entity, With<session::OfferBuyBtn>>,
+) {
+    let Ok(script) = std::env::var("M11_DEBUG") else {
+        return;
+    };
+    *frames += 1;
+    match script.as_str() {
+        "diplosession" if *frames == 40 => {
+            session_ui.view = serde_json::from_value(serde_json::json!({
+                "observer": false,
+                "diplo_events": [
+                    {"text": "Shenia has declared war on Gringrinlaria!", "category": "War", "nation_ids": [1, 2]},
+                ],
+                "proposals": [
+                    {
+                        "index": 0,
+                        "from_nation_id": 1,
+                        "from_nation_name": "Shenia",
+                        "from_nation_color": "Orange",
+                        "proposal_type": "Alliance",
+                        "display_text": "Shenia proposes an Alliance",
+                        "turn_proposed": 1,
+                        "turns_until_expiry": 3,
+                    }
+                ],
+                "offers": [],
+                "treasury": 12000,
+                "money_committed": 0,
+                "cargo_capacity": 40,
+                "cargo_committed": 0,
+            }))
+            .ok();
+            session_ui.diplo_index = 1;
+            next_phase.set(TurnPhase::DiploSession);
+        }
+        "tradesession" if *frames == 40 => {
+            session_ui.view = serde_json::from_value(serde_json::json!({
+                "observer": false,
+                "diplo_events": [],
+                "proposals": [],
+                "offers": [
+                    {"seller_id": 1, "seller_name": "Shenia", "resource": "Coal", "remaining": 12, "price": 118, "relation_score": 42},
+                    {"seller_id": 2, "seller_name": "Gringrinlaria", "resource": "Coal", "remaining": 5, "price": 130, "relation_score": -8},
+                    {"seller_id": 2, "seller_name": "Gringrinlaria", "resource": "Iron", "remaining": 7, "price": 140, "relation_score": -8},
+                ],
+                "treasury": 14200,
+                "money_committed": 0,
+                "cargo_capacity": 40,
+                "cargo_committed": 22,
+            }))
+            .ok();
+            next_phase.set(TurnPhase::TradeSession);
+        }
+        "tradesummary" if *frames == 40 => {
+            session_ui.summary = serde_json::from_value(serde_json::json!([
+                {"resource": "Coal", "quantity": 10, "partner_id": 1, "partner_name": "Shenia", "price_per_unit": 118, "total_cost": 1180, "bought": true},
+                {"resource": "Iron", "quantity": 4, "partner_id": 2, "partner_name": "Gringrinlaria", "price_per_unit": 140, "total_cost": 560, "bought": true},
+                {"resource": "Grain", "quantity": 20, "partner_id": 3, "partner_name": "Ferbenia", "price_per_unit": 61, "total_cost": 1220, "bought": false},
+            ]))
+            .unwrap_or_default();
+            next_phase.set(TurnPhase::Summary);
+        }
+        // Real end-to-end: queue a sell order + wishlist, end the turn, then
+        // click through the sessions (Continue on diplo items, Buy on the
+        // first offer, then the screenshot catches whatever remains — the
+        // trade session mid-flow, or the summary once offers run out).
+        "sessionflow" => {
+            if *frames == 20 && *phase.get() == TurnPhase::Idle {
+                game_commands.write(GameCommand::SetSellOrder {
+                    resource: "Grain".to_string(),
+                    quantity: 3,
+                });
+                for resource in ["Coal", "Iron", "Wool"] {
+                    game_commands.write(GameCommand::SetBuyWishlist {
+                        resource: resource.to_string(),
+                        wanted: true,
+                    });
+                }
+            }
+            if *frames == 40 && *phase.get() == TurnPhase::Idle {
+                game_commands.write(GameCommand::EndTurn);
+            }
+            if *frames > 40 && frames.is_multiple_of(20) {
+                if let Some(button) = session_continue.iter().next() {
+                    activations.write(ButtonActivated(button));
+                } else if let Some(button) = session_buy.iter().next() {
+                    activations.write(ButtonActivated(button));
+                }
+            }
+        }
+        // Like `sessionflow`, but buys everything until the offers run out
+        // so the capture lands on the real post-resolution trade summary.
+        "sessionsummary" => {
+            if *frames == 20 && *phase.get() == TurnPhase::Idle {
+                for resource in ["Coal", "Iron", "Wool", "Grain", "Timber"] {
+                    game_commands.write(GameCommand::SetBuyWishlist {
+                        resource: resource.to_string(),
+                        wanted: true,
+                    });
+                }
+            }
+            if *frames == 40 && *phase.get() == TurnPhase::Idle {
+                game_commands.write(GameCommand::EndTurn);
+            }
+            if *frames > 40 && frames.is_multiple_of(10) {
+                if let Some(button) = session_continue.iter().next() {
+                    activations.write(ButtonActivated(button));
+                } else if let Some(button) = session_buy.iter().next() {
+                    activations.write(ButtonActivated(button));
                 }
             }
         }
@@ -1327,6 +1464,10 @@ pub fn run_game() {
         .init_resource::<TileIndex>()
         .init_resource::<TurnInfo>()
         .init_resource::<ActiveTurn>()
+        .init_resource::<turn_runner::ActiveBegin>()
+        .init_resource::<crate::game::resources::TurnSessionUi>()
+        .init_resource::<crate::game::resources::SessionLabelFilter>()
+        .init_resource::<session::SessionSavedView>()
         .init_resource::<ActiveSkip>()
         .init_resource::<BusyProgress>()
         .init_resource::<CameraCentered>()
@@ -1410,6 +1551,7 @@ pub fn run_game() {
                 markers::blink_selected_markers,
                 markers::animate_map_markers,
                 debug_screenshot,
+                turn_runner::poll_begin_task.run_if(in_state(TurnPhase::Processing)),
                 turn_runner::poll_turn_task.run_if(in_state(TurnPhase::Processing)),
                 turn_runner::poll_skip_task.run_if(in_state(TurnPhase::Processing)),
                 setup::jobs::poll_setup_job,
@@ -1427,6 +1569,7 @@ pub fn run_game() {
                     m7_debug_driver,
                     m8_debug_driver,
                     m9_debug_driver,
+                    m11_debug_driver,
                 )
                     .run_if(in_state(AppState::InGame)),
                 m10_debug_driver,
@@ -1555,8 +1698,10 @@ pub fn run_game() {
         .add_systems(
             Update,
             (
-                map_hud::handle_screen_tabs,
-                map_hud::screen_hotkeys.before(widgets::modal::esc_pops_top_modal),
+                map_hud::handle_screen_tabs.run_if(in_state(TurnPhase::Idle)),
+                map_hud::screen_hotkeys
+                    .run_if(in_state(TurnPhase::Idle))
+                    .before(widgets::modal::esc_pops_top_modal),
                 map_hud::update_screen_tabs,
                 industry::industry_card_hotkeys.run_if(in_state(Screen::Industry)),
                 industry::update_industry,
@@ -1661,6 +1806,52 @@ pub fn run_game() {
         .add_systems(
             OnExit(TurnPhase::Processing),
             (map_hud::hide_busy_overlay, map_hud::enable_end_turn),
+        )
+        // ── Between-turns sessions (card #494) ──────────────────────────
+        .add_systems(
+            OnEnter(TurnPhase::DiploSession),
+            (
+                ledger::ensure_flags,
+                session::enter_diplo_session,
+                tooltip::hide_map_tooltip,
+            )
+                .chain(),
+        )
+        .add_systems(OnExit(TurnPhase::DiploSession), session::exit_diplo_session)
+        .add_systems(
+            OnEnter(TurnPhase::TradeSession),
+            (
+                ledger::ensure_flags,
+                session::enter_trade_session,
+                tooltip::hide_map_tooltip,
+            )
+                .chain(),
+        )
+        .add_systems(OnExit(TurnPhase::TradeSession), session::exit_trade_session)
+        .add_systems(
+            OnEnter(TurnPhase::Summary),
+            (ledger::ensure_flags, session::enter_summary).chain(),
+        )
+        .add_systems(OnExit(TurnPhase::Summary), session::exit_summary)
+        .add_systems(
+            Update,
+            (
+                session::sync_session_chrome,
+                (
+                    session::update_diplo_session,
+                    session::handle_diplo_session_buttons,
+                )
+                    .run_if(in_state(TurnPhase::DiploSession)),
+                (
+                    session::update_trade_session,
+                    session::handle_offer_slider,
+                    session::handle_trade_session_buttons,
+                )
+                    .run_if(in_state(TurnPhase::TradeSession)),
+                (session::update_summary, session::handle_summary_buttons)
+                    .run_if(in_state(TurnPhase::Summary)),
+            )
+                .run_if(in_state(AppState::InGame)),
         )
         .add_systems(
             Update,

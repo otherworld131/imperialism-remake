@@ -116,6 +116,7 @@ pub fn setup_hud(mut commands: Commands, theme: Res<Theme>) {
             BackgroundColor(theme::PANEL_BG_SOLID),
             Interaction::default(),
             PickingBlocker,
+            crate::screens::session::SessionHiddenChrome,
         ))
         .with_children(|bar| {
             // Compact left block — ten screen tabs share the 1280px bar.

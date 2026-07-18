@@ -601,9 +601,9 @@ fn golden_contract() {
         &wasm_bridge::wasm_set_player_sell_order(&g0_raw, human, "resource", "Grain", 1),
     );
     rec.diff(
-        "set_player_buy_order",
+        "set_buy_wishlist",
         &g0,
-        &wasm_bridge::wasm_set_player_buy_order(&g0_raw, human, "resource", "Coal", 1, 200),
+        &wasm_bridge::wasm_set_buy_wishlist(&g0_raw, human, "Coal", true),
     );
 
     // ── Naval commands ───────────────────────────────────────────────────

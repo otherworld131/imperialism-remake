@@ -451,6 +451,7 @@ impl From<TransientState> for dgs::TransientState {
         use domain::types::NationId as DN;
         use std::collections::HashMap;
         Self {
+            trade_session: None,
             events: Vec::new(),
             pending_attacks: v
                 .pending_attacks

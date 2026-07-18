@@ -60,10 +60,46 @@ pub fn process_turns(game: &mut GameState, count: u32) -> serde_json::Value {
 /// `"game"` key alongside `"report"`.
 pub fn process_turn(game: &mut GameState) -> serde_json::Value {
     let report = domain::turn::process_turn(game);
+    report_json(&report, game)
+}
+
+/// Serialize a turn report to the `{report: {...}}` shape shared by the
+/// atomic path (`process_turn`) and the interactive session path
+/// (`turn_session::finish_turn`).
+pub(crate) fn report_json(
+    report: &domain::turn::TurnReport,
+    game: &GameState,
+) -> serde_json::Value {
+    // The human seat's trade summary (card #494): every transaction the
+    // player (or the observed viewpoint nation) took part in this turn.
+    let human = game.human_player_nation;
+    let player_trades: Vec<serde_json::Value> = report
+        .trade_transactions
+        .iter()
+        .filter(|t| t.buyer == human || t.seller == human)
+        .map(|t| {
+            let bought = t.buyer == human;
+            let partner = if bought { t.seller } else { t.buyer };
+            let partner_name = game
+                .get_nation(partner)
+                .map(|n| n.name.as_str())
+                .unwrap_or("Unknown");
+            serde_json::json!({
+                "resource": t.commodity.to_string(),
+                "quantity": t.quantity,
+                "partner_id": partner.0,
+                "partner_name": partner_name,
+                "price_per_unit": t.price_per_unit.as_dollars(),
+                "total_cost": t.total_cost.as_dollars(),
+                "bought": bought,
+            })
+        })
+        .collect();
 
     // Build response with the report summary
     serde_json::json!({
         "report": {
+            "player_trades": player_trades,
             "turn": format!("{}", report.turn),
             "year": report.year,
             "quarter": report.quarter,

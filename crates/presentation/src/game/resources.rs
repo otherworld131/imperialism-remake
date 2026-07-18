@@ -352,8 +352,62 @@ pub struct ProposalPrompt(pub Option<ProposalsVm>);
 
 /// Proposals fetched during end turn but held back until the newspaper
 /// interstitial is dismissed (web order: turn → newspaper → proposal modal).
+/// Only the multi-turn skip path still uses this — single end turns answer
+/// proposals inside the diplomatic session (card #494).
 #[derive(Resource, Default)]
 pub struct DeferredProposals(pub Option<ProposalsVm>);
+
+/// While the diplomatic session shows an item, only the involved nations
+/// keep their name label on the map (card #494). `None` = all labels.
+#[derive(Resource, Default, Clone, PartialEq, Eq)]
+pub struct SessionLabelFilter(pub Option<std::collections::BTreeSet<String>>);
+
+/// Between-turns session UI state (card #494), populated while the turn is
+/// paused between `begin_turn` and `finish_turn`, plus the trade summary
+/// shown right after resolution.
+#[derive(Resource, Default)]
+pub struct TurnSessionUi {
+    /// The current session view (refetched after every decision).
+    pub view: Option<crate::game::vm::SessionViewVm>,
+    /// Cursor over `view.diplo_events`; proposals are presented after the
+    /// notifications, always answering the first remaining one.
+    pub diplo_index: usize,
+    /// `(seller_id, resource)` offers already answered (bought or passed).
+    pub answered_offers: HashSet<(u32, String)>,
+    /// Wishlist resources the player skipped remaining offers for.
+    pub skipped_resources: HashSet<String>,
+    /// Amount picked on the current offer card.
+    pub amount: u32,
+    /// Post-resolution trade summary rows (`report.player_trades`).
+    pub summary: Vec<crate::game::vm::PlayerTradeVm>,
+}
+
+impl TurnSessionUi {
+    /// The next offer to present: first offer not yet answered whose
+    /// resource wasn't skipped and that still has stock. A full cargo hold
+    /// ends the parade — nothing more can be bought this turn.
+    pub fn current_offer(&self) -> Option<&crate::game::vm::SessionOfferVm> {
+        let view = self.view.as_ref()?;
+        if view.cargo_committed >= view.cargo_capacity {
+            return None;
+        }
+        view.offers.iter().find(|o| {
+            o.remaining > 0
+                && !self.skipped_resources.contains(&o.resource)
+                && !self
+                    .answered_offers
+                    .contains(&(o.seller_id, o.resource.clone()))
+        })
+    }
+
+    /// Whether the diplomatic session still has anything to show.
+    pub fn has_diplo_items(&self) -> bool {
+        let Some(view) = self.view.as_ref() else {
+            return false;
+        };
+        self.diplo_index < view.diplo_events.len() || !view.proposals.is_empty()
+    }
+}
 
 /// The freshest turn report's newspaper + battle content (web `headlines` /
 /// `currentBattles` / `currentNavalBattles`). Empty until the first end turn.

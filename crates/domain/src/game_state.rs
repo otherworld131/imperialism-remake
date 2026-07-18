@@ -132,6 +132,11 @@ pub struct MarketFillRecord {
 /// In-turn state that is either not serialized or rebuilt each turn.
 #[derive(Default, Clone)]
 pub struct TransientState {
+    /// Frozen trade offer pool + player session decisions, handed from
+    /// `begin_turn` to `finish_turn` (card #494). Consumed by the trade
+    /// phase; `None` makes the trade phase build the pool itself (atomic
+    /// path). Not saved — sessions cannot be saved mid-turn.
+    pub trade_session: Option<crate::economy::trade::PreparedTradeSession>,
     /// Event log for the current turn (not saved).
     pub events: Vec<DomainEvent>,
     /// Pending attacks to resolve this turn: (attacker NationId, target ProvinceId).
