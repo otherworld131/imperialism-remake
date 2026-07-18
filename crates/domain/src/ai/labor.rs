@@ -290,18 +290,14 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
     //   rail_adjacent      adjacent to existing rail or depot
     //   (everything else is unconnected and least preferred)
     let collectable: std::collections::HashSet<crate::hex::HexCoord> = {
-        let connected = super::super::turn::connected_provinces(game, nation_id);
+        let reach = super::super::turn::nation_rail_reach(game, nation_id);
         let owned_provinces: Vec<&crate::map::Province> = game
             .world
             .provinces
             .iter()
             .filter(|p| p.owner == nation_id)
             .collect();
-        crate::map::infrastructure::collectable_hexes(
-            &game.world.hex_map,
-            &owned_provinces,
-            &connected,
-        )
+        crate::map::infrastructure::collectable_hexes(&game.world.hex_map, &owned_provinces, &reach)
     };
     // Tiles the depot planner intends to connect soon: every hex on the
     // current plan's path, plus the 1-hex radius around the planned
@@ -337,7 +333,7 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
             let Some(tile) = game.world.hex_map.get_tile(coord) else {
                 continue;
             };
-            if tile.infrastructure.has_railroad || tile.infrastructure.has_depot {
+            if game.world.hex_map.rail_link_count(coord) > 0 || tile.infrastructure.has_depot {
                 for n in coord.neighbors().iter().copied() {
                     s.insert(n);
                 }
@@ -922,9 +918,11 @@ mod tests {
 
         // Lay a railroad somewhere unowned but adjacent to `near_rail`. The
         // sort key looks at *any* rail tile in the map, not just owned ones.
-        let mut rt = crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(99));
-        rt.infrastructure.has_railroad = true;
+        let rt = crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(99));
         game.world.hex_map.set_tile(rail_hex, rt);
+        game.world
+            .hex_map
+            .add_rail_link(rail_hex, rail_hex.neighbors()[0]);
 
         // Single idle Farmer; need Seed Drill so Farm tiles are improvable.
         let ai = game.get_nation_mut(NationId(2)).unwrap();
@@ -971,10 +969,13 @@ mod tests {
 
             add_owned_tiles(&mut game, &[owned_rail, near_rail, isolated]);
 
-            let mut rt =
-                crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));
-            rt.infrastructure.has_railroad = true;
+            let rt = crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));
             game.world.hex_map.set_tile(owned_rail, rt);
+            // Link owned_rail to a neighbour other than near_rail so near_rail
+            // stays a rail-*adjacent* tile (not a rail node itself).
+            game.world
+                .hex_map
+                .add_rail_link(owned_rail, owned_rail.neighbors()[0]);
 
             let mut t1 =
                 crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));
@@ -1043,9 +1044,11 @@ mod tests {
 
         add_owned_tiles(&mut game, &[owned_rail, near_rail, isolated]);
 
-        let mut rt = crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));
-        rt.infrastructure.has_railroad = true;
+        let rt = crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));
         game.world.hex_map.set_tile(owned_rail, rt);
+        game.world
+            .hex_map
+            .add_rail_link(owned_rail, owned_rail.neighbors()[0]);
 
         // near_rail: maxed → not improvable.
         let mut t1 = crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));

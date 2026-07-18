@@ -7,7 +7,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 /// Current save file format version.
-pub const CURRENT_SAVE_VERSION: u32 = 4;
+pub const CURRENT_SAVE_VERSION: u32 = 5;
 
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];

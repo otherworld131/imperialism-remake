@@ -1,6 +1,6 @@
 use crate::game_state::GameState;
 use crate::map::SettlementLevel;
-use crate::map::infrastructure::{collectable_hexes, is_province_connected_multi};
+use crate::map::infrastructure::collectable_hexes;
 use crate::military::ships::Ship;
 use crate::military::units::{ArmyUnit, ArmyUnitType};
 use crate::types::*;
@@ -544,20 +544,9 @@ pub fn current_collectable_resources(
         return (Vec::new(), Vec::new());
     }
 
-    let connected: std::collections::HashSet<ProvinceId> = owned
-        .iter()
-        .filter(|p| {
-            is_province_connected_multi(
-                &game.world.hex_map,
-                &capital_tiles,
-                p.id,
-                &game.world.provinces,
-            )
-        })
-        .map(|p| p.id)
-        .collect();
+    let reach = crate::turn::nation_rail_reach(game, nation_id);
 
-    let collectable = collectable_hexes(&game.world.hex_map, &owned, &connected);
+    let collectable = collectable_hexes(&game.world.hex_map, &owned, &reach);
     let local_hexes: std::collections::HashSet<crate::hex::HexCoord> =
         capital_tiles.iter().copied().collect();
 

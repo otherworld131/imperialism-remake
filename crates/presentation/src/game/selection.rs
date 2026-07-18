@@ -851,7 +851,7 @@ mod tests {
             "is_anarchic": false, "is_prospected": false,
             "resource": null, "resource_hidden": false,
             "improvement_level": 0, "max_improvement_level": 0,
-            "has_railroad": false, "has_depot": false, "has_port": false,
+            "rail_links": [], "has_depot": false, "has_port": false,
             "has_fort": false, "has_river": false, "fort_level": 0,
             "port_blockaded": false, "army_unit_count": 0, "army_firepower": 0.0,
             "army_composition": null, "naval_ship_count": 0, "naval_firepower": 0,

@@ -47,6 +47,7 @@ pub fn refresh_view_models(
                     tile.is_capital = false;
                     tile.is_country_capital = false;
                     tile.improvement_level = 0;
+                    tile.rail_links.clear();
                     if was_country_capital {
                         tile.has_depot = false;
                         tile.army_firepower = 0.0;

@@ -340,8 +340,14 @@ fn spawn_tile_content(
     if tile.is_capital {
         line(commands, parent, "• Capital", theme.font(12.0), theme::TEXT);
     }
-    if tile.has_railroad {
-        line(commands, parent, "Railroad", theme.font(12.0), theme::TEXT);
+    if !tile.rail_links.is_empty() {
+        line(
+            commands,
+            parent,
+            &format!("Rail links: {}", tile.rail_links.len()),
+            theme.font(12.0),
+            theme::TEXT,
+        );
     }
     if tile.has_port {
         let (text, color) = if tile.port_blockaded {

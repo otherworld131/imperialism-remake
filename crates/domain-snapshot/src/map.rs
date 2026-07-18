@@ -6,7 +6,6 @@ use domain::map as dm;
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Infrastructure {
-    pub has_railroad: bool,
     pub has_depot: bool,
     pub has_port: bool,
     pub has_fort: bool,
@@ -35,6 +34,9 @@ pub struct Tile {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct HexMap {
     pub tiles: Vec<(HexCoord, Tile)>,
+    /// Undirected railroad edges, canonical `(min, max)` keys, sorted.
+    #[serde(default)]
+    pub rail_links: Vec<(HexCoord, HexCoord)>,
     pub width: i32,
     pub height: i32,
 }
@@ -78,7 +80,6 @@ pub struct Province {
 impl From<dm::Infrastructure> for Infrastructure {
     fn from(v: dm::Infrastructure) -> Self {
         Self {
-            has_railroad: v.has_railroad,
             has_depot: v.has_depot,
             has_port: v.has_port,
             has_fort: v.has_fort,
@@ -89,7 +90,6 @@ impl From<dm::Infrastructure> for Infrastructure {
 impl From<Infrastructure> for dm::Infrastructure {
     fn from(v: Infrastructure) -> Self {
         Self {
-            has_railroad: v.has_railroad,
             has_depot: v.has_depot,
             has_port: v.has_port,
             has_fort: v.has_fort,
@@ -149,6 +149,7 @@ impl From<&dm::HexMap> for HexMap {
                 .all_tiles()
                 .map(|(coord, tile)| (coord.into(), tile.into()))
                 .collect(),
+            rail_links: v.rail_links().map(|(a, b)| (a.into(), b.into())).collect(),
             width: v.width(),
             height: v.height(),
         }
@@ -159,6 +160,9 @@ impl From<HexMap> for dm::HexMap {
         let mut map = dm::HexMap::new(v.width, v.height);
         for (coord, tile) in v.tiles {
             map.set_tile(coord.into(), tile.into());
+        }
+        for (a, b) in v.rail_links {
+            map.add_rail_link(a.into(), b.into());
         }
         map
     }

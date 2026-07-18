@@ -837,37 +837,28 @@ pub fn rebuild_layers(
         }
     }
 
-    // ── Pass 3b: railroads (terrain mode, transport toggle) ─────────────
+    // ── Pass 3b: rail links (terrain mode, transport toggle) ────────────
+    // Phase 1 placeholder: untextured brown center-to-center segments per rail
+    // edge. Each edge is emitted on both endpoints as opposite direction
+    // indices; drawing only dirs {0,1,2} (the opposite is (i+3)%6 ∈ {3,4,5})
+    // gives a free dedup so each physical link is drawn exactly once.
     if *mode == MapMode::Terrain && settings.show_transport_network {
+        // Axial deltas for direction indices 0-5, matching domain HEX_DIRECTIONS.
+        const DIRS: [(i32, i32); 6] = [(1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1)];
         let mut builder = MeshBuilder2d::default();
-        let rw = HEX_SIZE * 0.35;
-        let rail_off = 2.0 * REACT_SCALE;
-        let tie_half = 3.0 * REACT_SCALE;
-        let tie_step = 5.0 * REACT_SCALE;
-        let line_w = 1.2 * REACT_SCALE;
+        let line_w = HEX_SIZE * 0.12;
         for tile in tiles {
-            if tile.is_sea() || !tile.has_railroad {
+            if tile.is_sea() {
                 continue;
             }
-            let p = geometry::hex_to_world(tile.q, tile.r);
-            builder.add_segment(
-                p + Vec2::new(-rw, rail_off),
-                p + Vec2::new(rw, rail_off),
-                line_w,
-            );
-            builder.add_segment(
-                p + Vec2::new(-rw, -rail_off),
-                p + Vec2::new(rw, -rail_off),
-                line_w,
-            );
-            let mut t = -rw + 2.0 * REACT_SCALE;
-            while t <= rw - 2.0 * REACT_SCALE {
-                builder.add_segment(
-                    p + Vec2::new(t, -tie_half),
-                    p + Vec2::new(t, tie_half),
-                    line_w,
-                );
-                t += tie_step;
+            let a = geometry::hex_to_world(tile.q, tile.r);
+            for &dir in &tile.rail_links {
+                if dir > 2 {
+                    continue;
+                }
+                let (dq, dr) = DIRS[dir as usize];
+                let b = geometry::hex_to_world(tile.q + dq, tile.r + dr);
+                builder.add_segment(a, b, line_w);
             }
         }
         if !builder.is_empty() {
@@ -1122,7 +1113,7 @@ mod tests {
             resource_hidden: false,
             improvement_level: 0,
             max_improvement_level: 0,
-            has_railroad: false,
+            rail_links: Vec::new(),
             has_depot: false,
             has_port: false,
             has_fort: false,

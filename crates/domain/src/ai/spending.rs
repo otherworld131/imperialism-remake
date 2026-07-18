@@ -1100,11 +1100,11 @@ fn score_civilian(
         .iter()
         .filter(|p| p.owner == nation_id)
         .collect();
-    let connected = connected_provinces(game, nation_id);
+    let reach = crate::turn::nation_rail_reach(game, nation_id);
     let collectable: HashSet<HexCoord> = crate::map::infrastructure::collectable_hexes(
         &game.world.hex_map,
         &owned_provinces,
-        &connected,
+        &reach,
     );
     let owned_hexes: HashSet<HexCoord> = owned_provinces
         .iter()
@@ -1116,7 +1116,7 @@ fn score_civilian(
             let Some(tile) = game.world.hex_map.get_tile(coord) else {
                 continue;
             };
-            if tile.infrastructure.has_railroad || tile.infrastructure.has_depot {
+            if game.world.hex_map.rail_link_count(coord) > 0 || tile.infrastructure.has_depot {
                 for n in coord.neighbors().iter().copied() {
                     s.insert(n);
                 }
@@ -1895,11 +1895,11 @@ fn execute_infrastructure(
         // parked engineer (card #495 move-then-build) must be able to build
         // on the very hex it is standing on next turn, not step past it.
         let unbuilt_unassigned = |c: HexCoord| -> bool {
-            game.world.hex_map.get_tile(c).is_some_and(|t| {
-                !t.infrastructure.has_railroad
-                    && !t.infrastructure.has_depot
-                    && (t.assigned_civilian.is_none() || t.assigned_civilian == engineer_civ_id)
-            })
+            game.world.hex_map.rail_link_count(c) == 0
+                && game.world.hex_map.get_tile(c).is_some_and(|t| {
+                    !t.infrastructure.has_depot
+                        && (t.assigned_civilian.is_none() || t.assigned_civilian == engineer_civ_id)
+                })
         };
         let build_coord = plan
             .path
@@ -1915,14 +1915,49 @@ fn execute_infrastructure(
             })
             .or_else(|| plan.path.iter().copied().find(|c| unbuilt_unassigned(*c)));
 
-        let attempt = match build_coord {
-            Some(coord) => {
+        // Choose the far endpoint of the link to lay from `coord`: the next hex
+        // along the plan path if adjacent, else the owned land neighbour closest
+        // to the candidate that isn't already linked. (Phase 1 compile-level
+        // routing; Phase 2 will use proper consecutive-edge path logic.)
+        let rail_target = |coord: HexCoord| -> Option<HexCoord> {
+            let succ = plan
+                .path
+                .iter()
+                .position(|c| *c == coord)
+                .and_then(|i| plan.path.get(i + 1))
+                .copied()
+                .filter(|n| coord.distance(*n) == 1);
+            succ.or_else(|| {
+                coord
+                    .neighbors()
+                    .into_iter()
+                    .filter(|n| !game.world.hex_map.has_rail_link(coord, *n))
+                    .filter(|n| {
+                        game.world
+                            .hex_map
+                            .get_tile(*n)
+                            .is_some_and(|t| t.terrain().is_land())
+                    })
+                    .filter(|n| {
+                        game.world
+                            .provinces
+                            .iter()
+                            .any(|p| p.owner == nation_id && p.tiles.contains(n))
+                    })
+                    .min_by_key(|n| n.distance(plan.candidate))
+            })
+        };
+
+        let attempt = match build_coord.and_then(|c| rail_target(c).map(|to| (c, to))) {
+            Some((coord, to)) => {
                 if game.ai_debug {
                     eprintln!(
-                        "[AI:{}:infra] starting rail on ({}, {}) engineer_pos=({}, {}) candidate=({}, {}) path_len={}",
+                        "[AI:{}:infra] starting rail ({}, {})->({}, {}) engineer_pos=({}, {}) candidate=({}, {}) path_len={}",
                         nation_name,
                         coord.q,
                         coord.r,
+                        to.q,
+                        to.r,
                         engineer_pos.q,
                         engineer_pos.r,
                         plan.candidate.q,
@@ -1935,7 +1970,7 @@ fn execute_infrastructure(
                     nation_id,
                     engineer_idx,
                     coord,
-                    BuildTask::Railroad,
+                    BuildTask::Railroad { to },
                     &cfg,
                 )
             }
@@ -2042,12 +2077,16 @@ fn start_engineer_task(
     // Only start a task the nation can afford at completion time. Treasury is
     // debited when the build finishes, so we guard at order time.
     let cost = match task {
-        BuildTask::Railroad => {
-            let terrain = match game.world.hex_map.get_tile(coord) {
+        BuildTask::Railroad { to } => {
+            let terrain_a = match game.world.hex_map.get_tile(coord) {
                 Some(t) => t.terrain(),
                 None => return EngineerTaskStart::InvalidTarget,
             };
-            match crate::map::infrastructure::railroad_cost(terrain, cfg) {
+            let terrain_b = match game.world.hex_map.get_tile(to) {
+                Some(t) => t.terrain(),
+                None => return EngineerTaskStart::InvalidTarget,
+            };
+            match crate::map::infrastructure::rail_link_cost(terrain_a, terrain_b, cfg) {
                 Some(m) => m,
                 None => return EngineerTaskStart::InvalidTarget, // e.g. sea
             }
@@ -2231,8 +2270,15 @@ fn find_port_alternative(
     let path_cost_dollars = plan
         .path
         .iter()
+        .filter(|c| {
+            game.world.hex_map.rail_link_count(**c) == 0
+                && game
+                    .world
+                    .hex_map
+                    .get_tile(**c)
+                    .is_some_and(|t| !t.infrastructure.has_depot)
+        })
         .filter_map(|c| game.world.hex_map.get_tile(*c))
-        .filter(|t| !t.infrastructure.has_railroad && !t.infrastructure.has_depot)
         .filter_map(|t| crate::map::infrastructure::railroad_cost(t.terrain(), cfg))
         .map(|m| m.as_dollars())
         .sum::<i64>();
@@ -3073,8 +3119,10 @@ mod tests {
         let candidate = crate::hex::HexCoord::new(4, 3);
         let mut cand_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
         cand_tile.set_resource(ResourceType::Grain);
-        cand_tile.infrastructure.has_railroad = true;
         game.world.hex_map.set_tile(candidate, cand_tile);
+        game.world
+            .hex_map
+            .add_rail_link(candidate, candidate.neighbors()[0]);
 
         // Improvable visible tile far from rail to drive HireImprover demand
         // (uses the unconnected weight, so contribution is small but present).

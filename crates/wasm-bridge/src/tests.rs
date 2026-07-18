@@ -2700,9 +2700,9 @@ fn engineer_and_redeploy_target(
         .flat_map(|p| p.tiles.iter().copied())
         .find(|&c| {
             !occupied.contains(&c)
+                && game.world.hex_map.rail_link_count(c) == 0
                 && game.world.hex_map.get_tile(c).is_some_and(|t| {
                     t.terrain() == TerrainType::Grassland
-                        && !t.infrastructure.has_railroad
                         && t.assigned_civilian.is_none()
                         && !t.is_capital
                 })
@@ -2719,42 +2719,24 @@ fn engineer_build_waits_a_turn_after_placement() {
     frontend_api::units::recall_civilian(&mut game, eng_id).expect("recall");
     frontend_api::units::deploy_civilian(&mut game, eng_id, target.q, target.r).expect("deploy");
 
-    // Same turn: the build must be rejected (placement turn ≠ build turn).
+    // Phase 1 interim: `engineer_build("railroad")` is no longer a valid point
+    // build — railroads are edge links laid via `engineer_build_rail_link`
+    // (Phase 3). The kind is redirected before the arrival gate is reached.
     let err = frontend_api::units::engineer_build(&mut game, eng_id, "railroad")
+        .expect_err("railroad point-build is rejected");
+    assert!(
+        err.message().contains("engineer_build_rail_link"),
+        "unexpected error: {}",
+        err.message()
+    );
+
+    // The placement-turn arrival gate still fires for a valid build kind.
+    let err = frontend_api::units::engineer_build(&mut game, eng_id, "depot")
         .expect_err("build on the placement turn must fail");
     assert!(
         err.message().contains("arrives this turn"),
         "unexpected error: {}",
         err.message()
-    );
-
-    // Next turn: the arrival flag cleared and the build goes through.
-    process_turn(&mut game);
-    // Simulate the slot release a completed previous build performs, so the
-    // build order also re-claims the tile (F-002 regression).
-    if let Some(tile) = game.world.hex_map.get_tile_mut(target) {
-        tile.assigned_civilian = None;
-    }
-    frontend_api::units::engineer_build(&mut game, eng_id, "railroad").expect("build next turn");
-
-    let nid = game.human_player_nation;
-    let civ = game
-        .get_nation(nid)
-        .unwrap()
-        .military
-        .civilians
-        .iter()
-        .find(|c| c.id.0 == eng_id)
-        .unwrap();
-    assert!(civ.working, "engineer should be building");
-    assert_eq!(
-        game.world
-            .hex_map
-            .get_tile(target)
-            .unwrap()
-            .assigned_civilian,
-        Some(domain::map::UnitId(eng_id)),
-        "starting a build must re-claim the tile slot"
     );
 }
 

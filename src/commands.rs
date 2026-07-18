@@ -1879,31 +1879,34 @@ fn assign_engineer_task(
 
     // Check treasury against the task's cost so we don't start work we can't pay for.
     let cost = match task {
-        BuildTask::Railroad => {
-            let terrain = match game.world.hex_map.get_tile(coord) {
-                Some(t) => t.terrain(),
-                None => {
-                    println!("  Invalid tile at ({},{}).", coord.q, coord.r);
-                    return;
-                }
+        BuildTask::Railroad { to } => {
+            let (Some(ta), Some(tb)) = (
+                game.world.hex_map.get_tile(coord).map(|t| t.terrain()),
+                game.world.hex_map.get_tile(to).map(|t| t.terrain()),
+            ) else {
+                println!("  Invalid rail-link endpoints.");
+                return;
             };
-            // Tech pre-flight: some terrains require a researched tech.
+            // Tech pre-flight: both endpoint terrains must be rail-enabled.
             let Some(researched) = game.get_nation(player_id).map(|n| &n.researched_techs) else {
                 println!("  Internal error: player nation is missing from game state.");
                 return;
             };
-            if !infrastructure::rail_terrain_enabled(terrain, researched, &game.game_data, &cfg) {
-                let tech = infrastructure::railroad_required_tech(terrain, &cfg).unwrap_or("?");
-                println!(
-                    "  Cannot build railroad on {:?}: requires tech \"{}\".",
-                    terrain, tech
-                );
-                return;
+            for terrain in [ta, tb] {
+                if !infrastructure::rail_terrain_enabled(terrain, researched, &game.game_data, &cfg)
+                {
+                    let tech = infrastructure::railroad_required_tech(terrain, &cfg).unwrap_or("?");
+                    println!(
+                        "  Cannot build railroad on {:?}: requires tech \"{}\".",
+                        terrain, tech
+                    );
+                    return;
+                }
             }
-            match infrastructure::railroad_cost(terrain, &cfg) {
+            match infrastructure::rail_link_cost(ta, tb, &cfg) {
                 Some(c) => c,
                 None => {
-                    println!("  Cannot build railroad on {:?}.", terrain);
+                    println!("  Cannot build rail link between {:?} and {:?}.", ta, tb);
                     return;
                 }
             }
@@ -1977,22 +1980,45 @@ pub(crate) fn cmd_build_railroad(game: &mut GameState) {
         .map(|p| p.tiles.clone())
         .unwrap_or_default();
 
-    // First rail-less land tile in the capital province.
-    let coord = tiles.iter().copied().find(|c| {
+    // Find the first owned land tile A in the capital province that has an
+    // adjacent owned land tile B not yet linked to it — that (A, B) pair is
+    // the rail link to lay.
+    let owned = |c: HexCoord| -> bool {
         game.world
             .hex_map
-            .get_tile(*c)
-            .is_some_and(|t| t.terrain().is_land() && !t.infrastructure.has_railroad)
+            .get_tile(c)
+            .and_then(|t| t.province_id)
+            .and_then(|pid| game.get_province(pid))
+            .is_some_and(|p| p.owner == player_id)
+    };
+    let is_land = |c: HexCoord| -> bool {
+        game.world
+            .hex_map
+            .get_tile(c)
+            .is_some_and(|t| t.terrain().is_land())
+    };
+
+    let pair = tiles.iter().copied().filter(|c| is_land(*c)).find_map(|a| {
+        a.neighbors()
+            .into_iter()
+            .find(|b| is_land(*b) && owned(*b) && !game.world.hex_map.has_rail_link(a, *b))
+            .map(|b| (a, b))
     });
-    let coord = match coord {
-        Some(c) => c,
+    let (coord, to) = match pair {
+        Some(p) => p,
         None => {
-            println!("  All land tiles in your capital province already have railroads.");
+            println!("  No unlinked adjacent land tiles remain in your capital province.");
             return;
         }
     };
 
-    assign_engineer_task(game, player_id, coord, BuildTask::Railroad, "railroad");
+    assign_engineer_task(
+        game,
+        player_id,
+        coord,
+        BuildTask::Railroad { to },
+        "railroad",
+    );
 }
 
 /// Queue a depot-build task for the player's Engineer on the capital tile (or

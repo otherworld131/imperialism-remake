@@ -8,7 +8,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 /// Engineer work tasks — kinds of infrastructure an Engineer civilian can build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BuildTask {
-    Railroad,
+    /// Lay a rail link from the engineer's tile to the adjacent hex `to`.
+    Railroad {
+        to: HexCoord,
+    },
     Depot,
     Port,
 }
@@ -17,7 +20,7 @@ impl BuildTask {
     /// Number of turns required to complete, read from Lua `game_config`.
     pub fn turns_required(self, cfg: &GameConfig) -> u8 {
         match self {
-            BuildTask::Railroad => cfg.build_turns_railroad,
+            BuildTask::Railroad { .. } => cfg.build_turns_railroad,
             BuildTask::Depot => cfg.build_turns_depot,
             BuildTask::Port => cfg.build_turns_port,
         }
@@ -27,7 +30,7 @@ impl BuildTask {
 impl std::fmt::Display for BuildTask {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BuildTask::Railroad => write!(f, "Railroad"),
+            BuildTask::Railroad { .. } => write!(f, "Railroad"),
             BuildTask::Depot => write!(f, "Depot"),
             BuildTask::Port => write!(f, "Port"),
         }
@@ -617,7 +620,13 @@ mod tests {
     #[test]
     fn build_task_turns_from_config() {
         let cfg = crate::data::GameConfig::default();
-        assert_eq!(BuildTask::Railroad.turns_required(&cfg), 1);
+        assert_eq!(
+            BuildTask::Railroad {
+                to: HexCoord::new(1, 0)
+            }
+            .turns_required(&cfg),
+            1
+        );
         assert_eq!(BuildTask::Depot.turns_required(&cfg), 2);
         assert_eq!(BuildTask::Port.turns_required(&cfg), 3);
     }
@@ -636,10 +645,11 @@ mod tests {
     fn engineer_tick_completes_and_keeps_task_until_consumed_by_turn_processor() {
         let cfg = crate::data::GameConfig::default();
         let mut c = Civilian::new(UnitId(1), CivilianType::Engineer, NationId(0));
-        c.start_build(BuildTask::Railroad, &cfg);
+        let to = HexCoord::new(1, 0);
+        c.start_build(BuildTask::Railroad { to }, &cfg);
         assert!(c.tick()); // 1-turn task completes
         assert!(!c.working);
         // build_task persists on the civilian until the turn processor takes it.
-        assert_eq!(c.build_task, Some(BuildTask::Railroad));
+        assert_eq!(c.build_task, Some(BuildTask::Railroad { to }));
     }
 }
