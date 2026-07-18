@@ -395,7 +395,7 @@ mod tests {
             resource_hidden: false,
             improvement_level: 0,
             max_improvement_level: 0,
-            has_railroad: false,
+            rail_links: Vec::new(),
             has_depot: false,
             has_port: false,
             has_fort: false,

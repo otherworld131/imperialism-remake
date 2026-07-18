@@ -937,40 +937,82 @@ fn check_engineer_task(
     }
     let cfg = &game.game_data.game_config;
     match task {
-        BuildTask::Railroad => {
-            if tile.infrastructure.has_railroad {
-                return Err("railroad already exists".into());
+        BuildTask::Railroad { to } => {
+            // A rail link runs between the engineer's hex (`pos`) and an
+            // adjacent hex `to`. Both endpoints must be owned, land, adjacent,
+            // tech-enabled, and not already linked. Used from Phase 3's
+            // `engineer_build_rail_link` order surface.
+            if pos.distance(to) != 1 {
+                return Err("rail link endpoints must be adjacent".into());
             }
-            // Tech pre-flight: some terrains require a researched tech.
+            if game.world.hex_map.has_rail_link(pos, to) {
+                return Err("rail link already exists".into());
+            }
+            // Codex review F-002: reject a second same-turn order for the
+            // same physical edge (e.g. two engineers on opposite endpoints) —
+            // without this the duplicate only fails at completion, wasting
+            // the second engineer's turn.
+            let wanted = domain::map::canonical_link(pos, to);
+            let duplicate_pending = game.world.nations.iter().any(|n| {
+                n.military.civilians.iter().any(|c| {
+                    matches!(
+                        (c.position, c.build_task),
+                        (
+                            Some(p),
+                            Some(domain::economy::BuildTask::Railroad { to: t })
+                        ) if c.working && domain::map::canonical_link(p, t) == wanted
+                    )
+                })
+            });
+            if duplicate_pending {
+                return Err("another engineer is already laying this link".into());
+            }
+            let to_tile = match game.world.hex_map.get_tile(to) {
+                Some(t) => t,
+                None => return Err("target tile not found".into()),
+            };
+            let owns_to = to_tile
+                .province_id
+                .and_then(|pid| game.get_province(pid))
+                .is_some_and(|p| p.owner == nation_id);
+            if !owns_to {
+                return Err("target tile not owned by player".into());
+            }
+            if !to_tile.terrain().is_land() {
+                return Err("cannot build rail link onto sea".into());
+            }
+            // Tech pre-flight: both endpoint terrains must be rail-enabled.
             let researched = match game.get_nation(nation_id) {
                 Some(n) => &n.researched_techs,
                 None => return Err("nation not found".into()),
             };
-            if !domain::map::infrastructure::rail_terrain_enabled(
+            for terrain in [tile.terrain(), to_tile.terrain()] {
+                if !domain::map::infrastructure::rail_terrain_enabled(
+                    terrain,
+                    researched,
+                    &game.game_data,
+                    cfg,
+                ) {
+                    let tech = domain::map::infrastructure::railroad_required_tech(terrain, cfg)
+                        .unwrap_or("?");
+                    return Err(format!("railroad on {:?} requires tech: {}", terrain, tech));
+                }
+            }
+            match domain::map::infrastructure::rail_link_cost(
                 tile.terrain(),
-                researched,
-                &game.game_data,
+                to_tile.terrain(),
                 cfg,
             ) {
-                let tech = domain::map::infrastructure::railroad_required_tech(tile.terrain(), cfg)
-                    .unwrap_or("?");
-                return Err(format!(
-                    "railroad on {:?} requires tech: {}",
-                    tile.terrain(),
-                    tech
-                ));
-            }
-            match domain::map::infrastructure::railroad_cost(tile.terrain(), cfg) {
                 Some(c) => Ok(c),
-                None => Err("cannot build railroad on this terrain".into()),
+                None => Err("cannot build rail link on this terrain".into()),
             }
         }
         BuildTask::Depot => {
             if tile.infrastructure.has_depot {
                 return Err("depot already exists".into());
             }
-            if !tile.infrastructure.has_railroad {
-                return Err("depot requires a railroad on the tile".into());
+            if game.world.hex_map.rail_link_count(pos) == 0 {
+                return Err("depot requires a rail link on the tile".into());
             }
             Ok(Money::dollars(cfg.depot_cost))
         }
@@ -1005,14 +1047,49 @@ pub fn engineer_build(
     use domain::economy::BuildTask;
 
     let cid = domain::map::UnitId(civilian_id);
-    let human_nid = game.human_player_nation;
 
     let task = match build_kind.to_lowercase().as_str() {
-        "railroad" | "rail" => BuildTask::Railroad,
+        "railroad" | "rail" => {
+            return Err(ApiError::msg(
+                "railroads are now edge links; use engineer_build_rail_link(to) instead"
+                    .to_string(),
+            ));
+        }
         "depot" => BuildTask::Depot,
         "port" => BuildTask::Port,
         other => return Err(ApiError::msg(format!("unknown build kind: {}", other))),
     };
+
+    engineer_start_validated_task(game, cid, |_pos| task)
+}
+
+/// Order a deployed Engineer to build a rail link from its current hex to
+/// the adjacent hex `(to_q, to_r)` (card #497: railroads are edge links).
+/// Same gates as `engineer_build`; on completion the turn processor lays the
+/// link and auto-advances the engineer to the far endpoint.
+pub fn engineer_build_rail_link(
+    game: &mut GameState,
+    civilian_id: u32,
+    to_q: i32,
+    to_r: i32,
+) -> Result<(), ApiError> {
+    use domain::economy::BuildTask;
+
+    let cid = domain::map::UnitId(civilian_id);
+    let to = HexCoord::new(to_q, to_r);
+    engineer_start_validated_task(game, cid, |_pos| BuildTask::Railroad { to })
+}
+
+/// Shared tail of the engineer build commands: gate (deployed / idle /
+/// settled), validate via `check_engineer_task`, affordability, claim the
+/// tile slot, start the build. `make_task` sees the engineer's hex so
+/// callers can build position-relative tasks.
+fn engineer_start_validated_task(
+    game: &mut GameState,
+    cid: domain::map::UnitId,
+    make_task: impl FnOnce(HexCoord) -> domain::economy::BuildTask,
+) -> Result<(), ApiError> {
+    let human_nid = game.human_player_nation;
 
     // Look up the engineer, its position, and the target tile's state.
     let (position, working, arrived) = {
@@ -1043,6 +1120,7 @@ pub fn engineer_build(
         ));
     }
 
+    let task = make_task(pos);
     let task_cost = match check_engineer_task(game, human_nid, pos, task) {
         Ok(c) => c,
         Err(reason) => return Err(ApiError::msg(reason)),
@@ -1125,44 +1203,137 @@ pub fn get_engineer_build_options(
         (true, None)
     };
 
-    let options: Vec<serde_json::Value> = [
-        ("railroad", BuildTask::Railroad),
-        ("depot", BuildTask::Depot),
-        ("port", BuildTask::Port),
-    ]
-    .into_iter()
-    .map(|(kind, task)| match civ.position {
-        Some(pos) => match check_engineer_task(game, human_nid, pos, task) {
-            Ok(cost) => serde_json::json!({
-                "kind": kind,
-                "allowed": true,
-                "cost": cost.as_dollars(),
-                "affordable": treasury.checked_sub(cost).is_some(),
-                "reason": serde_json::Value::Null,
-            }),
-            Err(reason) => serde_json::json!({
+    // Railroads are edge links now — they are not part of the point-build
+    // options popover; they use `engineer_build_rail_link`/`get_rail_link_options`.
+    let options: Vec<serde_json::Value> = [("depot", BuildTask::Depot), ("port", BuildTask::Port)]
+        .into_iter()
+        .map(|(kind, task)| match civ.position {
+            Some(pos) => match check_engineer_task(game, human_nid, pos, task) {
+                Ok(cost) => serde_json::json!({
+                    "kind": kind,
+                    "allowed": true,
+                    "cost": cost.as_dollars(),
+                    "affordable": treasury.checked_sub(cost).is_some(),
+                    "reason": serde_json::Value::Null,
+                }),
+                Err(reason) => serde_json::json!({
+                    "kind": kind,
+                    "allowed": false,
+                    "cost": serde_json::Value::Null,
+                    "affordable": false,
+                    "reason": reason,
+                }),
+            },
+            None => serde_json::json!({
                 "kind": kind,
                 "allowed": false,
                 "cost": serde_json::Value::Null,
                 "affordable": false,
-                "reason": reason,
+                "reason": "engineer is not deployed",
             }),
-        },
-        None => serde_json::json!({
-            "kind": kind,
-            "allowed": false,
-            "cost": serde_json::Value::Null,
-            "affordable": false,
-            "reason": "engineer is not deployed",
-        }),
-    })
-    .collect();
+        })
+        .collect();
 
     Ok(serde_json::json!({
         "civilian_id": civilian_id,
         "deployed": civ.position.is_some(),
         "can_build_now": can_build_now,
         "blocked_reason": blocked_reason,
+        "options": options,
+    }))
+}
+
+// ── Query: Rail link options (for the hover preview) ─────────────────
+
+/// The six possible rail links from a deployed engineer's hex, one entry per
+/// `HEX_DIRECTIONS` index — drives the hover ghost preview and its tooltip
+/// (card #497). Always emits 6 entries when deployed so the frontend can
+/// index by direction without re-deriving rules.
+///
+/// Shape:
+/// ```json
+/// {
+///   "civilian_id": 42,
+///   "deployed": true,
+///   "can_build_now": true,
+///   "blocked_reason": null,
+///   "origin": {"q": 3, "r": -1},
+///   "options": [
+///     {"q": 4, "r": -1, "dir": 0, "allowed": true, "cost": 150,
+///      "affordable": true, "reason": null},
+///     ...
+///   ]
+/// }
+/// ```
+pub fn get_rail_link_options(
+    game: &GameState,
+    civilian_id: u32,
+) -> Result<serde_json::Value, ApiError> {
+    use domain::economy::BuildTask;
+    use domain::hex::HEX_DIRECTIONS;
+
+    let cid = domain::map::UnitId(civilian_id);
+    let human_nid = game.human_player_nation;
+
+    let nation = match game.get_nation(human_nid) {
+        Some(n) => n,
+        None => return Err(ApiError::msg("nation not found")),
+    };
+    let civ = match nation.military.civilians.iter().find(|c| c.id == cid) {
+        Some(c) => c,
+        None => return Err(ApiError::msg("civilian not found")),
+    };
+    if civ.civilian_type != domain::economy::CivilianType::Engineer {
+        return Err(ApiError::msg("civilian is not an engineer"));
+    }
+    let treasury = nation.economy.treasury;
+
+    let (can_build_now, blocked_reason) = if civ.position.is_none() {
+        (false, Some("engineer is not deployed"))
+    } else if civ.working {
+        (false, Some("already working"))
+    } else if civ.arrived_this_turn {
+        (false, Some("arrives this turn — can build next turn"))
+    } else {
+        (true, None)
+    };
+
+    let (origin, options) = match civ.position {
+        Some(pos) => {
+            let opts: Vec<serde_json::Value> = HEX_DIRECTIONS
+                .iter()
+                .enumerate()
+                .map(|(dir, d)| {
+                    let to = pos + *d;
+                    match check_engineer_task(game, human_nid, pos, BuildTask::Railroad { to }) {
+                        Ok(cost) => serde_json::json!({
+                            "q": to.q, "r": to.r, "dir": dir,
+                            "allowed": true,
+                            "cost": cost.as_dollars(),
+                            "affordable": treasury.checked_sub(cost).is_some(),
+                            "reason": serde_json::Value::Null,
+                        }),
+                        Err(reason) => serde_json::json!({
+                            "q": to.q, "r": to.r, "dir": dir,
+                            "allowed": false,
+                            "cost": serde_json::Value::Null,
+                            "affordable": false,
+                            "reason": reason,
+                        }),
+                    }
+                })
+                .collect();
+            (serde_json::json!({"q": pos.q, "r": pos.r}), opts)
+        }
+        None => (serde_json::Value::Null, Vec::new()),
+    };
+
+    Ok(serde_json::json!({
+        "civilian_id": civilian_id,
+        "deployed": civ.position.is_some(),
+        "can_build_now": can_build_now,
+        "blocked_reason": blocked_reason,
+        "origin": origin,
         "options": options,
     }))
 }

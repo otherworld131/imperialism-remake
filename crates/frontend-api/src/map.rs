@@ -374,7 +374,12 @@ pub fn get_map_data(game: &GameState, disable_fog: bool) -> Result<serde_json::V
                 "owner_color": display_color,
                 "province": province_name,
                 "province_id": tile.province_id.map(|pid| pid.0),
-                "has_railroad": tile.infrastructure.has_railroad,
+                "rail_links": domain::hex::HEX_DIRECTIONS
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, d)| game.world.hex_map.has_rail_link(coord, coord + **d))
+                    .map(|(i, _)| i as u8)
+                    .collect::<Vec<u8>>(),
                 "has_depot": tile.infrastructure.has_depot,
                 "has_port": tile.infrastructure.has_port,
                 "port_blockaded": blockaded_ports.contains(&coord),

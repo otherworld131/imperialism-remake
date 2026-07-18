@@ -299,6 +299,13 @@ pub fn wasm_get_engineer_build_options(game_json: &str, civilian_id: u32) -> Str
 }
 
 #[wasm_bindgen]
+pub fn wasm_get_rail_link_options(game_json: &str, civilian_id: u32) -> String {
+    run_query(game_json, |g| {
+        frontend_api::units::get_rail_link_options(g, civilian_id)
+    })
+}
+
+#[wasm_bindgen]
 pub fn wasm_get_ships(game_json: &str, nation_id: u32) -> String {
     run_query(game_json, |g| frontend_api::units::get_ships(g, nation_id))
 }
@@ -352,6 +359,18 @@ pub fn wasm_deploy_civilian(game_json: &str, civilian_id: u32, hex_q: i32, hex_r
 pub fn wasm_recall_civilian(game_json: &str, civilian_id: u32) -> String {
     run_command(game_json, |g| {
         frontend_api::units::recall_civilian(g, civilian_id)
+    })
+}
+
+#[wasm_bindgen]
+pub fn wasm_engineer_build_rail_link(
+    game_json: &str,
+    civilian_id: u32,
+    to_q: i32,
+    to_r: i32,
+) -> String {
+    run_command(game_json, |g| {
+        frontend_api::units::engineer_build_rail_link(g, civilian_id, to_q, to_r)
     })
 }
 

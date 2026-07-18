@@ -2028,7 +2028,7 @@ pub(crate) fn print_infrastructure(game: &GameState) {
                 && tile.terrain().is_land()
             {
                 total_land += 1;
-                if tile.infrastructure.has_railroad {
+                if game.world.hex_map.rail_link_count(*coord) > 0 {
                     railroads += 1;
                 }
                 if tile.infrastructure.has_depot {

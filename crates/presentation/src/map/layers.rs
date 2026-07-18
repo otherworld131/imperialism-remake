@@ -12,7 +12,9 @@ use bevy::prelude::*;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
-use crate::game::resources::{DeployMode, FleetTargets, MoveTargets, RenderSettings, ViewModels};
+use crate::game::resources::{
+    DeployMode, FleetTargets, MoveTargets, RailLinkOptions, RenderSettings, ViewModels,
+};
 use crate::game::vm::MapTile;
 use crate::map::borders::{self, MapBorders};
 use crate::map::camera::GameCamera;
@@ -31,6 +33,21 @@ pub const REACT_SCALE: f32 = HEX_SIZE / 18.0;
 /// texel density of the 64px terrain motif sprites drawn at 1.5 hexes, so
 /// ground and motif pixels are the same size on screen.
 pub const GROUND_TEX_WORLD: f32 = HEX_SIZE * 1.5;
+
+/// Axial deltas for the rail-link direction indices 0-5 emitted by
+/// frontend-api's `MapTile.rail_links`. MUST stay identical to
+/// `domain::hex::HEX_DIRECTIONS` (presentation has no domain dependency, so
+/// the contract is pinned by `rail_dirs_contract_pinned` below).
+/// The renderer relies on the opposite of dir `i` being `(i + 3) % 6` for
+/// its draw-each-edge-once dedup.
+pub const RAIL_DIRS: [(i32, i32); 6] = [(1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1)];
+
+/// Rail-link quad width in world units. Half a hex keeps the 64x64 track
+/// texture's texels square (V maps 32 art texels across this width).
+pub const RAIL_TRACK_WIDTH: f32 = HEX_SIZE * 0.5;
+/// World-units per repeat of the track texture along a rail quad (64 art
+/// texels at the same texel density as `RAIL_TRACK_WIDTH`).
+pub const RAIL_TRACK_U_PERIOD: f32 = HEX_SIZE;
 
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub enum MapMode {
@@ -96,6 +113,18 @@ pub struct HighlightLayer;
 #[derive(Component)]
 pub struct HoverRing;
 
+/// Ghost rail-link preview (card #497): one persistent textured quad shown
+/// while a settled engineer is armed and the cursor hovers a neighbouring
+/// hex. Rendered like the real track (locked decision #7), slightly
+/// translucent; red tint when refused (tooltip explains).
+#[derive(Component)]
+pub struct RailPreviewGhost;
+
+/// The ghost's endpoint ballast pads — same `rail/Node` texture as built
+/// rail, so the preview matches the finished composition (codex F-003).
+#[derive(Component)]
+pub struct RailPreviewGhostPads;
+
 #[derive(Component)]
 pub struct SelectionRing;
 
@@ -147,6 +176,24 @@ pub fn setup_rings(
         Transform::from_xyz(0.0, 0.0, 6.0),
         Visibility::Hidden,
         SelectionRing,
+    ));
+    // Rail-link ghost (track + endpoint pads): meshes and textures are
+    // filled lazily by `update_rail_preview` (IconAssets may not exist yet
+    // at startup). Pads sit just under the track, mirroring the real
+    // renderer's node-under-track layering.
+    commands.spawn((
+        Mesh2d(meshes.add(MeshBuilder2d::default().build())),
+        MeshMaterial2d(materials.add(ColorMaterial::default())),
+        Transform::from_xyz(0.0, 0.0, 1.34),
+        Visibility::Hidden,
+        RailPreviewGhostPads,
+    ));
+    commands.spawn((
+        Mesh2d(meshes.add(MeshBuilder2d::default().build())),
+        MeshMaterial2d(materials.add(ColorMaterial::default())),
+        Transform::from_xyz(0.0, 0.0, 1.35),
+        Visibility::Hidden,
+        RailPreviewGhost,
     ));
 }
 
@@ -461,6 +508,39 @@ pub fn rebuild_layers(
             let mut entity = commands.spawn((
                 Mesh2d(mesh.clone()),
                 MeshMaterial2d(material),
+                Transform::from_xyz(0.0, 0.0, z),
+                StaticLayer,
+                ChildOf(root),
+            ));
+            if let Some(gate) = gate {
+                entity.insert(gate);
+            }
+        }
+    };
+
+    // Variant spawner for meshes carrying their own (mesh-local) UVs — the
+    // rail track/node textures. Unlike `spawn_mesh` it must NOT rewrite the
+    // UVs to world space nor phase-shift per wrap copy: the UVs are baked
+    // along each segment, identical in every copy, so one shared material
+    // suffices.
+    let spawn_mesh_local_uv = |commands: &mut Commands,
+                               meshes: &mut Assets<Mesh>,
+                               materials: &mut Assets<ColorMaterial>,
+                               mesh: Mesh,
+                               color: Color,
+                               texture: Handle<Image>,
+                               z: f32,
+                               gate: Option<LodGate>| {
+        let mesh = meshes.add(mesh);
+        let material = materials.add(ColorMaterial {
+            color,
+            texture: Some(texture),
+            ..default()
+        });
+        for &(root, _) in &roots {
+            let mut entity = commands.spawn((
+                Mesh2d(mesh.clone()),
+                MeshMaterial2d(material.clone()),
                 Transform::from_xyz(0.0, 0.0, z),
                 StaticLayer,
                 ChildOf(root),
@@ -837,45 +917,75 @@ pub fn rebuild_layers(
         }
     }
 
-    // ── Pass 3b: railroads (terrain mode, transport toggle) ─────────────
+    // ── Pass 3b: rail links (terrain mode, transport toggle) ────────────
+    // Each physical link is a textured quad from hex center to hex center
+    // (hand-drawn seamless track texture, arc-length UVs), with a ballast
+    // node pad under every railhead hex to hide the butt joints where quads
+    // meet. Edges appear on both endpoints as opposite direction indices;
+    // drawing only dirs {0,1,2} (the opposite is (i+3)%6 ∈ {3,4,5}) gives a
+    // free dedup so each link is drawn exactly once.
     if *mode == MapMode::Terrain && settings.show_transport_network {
-        let mut builder = MeshBuilder2d::default();
-        let rw = HEX_SIZE * 0.35;
-        let rail_off = 2.0 * REACT_SCALE;
-        let tie_half = 3.0 * REACT_SCALE;
-        let tie_step = 5.0 * REACT_SCALE;
-        let line_w = 1.2 * REACT_SCALE;
+        // Quad width HEX_SIZE/2 with one texture repeat per HEX_SIZE keeps
+        // the 64x64 art's texels square (32 texels across the width).
+        let track_w = RAIL_TRACK_WIDTH;
+        let u_period = RAIL_TRACK_U_PERIOD;
+        let track_tex = icons.get("rail", "Track");
+        let node_tex = icons.get("rail", "Node");
+
+        let mut track = MeshBuilder2d::default();
+        let mut nodes = MeshBuilder2d::default();
+        let mut fallback = MeshBuilder2d::default();
         for tile in tiles {
-            if tile.is_sea() || !tile.has_railroad {
+            if tile.is_sea() {
                 continue;
             }
-            let p = geometry::hex_to_world(tile.q, tile.r);
-            builder.add_segment(
-                p + Vec2::new(-rw, rail_off),
-                p + Vec2::new(rw, rail_off),
-                line_w,
-            );
-            builder.add_segment(
-                p + Vec2::new(-rw, -rail_off),
-                p + Vec2::new(rw, -rail_off),
-                line_w,
-            );
-            let mut t = -rw + 2.0 * REACT_SCALE;
-            while t <= rw - 2.0 * REACT_SCALE {
-                builder.add_segment(
-                    p + Vec2::new(t, -tie_half),
-                    p + Vec2::new(t, tie_half),
-                    line_w,
-                );
-                t += tie_step;
+            let a = geometry::hex_to_world(tile.q, tile.r);
+            if node_tex.is_some() && !tile.rail_links.is_empty() {
+                nodes.add_textured_quad(a, HEX_SIZE * 0.5);
+            }
+            for &dir in &tile.rail_links {
+                if dir > 2 {
+                    continue;
+                }
+                let (dq, dr) = RAIL_DIRS[dir as usize];
+                let b = geometry::hex_to_world(tile.q + dq, tile.r + dr);
+                if track_tex.is_some() {
+                    track.add_textured_segment(a, b, track_w, u_period);
+                } else {
+                    fallback.add_segment(a, b, HEX_SIZE * 0.12);
+                }
             }
         }
-        if !builder.is_empty() {
+        if let (Some(tex), false) = (node_tex, nodes.is_empty()) {
+            spawn_mesh_local_uv(
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+                nodes.build(),
+                Color::WHITE,
+                tex,
+                1.05,
+                Some(LodGate::Infra),
+            );
+        }
+        if let (Some(tex), false) = (track_tex, track.is_empty()) {
+            spawn_mesh_local_uv(
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+                track.build(),
+                Color::WHITE,
+                tex,
+                1.1,
+                Some(LodGate::Infra),
+            );
+        }
+        if !fallback.is_empty() {
             spawn_mesh(
                 &mut commands,
                 &mut meshes,
                 &mut materials,
-                builder.build(),
+                fallback.build(),
                 Color::srgba(100.0 / 255.0, 60.0 / 255.0, 20.0 / 255.0, 0.8),
                 None,
                 1.1,
@@ -1072,6 +1182,126 @@ pub fn update_rings(
     place_ring(&mut rings.p1(), selected.0, camera_x, bounds);
 }
 
+/// Show/refresh the rail-link ghost (card #497): visible only while an armed
+/// settled engineer's `RailLinkOptions` are live and the hovered hex is one
+/// of its six neighbours. The mesh is regenerated only when the
+/// (origin, target, verdict) triple changes; position follows the ring
+/// wrap-normalization.
+pub fn update_rail_preview(
+    hovered: Res<HoveredHex>,
+    rail: Res<RailLinkOptions>,
+    icons: Option<Res<IconAssets>>,
+    bounds: Option<Res<MapBounds>>,
+    camera: Query<
+        &Transform,
+        (
+            With<GameCamera>,
+            Without<RailPreviewGhost>,
+            Without<RailPreviewGhostPads>,
+        ),
+    >,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut ghosts: ParamSet<(
+        Query<
+            (
+                &Mesh2d,
+                &MeshMaterial2d<ColorMaterial>,
+                &mut Transform,
+                &mut Visibility,
+            ),
+            With<RailPreviewGhost>,
+        >,
+        Query<
+            (
+                &Mesh2d,
+                &MeshMaterial2d<ColorMaterial>,
+                &mut Transform,
+                &mut Visibility,
+            ),
+            With<RailPreviewGhostPads>,
+        >,
+    )>,
+    mut cache: Local<Option<((i32, i32), (i32, i32), bool)>>,
+) {
+    let desired = rail.0.as_ref().and_then(|state| {
+        let hov = hovered.0?;
+        let opt = state.options.iter().find(|o| (o.q, o.r) == hov)?;
+        Some((state.origin, hov, opt.allowed && opt.affordable))
+    });
+    let Some((origin, target, ok)) = desired else {
+        *cache = None;
+        if let Ok((_, _, _, mut visibility)) = ghosts.p0().single_mut() {
+            *visibility = Visibility::Hidden;
+        }
+        if let Ok((_, _, _, mut visibility)) = ghosts.p1().single_mut() {
+            *visibility = Visibility::Hidden;
+        }
+        return;
+    };
+
+    // Allowed: the ghost looks like the real track, only slightly translucent
+    // so it reads as "not built yet". Refused: red tint. Shared by track and
+    // pads so the whole composite tints together.
+    let tint = if ok {
+        Color::srgba(1.0, 1.0, 1.0, 0.8)
+    } else {
+        Color::srgba(1.0, 0.4, 0.35, 0.65)
+    };
+    let rebuild = *cache != Some((origin, target, ok));
+    if rebuild {
+        *cache = Some((origin, target, ok));
+    }
+    let a = geometry::hex_to_world(origin.0, origin.1);
+    let b_rel = geometry::hex_to_world(target.0, target.1) - a;
+    let camera_x = camera.single().map(|t| t.translation.x).unwrap_or(0.0);
+    let mut pos = a;
+    if let Some(bounds) = bounds.as_deref() {
+        pos.x += ((camera_x - pos.x) / bounds.width_px).round() * bounds.width_px;
+    }
+
+    // Track quad plus the two endpoint ballast pads, mirroring the real
+    // renderer's composition. The closure is applied to both ghost entities
+    // (their ParamSet queries have distinct types, so no loop over them).
+    let mut apply = |mesh2d: &Mesh2d,
+                     material2d: &MeshMaterial2d<ColorMaterial>,
+                     transform: &mut Transform,
+                     visibility: &mut Visibility,
+                     is_track: bool| {
+        if rebuild {
+            let mut builder = MeshBuilder2d::default();
+            if is_track {
+                builder.add_textured_segment(
+                    Vec2::ZERO,
+                    b_rel,
+                    RAIL_TRACK_WIDTH,
+                    RAIL_TRACK_U_PERIOD,
+                );
+            } else {
+                builder.add_textured_quad(Vec2::ZERO, HEX_SIZE * 0.5);
+                builder.add_textured_quad(b_rel, HEX_SIZE * 0.5);
+            }
+            let _ = meshes.insert(mesh2d.0.id(), builder.build());
+        }
+        if let Some(mat) = materials.get_mut(material2d.0.id()) {
+            mat.color = tint;
+            if mat.texture.is_none() {
+                let tex_name = if is_track { "Track" } else { "Node" };
+                mat.texture = icons.as_deref().and_then(|i| i.get("rail", tex_name));
+            }
+        }
+        transform.translation.x = pos.x;
+        transform.translation.y = pos.y;
+        *visibility = Visibility::Visible;
+    };
+    if let Ok((mesh2d, material2d, mut transform, mut visibility)) = ghosts.p0().single_mut() {
+        apply(mesh2d, material2d, &mut transform, &mut visibility, true);
+    }
+    if let Ok((mesh2d, material2d, mut transform, mut visibility)) = ghosts.p1().single_mut() {
+        apply(mesh2d, material2d, &mut transform, &mut visibility, false);
+    }
+}
+
 fn place_ring<F: bevy::ecs::query::QueryFilter>(
     query: &mut Query<(&mut Transform, &mut Visibility), F>,
     coord: Option<(i32, i32)>,
@@ -1122,7 +1352,7 @@ mod tests {
             resource_hidden: false,
             improvement_level: 0,
             max_improvement_level: 0,
-            has_railroad: false,
+            rail_links: Vec::new(),
             has_depot: false,
             has_port: false,
             has_fort: false,
@@ -1137,6 +1367,23 @@ mod tests {
             civilian_on_tile: None,
             visible: true,
             visual_group: None,
+        }
+    }
+
+    /// Pins the rail direction contract literals (review F-010: presentation
+    /// cannot import `domain::hex::HEX_DIRECTIONS`, so this guards against
+    /// accidental local edits, not cross-crate drift — the doc on `RAIL_DIRS`
+    /// records the source of truth). Also asserts opposite(i) == (i+3) % 6.
+    #[test]
+    fn rail_dirs_contract_pinned() {
+        assert_eq!(
+            RAIL_DIRS,
+            [(1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1)]
+        );
+        for i in 0..6 {
+            let (dq, dr) = RAIL_DIRS[i];
+            let (oq, or) = RAIL_DIRS[(i + 3) % 6];
+            assert_eq!((dq + oq, dr + or), (0, 0), "dir {i} opposite mismatch");
         }
     }
 

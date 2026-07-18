@@ -15,7 +15,6 @@ use crate::game_state::{
     GameState, PendingDiplomacyAction, PoliticalSnapshot, PoliticalSnapshotEntry,
 };
 use crate::map::SettlementLevel;
-use crate::map::infrastructure::is_province_connected_multi_filtered;
 use crate::military::battle_outcome::{BattleParams, compute_battle_outcome};
 use crate::military::combat::{BattleConfig, BattleResult, CombatForce, TargetingPriority};
 use crate::military::naval::{NavalBattleResult, resolve_naval_battle};
@@ -33,7 +32,7 @@ use crate::turn::rewards_phase::resolve_rewards;
 use crate::turn::scoring::{CouncilVoteResult, calculate_score, run_council_vote};
 use crate::turn::session::TurnSession;
 use crate::types::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Result of processing one turn.
 #[derive(Debug)]
@@ -1179,7 +1178,74 @@ fn finalize_resource_flow(game: &mut GameState, report: &mut TurnReport) {
 ///
 /// Adjacency ensures early-game resource delivery before railroads are built,
 /// matching the connectivity logic used for settlement progression.
+/// Compute the nation's rail-edge reach set (hexes reachable from the capital
+/// and owned country-capital seeds over the rail-link network, with the
+/// port-hop fixpoint). Computed once per nation and shared between connectivity
+/// and resource collection so the two can never disagree.
+pub fn nation_rail_reach(game: &GameState, nation_id: NationId) -> BTreeSet<crate::hex::HexCoord> {
+    let blockaded_ports = crate::military::naval::compute_blockaded_ports(game, nation_id);
+    nation_rail_reach_with_blockades(game, nation_id, &blockaded_ports)
+}
+
+/// `nation_rail_reach` with the blockaded-port set supplied by the caller —
+/// lets the turn pipeline compute blockades once per nation and share them
+/// with province connectivity (review F-001).
+pub fn nation_rail_reach_with_blockades(
+    game: &GameState,
+    nation_id: NationId,
+    blockaded_ports: &HashSet<crate::hex::HexCoord>,
+) -> BTreeSet<crate::hex::HexCoord> {
+    let Some(nation) = game.get_nation(nation_id) else {
+        return BTreeSet::new();
+    };
+    let Some(capital_province) = game.get_province(nation.capital_province_id) else {
+        return BTreeSet::new();
+    };
+    let capital_tile = capital_province.capital_tile;
+
+    let mut seeds: Vec<crate::hex::HexCoord> = vec![capital_tile];
+    let mut owned_tiles: BTreeSet<crate::hex::HexCoord> = BTreeSet::new();
+    for &pid in &nation.province_ids {
+        if let Some(prov) = game.get_province(pid) {
+            for &t in &prov.tiles {
+                owned_tiles.insert(t);
+                if t != capital_tile
+                    && game
+                        .world
+                        .hex_map
+                        .get_tile(t)
+                        .is_some_and(|tile| tile.is_country_capital)
+                {
+                    seeds.push(t);
+                }
+            }
+        }
+    }
+
+    crate::map::infrastructure::rail_reach(
+        &game.world.hex_map,
+        &game.world.sea_zones,
+        &seeds,
+        &owned_tiles,
+        blockaded_ports,
+    )
+}
+
 pub fn connected_provinces(game: &GameState, nation_id: NationId) -> HashSet<ProvinceId> {
+    let blockaded_ports = crate::military::naval::compute_blockaded_ports(game, nation_id);
+    let reach = nation_rail_reach_with_blockades(game, nation_id, &blockaded_ports);
+    connected_provinces_with_reach(game, nation_id, &reach, &blockaded_ports)
+}
+
+/// Province-level connectivity derived from a precomputed rail-edge `reach`.
+/// A province is connected if the reach set touches one of its depot or
+/// effective-port hexes, or if it is adjacent to the capital province.
+pub fn connected_provinces_with_reach(
+    game: &GameState,
+    nation_id: NationId,
+    reach: &BTreeSet<crate::hex::HexCoord>,
+    blockaded_ports: &HashSet<crate::hex::HexCoord>,
+) -> HashSet<ProvinceId> {
     let mut connected = HashSet::new();
     let nation = match game.get_nation(nation_id) {
         Some(n) => n,
@@ -1192,7 +1258,6 @@ pub fn connected_provinces(game: &GameState, nation_id: NationId) -> HashSet<Pro
         Some(p) => p,
         None => return connected,
     };
-    let capital_tile = capital_province.capital_tile;
 
     // Precompute capital province neighbors for adjacency check
     let capital_neighbors: HashSet<crate::hex::HexCoord> = capital_province
@@ -1201,50 +1266,57 @@ pub fn connected_provinces(game: &GameState, nation_id: NationId) -> HashSet<Pro
         .flat_map(|t| t.neighbors())
         .collect();
 
-    // Collect every owned country-capital tile — each is an independent hub
-    // for rail/port connectivity (captured foreign capitals included).
-    let mut seed_tiles: Vec<crate::hex::HexCoord> = vec![capital_tile];
-    for &pid in &nation.province_ids {
-        if let Some(prov) = game.get_province(pid) {
-            for &t in &prov.tiles {
-                if t == capital_tile {
-                    continue;
-                }
-                if let Some(tile) = game.world.hex_map.get_tile(t)
-                    && tile.is_country_capital
-                {
-                    seed_tiles.push(t);
-                }
-            }
-        }
-    }
-
-    let blockaded_ports = crate::military::naval::compute_blockaded_ports(game, nation_id);
-
     for &pid in &nation.province_ids {
         if pid == capital_pid {
             continue;
         }
+        let Some(province) = game.get_province(pid) else {
+            continue;
+        };
 
-        // Infrastructure connection (railroad/depot/port) seeded from every
-        // owned country-capital tile. Ports under undisputed enemy blockade
-        // are skipped (card #408).
-        if is_province_connected_multi_filtered(
-            &game.world.hex_map,
-            &game.world.sea_zones,
-            &seed_tiles,
-            pid,
-            &game.world.provinces,
-            &blockaded_ports,
-        ) {
+        // Seed shortcut (codex review F-001): a province holding an owned
+        // country-capital tile is a connectivity hub in its own right —
+        // captured foreign capitals stay connected even if their game-start
+        // depot were ever absent. (In practice every `is_country_capital`
+        // tile carries a depot from setup; this pins the invariant
+        // structurally instead of relying on that.)
+        if province.tiles.iter().any(|&t| {
+            game.world
+                .hex_map
+                .get_tile(t)
+                .is_some_and(|tile| tile.is_country_capital)
+        }) {
+            connected.insert(pid);
+            continue;
+        }
+
+        // Infrastructure connection: the shared reach set touches a depot or
+        // effective-port hex of this province. Ports under undisputed enemy
+        // blockade are skipped (card #408).
+        let reach_connected = province.tiles.iter().any(|&coord| {
+            if !reach.contains(&coord) {
+                return false;
+            }
+            let is_depot = game
+                .world
+                .hex_map
+                .get_tile(coord)
+                .is_some_and(|t| t.infrastructure.has_depot);
+            is_depot
+                || crate::map::infrastructure::has_effective_port_filtered(
+                    &game.world.hex_map,
+                    &game.world.sea_zones,
+                    coord,
+                    blockaded_ports,
+                )
+        });
+        if reach_connected {
             connected.insert(pid);
             continue;
         }
 
         // Adjacency: at least one tile of the province neighbors a capital tile
-        if let Some(province) = game.get_province(pid)
-            && province.tiles.iter().any(|t| capital_neighbors.contains(t))
-        {
+        if province.tiles.iter().any(|t| capital_neighbors.contains(t)) {
             connected.insert(pid);
         }
     }
@@ -1259,40 +1331,38 @@ pub fn connected_provinces(game: &GameState, nation_id: NationId) -> HashSet<Pro
 /// Only resources from provinces connected to the capital are delivered;
 /// resources from disconnected provinces are tracked in `report.disconnected_resources`.
 pub(super) fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
-    // Phase 0: precompute connected provinces for each nation
+    // Phase 0: per nation, compute the blockaded-port set and the rail-edge
+    // reach set ONCE, then derive both province-level connectivity and the
+    // collectable-hex set from the same reach so the two can never disagree
+    // (and nothing is recomputed — review F-001).
     let nation_ids: Vec<NationId> = game.world.nations.iter().map(|n| n.id).collect();
-    let connected_map: Vec<(NationId, HashSet<ProvinceId>)> = nation_ids
-        .iter()
-        .map(|&nid| (nid, connected_provinces(game, nid)))
-        .collect();
-
-    // Phase 0b: precompute per-nation collectable-hex sets (capital province
-    // plus a 1-hex radius around every connected depot).
-    let collectable_by_nation: Vec<(NationId, HashSet<crate::hex::HexCoord>)> = nation_ids
-        .iter()
-        .map(|&nid| {
-            if game.get_nation(nid).is_none() {
-                return (nid, HashSet::new());
-            }
-            let owned: Vec<&crate::map::Province> = game
-                .world
-                .provinces
-                .iter()
-                .filter(|p| p.owner == nid)
-                .collect();
-            let connected = connected_map
-                .iter()
-                .find(|(id, _)| *id == nid)
-                .map(|(_, s)| s.clone())
-                .unwrap_or_default();
-            let set = crate::map::infrastructure::collectable_hexes(
-                &game.world.hex_map,
-                &owned,
-                &connected,
-            );
-            (nid, set)
-        })
-        .collect();
+    let mut connected_map: Vec<(NationId, HashSet<ProvinceId>)> =
+        Vec::with_capacity(nation_ids.len());
+    let mut collectable_by_nation: Vec<(NationId, HashSet<crate::hex::HexCoord>)> =
+        Vec::with_capacity(nation_ids.len());
+    for &nid in &nation_ids {
+        if game.get_nation(nid).is_none() {
+            connected_map.push((nid, HashSet::new()));
+            collectable_by_nation.push((nid, HashSet::new()));
+            continue;
+        }
+        let blockaded_ports = crate::military::naval::compute_blockaded_ports(game, nid);
+        let reach = nation_rail_reach_with_blockades(game, nid, &blockaded_ports);
+        connected_map.push((
+            nid,
+            connected_provinces_with_reach(game, nid, &reach, &blockaded_ports),
+        ));
+        let owned: Vec<&crate::map::Province> = game
+            .world
+            .provinces
+            .iter()
+            .filter(|p| p.owner == nid)
+            .collect();
+        collectable_by_nation.push((
+            nid,
+            crate::map::infrastructure::collectable_hexes(&game.world.hex_map, &owned, &reach),
+        ));
+    }
 
     // Phase 1: collect production data using immutable borrows
     let mut production_data: Vec<(NationId, ResourceType, u32)> = Vec::new();
@@ -1768,6 +1838,10 @@ fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
         // Engineer builds take a different, borrow-heavy path (they need
         // provinces + game_config + a mutable hex_map), so handle those first.
         if work.civilian_type == CivilianType::Engineer {
+            // On a successful rail-link build, the engineer auto-advances to the
+            // far endpoint (if free). Track it here so the reposition logic below
+            // knows where to move the engineer.
+            let mut rail_advance_to: Option<crate::hex::HexCoord> = None;
             if let Some(task) = work.build_task {
                 let provinces_snapshot = game.world.provinces.clone();
                 let cfg = game.game_data.game_config.clone();
@@ -1776,10 +1850,11 @@ fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
                     .map(|n| n.researched_techs.clone())
                     .unwrap_or_default();
                 let result: Result<Money, crate::DomainError> = match task {
-                    crate::economy::civilians::BuildTask::Railroad => {
-                        crate::map::infrastructure::build_railroad(
+                    crate::economy::civilians::BuildTask::Railroad { to } => {
+                        crate::map::infrastructure::build_rail_link(
                             &mut game.world.hex_map,
                             work.position,
+                            to,
                             work.nation_id,
                             &researched,
                             &provinces_snapshot,
@@ -1826,6 +1901,9 @@ fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
                                 task, work.position.q, work.position.r, cost
                             ),
                         ));
+                        if let crate::economy::civilians::BuildTask::Railroad { to } = task {
+                            rail_advance_to = Some(to);
+                        }
                     }
                     Err(err) => {
                         // Build failed at completion time (territory lost, tile
@@ -1841,16 +1919,65 @@ fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
                     }
                 }
             }
+
+            // Identify the engineer that just finished at `work.position`.
+            let eng_id = game
+                .world
+                .nations
+                .iter()
+                .find(|n| n.id == work.nation_id)
+                .and_then(|n| {
+                    n.military
+                        .civilians
+                        .iter()
+                        .find(|c| c.position == Some(work.position))
+                        .map(|c| c.id)
+                });
+
+            // Auto-advance: on a successful rail-link build, move the engineer to
+            // the far endpoint if that hex is free (no assigned civilian and no
+            // other civilian positioned there). The engineer does NOT get
+            // `arrived_this_turn`, so a chain runs at 1 link/turn.
+            if let (Some(to), Some(eng_id)) = (rail_advance_to, eng_id) {
+                let to_free = game
+                    .world
+                    .hex_map
+                    .get_tile(to)
+                    .is_some_and(|t| t.assigned_civilian.is_none())
+                    && !game
+                        .world
+                        .nations
+                        .iter()
+                        .flat_map(|n| n.military.civilians.iter())
+                        .any(|c| c.position == Some(to));
+                if to_free {
+                    if let Some(nation) = game.get_nation_mut(work.nation_id)
+                        && let Some(civ) = nation
+                            .military
+                            .civilians
+                            .iter_mut()
+                            .find(|c| c.id == eng_id)
+                    {
+                        civ.position = Some(to);
+                        // Deliberately do NOT set `arrived_this_turn`.
+                    }
+                    if let Some(tile_a) = game.world.hex_map.get_tile_mut(work.position)
+                        && tile_a.assigned_civilian == Some(eng_id)
+                    {
+                        tile_a.assigned_civilian = None;
+                    }
+                    if let Some(tile_b) = game.world.hex_map.get_tile_mut(to) {
+                        tile_b.assigned_civilian = Some(eng_id);
+                    }
+                    continue;
+                }
+            }
+
             // Engineers are reusable — clear the tile's assigned_civilian so
             // they can be redeployed next turn by the AI / player.
-            if let Some(tile) = game.world.hex_map.get_tile_mut(work.position)
-                && let Some(nation) = game.world.nations.iter().find(|n| n.id == work.nation_id)
-                && let Some(civ) = nation
-                    .military
-                    .civilians
-                    .iter()
-                    .find(|c| c.position == Some(work.position))
-                && tile.assigned_civilian == Some(civ.id)
+            if let Some(eng_id) = eng_id
+                && let Some(tile) = game.world.hex_map.get_tile_mut(work.position)
+                && tile.assigned_civilian == Some(eng_id)
             {
                 tile.assigned_civilian = None;
             }
@@ -7879,21 +8006,22 @@ mod tests {
         cap_tile.set_resource(ResourceType::Grain);
         cap_tile.is_country_capital = true;
         cap_tile.infrastructure.has_depot = true;
-        cap_tile.infrastructure.has_railroad = true;
         hex_map.set_tile(cap, cap_tile);
 
-        let mut rail_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
-        rail_tile.infrastructure.has_railroad = true;
+        let rail_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
         hex_map.set_tile(HexCoord::new(1, 0), rail_tile);
 
         let mut depot_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
         depot_tile.infrastructure.has_depot = true;
-        depot_tile.infrastructure.has_railroad = true;
         hex_map.set_tile(remote_depot, depot_tile);
 
         let mut timber_tile = Tile::with_province(TerrainType::Forest, ProvinceId(2));
         timber_tile.set_resource(ResourceType::Timber);
         hex_map.set_tile(remote_timber, timber_tile);
+
+        // Rail links: cap → (1,0) → remote_depot.
+        hex_map.add_rail_link(cap, HexCoord::new(1, 0));
+        hex_map.add_rail_link(HexCoord::new(1, 0), remote_depot);
 
         let province1 = Province::new(
             ProvinceId(1),
@@ -8369,17 +8497,18 @@ mod tests {
         let mut cap_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
         cap_tile.is_country_capital = true;
         cap_tile.infrastructure.has_depot = true;
-        cap_tile.infrastructure.has_railroad = true;
         hex_map.set_tile(capital_coord, cap_tile);
 
-        let mut rail_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
-        rail_tile.infrastructure.has_railroad = true;
+        let rail_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
         hex_map.set_tile(rail_coord, rail_tile);
 
         let mut depot_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
         depot_tile.infrastructure.has_depot = true;
-        depot_tile.infrastructure.has_railroad = true;
         hex_map.set_tile(depot_coord, depot_tile);
+
+        // Rail links: capital → rail → depot.
+        hex_map.add_rail_link(capital_coord, rail_coord);
+        hex_map.add_rail_link(rail_coord, depot_coord);
 
         let village_coords = [
             HexCoord::new(3, 0),
@@ -8400,7 +8529,6 @@ mod tests {
             }
             if coord == depot_coord {
                 tile.infrastructure.has_depot = true;
-                tile.infrastructure.has_railroad = true;
             }
             hex_map.set_tile(coord, tile);
             if !tiles.contains(&coord) {
@@ -8543,12 +8671,14 @@ mod tests {
         let mut cap_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
         cap_tile.is_country_capital = true;
         cap_tile.infrastructure.has_depot = true;
-        cap_tile.infrastructure.has_railroad = true;
         hex_map.set_tile(capital_coord, cap_tile);
 
-        let mut rail_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
-        rail_tile.infrastructure.has_railroad = true;
+        let rail_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
         hex_map.set_tile(rail_coord, rail_tile);
+
+        // Rail links: capital → rail → depot.
+        hex_map.add_rail_link(capital_coord, rail_coord);
+        hex_map.add_rail_link(rail_coord, depot_coord);
 
         // 2 Coal tiles and 2 Iron tiles (Hills with revealed, mined deposits at L1)
         for (i, &coord) in coords.iter().enumerate() {
@@ -8562,7 +8692,6 @@ mod tests {
             tile.set_improvement_level(1);
             if coord == depot_coord {
                 tile.infrastructure.has_depot = true;
-                tile.infrastructure.has_railroad = true;
             }
             hex_map.set_tile(coord, tile);
         }
@@ -14799,44 +14928,32 @@ mod tests {
         use crate::economy::{BuildTask, Civilian, CivilianType};
 
         let mut game = test_game_state();
-        let target = HexCoord::new(1, 0); // the "forest" tile, land & owned
+        let near = HexCoord::new(1, 0); // the "forest" tile, land & owned
+        let far = HexCoord::new(0, 0); // capital tile, adjacent & owned & free
 
-        // Add an Engineer already deployed to the target tile with a Railroad task.
-        let mut eng = Civilian::new(
-            crate::map::UnitId(3_900_000),
-            CivilianType::Engineer,
-            NationId(1),
-        );
-        eng.deploy(target);
-        eng.start_build(BuildTask::Railroad, &game.game_data.game_config);
+        // Add an Engineer deployed to the near tile with a Railroad link task
+        // targeting the adjacent far tile.
+        let eng_id = crate::map::UnitId(3_900_000);
+        let mut eng = Civilian::new(eng_id, CivilianType::Engineer, NationId(1));
+        eng.deploy(near);
+        eng.start_build(BuildTask::Railroad { to: far }, &game.game_data.game_config);
         game.world.nations[0].military.civilians.push(eng);
-        if let Some(tile) = game.world.hex_map.get_tile_mut(target) {
-            tile.assigned_civilian = Some(crate::map::UnitId(3_900_000));
+        if let Some(tile) = game.world.hex_map.get_tile_mut(near) {
+            tile.assigned_civilian = Some(eng_id);
         }
 
-        // Before: no railroad.
-        assert!(
-            !game
-                .world
-                .hex_map
-                .get_tile(target)
-                .unwrap()
-                .infrastructure
-                .has_railroad
-        );
+        // Before: no rail link between the two tiles.
+        assert!(!game.world.hex_map.has_rail_link(near, far));
 
         let _ = process_turn(&mut game);
 
-        // After one turn: railroad built, engineer is idle and freed from the tile.
+        // After one turn: the rail link exists…
         assert!(
-            game.world
-                .hex_map
-                .get_tile(target)
-                .unwrap()
-                .infrastructure
-                .has_railroad,
-            "railroad should have been built after engineer's 1-turn task"
+            game.world.hex_map.has_rail_link(near, far),
+            "rail link should have been laid after engineer's 1-turn task"
         );
+        // …and the engineer auto-advanced to the far endpoint WITHOUT the
+        // arrival flag (so a chain runs at 1 link/turn).
         let eng = game
             .world
             .nations
@@ -14846,14 +14963,107 @@ mod tests {
             .unwrap();
         assert!(!eng.working);
         assert_eq!(eng.build_task, None);
+        assert_eq!(eng.position, Some(far), "engineer auto-advances to `to`");
+        assert!(
+            !eng.arrived_this_turn,
+            "auto-advance must NOT set arrived_this_turn"
+        );
         assert_eq!(
-            game.world
-                .hex_map
-                .get_tile(target)
-                .unwrap()
-                .assigned_civilian,
+            game.world.hex_map.get_tile(near).unwrap().assigned_civilian,
             None,
-            "engineer should be released from the tile after completion"
+            "near tile slot is released"
+        );
+        assert_eq!(
+            game.world.hex_map.get_tile(far).unwrap().assigned_civilian,
+            Some(eng_id),
+            "far tile slot is claimed by the advanced engineer"
+        );
+    }
+
+    #[test]
+    fn captured_country_capital_province_connected_without_depot_or_rail() {
+        // Codex review F-001: a province holding an owned country-capital
+        // tile is a hub in its own right. Strip the depot the setup would
+        // normally place to prove connectivity doesn't depend on it.
+        let mut game = test_game_state();
+        let remote = HexCoord::new(5, 5);
+        let mut tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        tile.is_country_capital = true;
+        tile.infrastructure.has_depot = false;
+        game.world.hex_map.set_tile(remote, tile);
+        game.world.provinces.push(Province::new(
+            ProvinceId(2),
+            "Captured".to_string(),
+            NationId(1),
+            remote,
+            vec![remote],
+            3,
+        ));
+        game.get_nation_mut(NationId(1))
+            .unwrap()
+            .province_ids
+            .push(ProvinceId(2));
+
+        let connected = connected_provinces(&game, NationId(1));
+        assert!(
+            connected.contains(&ProvinceId(2)),
+            "owned country-capital province must be connected even with no depot and no rail"
+        );
+    }
+
+    #[test]
+    fn engineer_rail_link_far_hex_occupied_builds_but_stays() {
+        use crate::economy::{BuildTask, Civilian, CivilianType};
+
+        let mut game = test_game_state();
+        let near = HexCoord::new(1, 0);
+        let far = HexCoord::new(0, 0);
+
+        // Engineer laying near→far…
+        let eng_id = crate::map::UnitId(3_900_001);
+        let mut eng = Civilian::new(eng_id, CivilianType::Engineer, NationId(1));
+        eng.deploy(near);
+        eng.start_build(BuildTask::Railroad { to: far }, &game.game_data.game_config);
+        game.world.nations[0].military.civilians.push(eng);
+        if let Some(tile) = game.world.hex_map.get_tile_mut(near) {
+            tile.assigned_civilian = Some(eng_id);
+        }
+        // …while another civilian occupies the far endpoint.
+        let blocker_id = crate::map::UnitId(3_900_002);
+        let mut blocker = Civilian::new(blocker_id, CivilianType::Prospector, NationId(1));
+        blocker.deploy(far);
+        game.world.nations[0].military.civilians.push(blocker);
+        if let Some(tile) = game.world.hex_map.get_tile_mut(far) {
+            tile.assigned_civilian = Some(blocker_id);
+        }
+
+        let _ = process_turn(&mut game);
+
+        // The link is still laid (and paid for)…
+        assert!(
+            game.world.hex_map.has_rail_link(near, far),
+            "occupied far hex must not cancel the link build"
+        );
+        // …but the engineer stays on the near hex, idle and unflagged.
+        let eng = game
+            .world
+            .nations
+            .iter()
+            .flat_map(|n| n.military.civilians.iter())
+            .find(|c| c.id == eng_id)
+            .unwrap();
+        assert!(!eng.working);
+        assert_eq!(eng.build_task, None);
+        assert_eq!(
+            eng.position,
+            Some(near),
+            "auto-advance must be skipped when `to` is occupied"
+        );
+        assert!(!eng.arrived_this_turn);
+        assert_eq!(
+            game.world.hex_map.get_tile(far).unwrap().assigned_civilian,
+            Some(blocker_id),
+            "the blocker keeps its tile slot"
         );
     }
 
@@ -14870,17 +15080,19 @@ mod tests {
                 t.infrastructure.has_depot = true;
             }
             let rail_mid = HexCoord::new(1, 0);
-            let mut rail_mid_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
-            rail_mid_tile.infrastructure.has_railroad = true;
+            let rail_mid_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
             game.world.hex_map.set_tile(rail_mid, rail_mid_tile);
 
             let depot_hex = HexCoord::new(2, 0);
             let mut depot_tile = Tile::with_province(TerrainType::Hills, ProvinceId(2));
-            depot_tile.infrastructure.has_railroad = true;
             depot_tile.infrastructure.has_depot = true;
             depot_tile.reveal_deposit(ResourceType::Iron);
             depot_tile.set_improvement_level(1);
             game.world.hex_map.set_tile(depot_hex, depot_tile);
+
+            // Rail links: capital(0,0) → rail_mid(1,0) → depot_hex(2,0).
+            game.world.hex_map.add_rail_link(cap, rail_mid);
+            game.world.hex_map.add_rail_link(rail_mid, depot_hex);
 
             let mut tiles = vec![depot_hex];
 

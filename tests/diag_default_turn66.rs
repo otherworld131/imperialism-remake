@@ -6,7 +6,7 @@
 
 use domain::events::TreatyType;
 use domain::game_state::new_game_with_seed;
-use domain::turn::{connected_provinces, process_turn};
+use domain::turn::process_turn;
 use domain::types::*;
 
 #[test]
@@ -158,7 +158,7 @@ fn diag_default_turn66() {
             if let Some(p) = game.get_province(pid) {
                 for &c in &p.tiles {
                     if let Some(t) = game.world.hex_map.get_tile(c) {
-                        if t.infrastructure.has_railroad {
+                        if game.world.hex_map.rail_link_count(c) > 0 {
                             rails += 1;
                             rail_coords.push(c);
                         }
@@ -213,7 +213,7 @@ fn diag_default_turn66() {
             .iter()
             .filter(|c| c.civilian_type == domain::economy::civilians::CivilianType::Forester)
             .collect();
-        let connected = connected_provinces(&game, gp);
+        let reach = domain::turn::nation_rail_reach(&game, gp);
         let owned: Vec<&domain::map::Province> = game
             .world
             .provinces
@@ -221,7 +221,7 @@ fn diag_default_turn66() {
             .filter(|p| p.owner == gp)
             .collect();
         let collectable =
-            domain::map::infrastructure::collectable_hexes(&game.world.hex_map, &owned, &connected);
+            domain::map::infrastructure::collectable_hexes(&game.world.hex_map, &owned, &reach);
         let mut connected_timber = 0;
         let mut disconnected_timber = 0;
         for &pid in &nation.province_ids {

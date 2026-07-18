@@ -123,15 +123,21 @@ def army():
 # ---- infrastructure ----
 
 def railroad():
+    # Straight track segment matching the edge-link map art (card #497):
+    # ballast bed, four sleepers, two steel rails running left to right.
     c = Canvas()
-    # sleepers receding upward
-    for y, x0, x1 in ((27, 3, 28), (23, 5, 26), (19, 7, 24), (15, 9, 22), (11, 11, 20),
-                      (8, 12, 19)):
-        c.rect(x0, y, x1, y + 1, "wood")
-        c.hline(x0, x1, y, "wood_sh")
-    # rails converging
-    c.line(6, 29, 13, 6, "steel"); c.line(7, 29, 14, 6, "steel_lt")
-    c.line(25, 29, 18, 6, "steel"); c.line(24, 29, 17, 6, "steel_lt")
+    c.rect(2, 10, 29, 21, "grey")
+    for x, col in ((4, "grey_dk"), (11, "grey_lt"), (18, "grey_dk"), (25, "grey_lt")):
+        c.px(x, 11, col); c.px(x + 2, 20, col)
+    for tx in (3, 10, 17, 24):
+        c.rect(tx, 11, tx + 2, 20, "wood")
+        c.vline(tx, 11, 20, "wood_lt")
+        c.vline(tx + 2, 11, 20, "wood_sh")
+    for ry in (13, 18):
+        c.hline(2, 29, ry, "steel_lt")
+        c.hline(2, 29, ry + 1, "steel_dk")
+        for tx in (3, 10, 17, 24):
+            c.px(tx + 1, ry, "steel")
     c.outline_silhouette()
     return c
 

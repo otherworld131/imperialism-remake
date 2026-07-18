@@ -100,6 +100,7 @@ pub fn update_map_tooltip(
     settings: Res<RenderSettings>,
     theme: Res<Theme>,
     icons: Option<Res<IconAssets>>,
+    rail: Res<crate::game::resources::RailLinkOptions>,
     mut state: ResMut<MapTooltipState>,
     mut commands: Commands,
     mut node: Query<(&mut Node, &mut Visibility, &mut BorderColor), With<MapTooltipNode>>,
@@ -202,6 +203,12 @@ pub fn update_map_tooltip(
                 .as_ref()
                 .and_then(|tiles| tiles.get(*index.by_coord.get(&(*q, *r))?));
             if let Some(tile) = tile {
+                // Card #497: while an armed engineer previews a link onto
+                // this hex, surface the verdict in the tooltip.
+                let rail_opt = rail
+                    .0
+                    .as_ref()
+                    .and_then(|st| st.options.iter().find(|o| (o.q, o.r) == (*q, *r)));
                 spawn_tile_content(
                     &mut commands,
                     content_entity,
@@ -209,6 +216,7 @@ pub fn update_map_tooltip(
                     &settings,
                     &theme,
                     icons.as_deref(),
+                    rail_opt,
                 );
             }
         }
@@ -250,6 +258,7 @@ fn spawn_tile_content(
     settings: &RenderSettings,
     theme: &Theme,
     icons: Option<&IconAssets>,
+    rail_opt: Option<&crate::game::resources::RailLinkOption>,
 ) {
     let show_resource = tile
         .resource
@@ -340,8 +349,35 @@ fn spawn_tile_content(
     if tile.is_capital {
         line(commands, parent, "• Capital", theme.font(12.0), theme::TEXT);
     }
-    if tile.has_railroad {
-        line(commands, parent, "Railroad", theme.font(12.0), theme::TEXT);
+    if !tile.rail_links.is_empty() {
+        line(
+            commands,
+            parent,
+            &format!("Rail links: {}", tile.rail_links.len()),
+            theme.font(12.0),
+            theme::TEXT,
+        );
+    }
+    // Card #497: live link-preview verdict for the armed engineer.
+    if let Some(opt) = rail_opt {
+        if opt.allowed && opt.affordable {
+            line(
+                commands,
+                parent,
+                &format!("Lay track: ${}", opt.cost.unwrap_or(0)),
+                theme.font_bold(12.0),
+                theme::GOLD,
+            );
+        } else {
+            let why = opt.reason.as_deref().unwrap_or("not enough funds");
+            line(
+                commands,
+                parent,
+                &format!("Cannot lay track: {}", why),
+                theme.font(12.0),
+                theme::ALARM,
+            );
+        }
     }
     if tile.has_port {
         let (text, color) = if tile.port_blockaded {

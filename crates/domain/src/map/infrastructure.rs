@@ -5,7 +5,7 @@ use crate::map::hex_map::HexMap;
 use crate::map::province::Province;
 use crate::nation::Nation;
 use crate::types::*;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeSet, HashSet, VecDeque};
 
 /// Name of the tech (from Lua `game_config`) that gates railroad construction
 /// on the given terrain. `None` means the terrain is always rail-buildable
@@ -56,6 +56,9 @@ pub fn rail_terrain_enabled_for(
 
 /// Cost to build a railroad on a terrain type.
 /// Returns `None` for terrain where railroads cannot be built (Sea).
+///
+/// This is the per-terrain primitive; a rail *link* between two hexes costs
+/// the average of its two endpoints' terrain costs (see `rail_link_cost`).
 pub fn railroad_cost(terrain: TerrainType, cfg: &GameConfig) -> Option<Money> {
     let dollars = match terrain {
         TerrainType::Grassland => cfg.railroad_cost_grassland,
@@ -68,6 +71,20 @@ pub fn railroad_cost(terrain: TerrainType, cfg: &GameConfig) -> Option<Money> {
         TerrainType::Sea => return None,
     };
     Some(Money::dollars(dollars))
+}
+
+/// Cost to lay a rail link between two adjacent hexes of the given terrains:
+/// the **average** of the two endpoints' per-terrain railroad costs. Every
+/// per-terrain cost is a $50 multiple, so the average is always exact.
+/// Returns `None` if either endpoint terrain cannot carry rail (Sea).
+pub fn rail_link_cost(
+    terrain_a: TerrainType,
+    terrain_b: TerrainType,
+    cfg: &GameConfig,
+) -> Option<Money> {
+    let a = railroad_cost(terrain_a, cfg)?;
+    let b = railroad_cost(terrain_b, cfg)?;
+    Some(Money::from_cents((a.cents() + b.cents()) / 2))
 }
 
 /// True if the tile exists, has a province, and that province is owned by `nation_id`.
@@ -88,43 +105,60 @@ fn tile_owned_by(
         .any(|p| p.id == pid && p.owner == nation_id)
 }
 
-/// Build a railroad on a tile. Caller must own the tile's province AND have
-/// researched any tech the terrain requires. Returns cost or error.
-pub fn build_railroad(
+/// Lay an undirected railroad link between two adjacent hexes `a` and `b`.
+///
+/// Both endpoints must be owned by `nation_id`, land, and adjacent (distance
+/// 1); the nation must have researched any tech each endpoint terrain requires
+/// (gate applies to **both** terrains); and the link must not already exist.
+/// On success the canonical edge is inserted and the link cost (average of the
+/// two endpoint terrain costs) is returned.
+#[allow(clippy::too_many_arguments)]
+pub fn build_rail_link(
     hex_map: &mut HexMap,
-    coord: HexCoord,
+    a: HexCoord,
+    b: HexCoord,
     nation_id: NationId,
     researched_techs: &[crate::events::TechId],
     provinces: &[Province],
     game_data: &GameData,
     cfg: &GameConfig,
 ) -> Result<Money, DomainError> {
-    if !tile_owned_by(hex_map, coord, provinces, nation_id) {
+    if a.distance(b) != 1 {
+        return Err(DomainError::illegal("Rail link endpoints must be adjacent"));
+    }
+    if !tile_owned_by(hex_map, a, provinces, nation_id)
+        || !tile_owned_by(hex_map, b, provinces, nation_id)
+    {
         return Err(DomainError::illegal(
-            "Cannot build railroad on tile not owned by this nation",
+            "Both rail-link endpoints must be owned by this nation",
         ));
     }
-    let tile = hex_map
-        .get_tile(coord)
-        .ok_or(DomainError::TileNotFound(coord))?;
-    if tile.infrastructure.has_railroad {
-        return Err(DomainError::illegal("Railroad already exists"));
+    let terrain_a = hex_map
+        .get_tile(a)
+        .ok_or(DomainError::TileNotFound(a))?
+        .terrain();
+    let terrain_b = hex_map
+        .get_tile(b)
+        .ok_or(DomainError::TileNotFound(b))?
+        .terrain();
+    if !terrain_a.is_land() || !terrain_b.is_land() {
+        return Err(DomainError::illegal("Cannot build rail link on sea"));
     }
-    let terrain = tile.terrain();
-    let cost =
-        railroad_cost(terrain, cfg).ok_or(DomainError::illegal("Cannot build railroad on sea"))?;
-    if !rail_terrain_enabled(terrain, researched_techs, game_data, cfg) {
-        let tech = railroad_required_tech(terrain, cfg).unwrap_or("?");
-        return Err(DomainError::illegal(format!(
-            "Railroad on {:?} requires tech: {}",
-            terrain, tech
-        )));
+    if hex_map.has_rail_link(a, b) {
+        return Err(DomainError::illegal("Rail link already exists"));
     }
-
-    let tile = hex_map
-        .get_tile_mut(coord)
-        .ok_or(DomainError::TileNotFound(coord))?;
-    tile.infrastructure.has_railroad = true;
+    let cost = rail_link_cost(terrain_a, terrain_b, cfg)
+        .ok_or(DomainError::illegal("Cannot build rail link on sea"))?;
+    for terrain in [terrain_a, terrain_b] {
+        if !rail_terrain_enabled(terrain, researched_techs, game_data, cfg) {
+            let tech = railroad_required_tech(terrain, cfg).unwrap_or("?");
+            return Err(DomainError::illegal(format!(
+                "Railroad on {:?} requires tech: {}",
+                terrain, tech
+            )));
+        }
+    }
+    hex_map.add_rail_link(a, b);
     Ok(cost)
 }
 
@@ -151,9 +185,9 @@ pub fn build_depot(
     if tile.infrastructure.has_depot {
         return Err(DomainError::illegal("Depot already exists"));
     }
-    if !tile.infrastructure.has_railroad {
+    if hex_map.rail_link_count(coord) == 0 {
         return Err(DomainError::illegal(
-            "Depot requires a railroad on the tile",
+            "Depot requires a rail link on the tile",
         ));
     }
     let tile = hex_map
@@ -375,12 +409,74 @@ pub fn build_fort(
     Ok((new_level, cost))
 }
 
+/// Compute the set of hexes reachable from `seeds` over the nation's rail-edge
+/// network, with a one-shot port hop.
+///
+/// BFS relaxes rail **edges** (`hex_map.rail_neighbors`) from the sorted seeds.
+/// The first time a reached hex is one of the nation's *effective* ports
+/// (built or implicit, ocean- or river-facing, not blockaded — see
+/// `has_effective_port_filtered`), ALL other effective ports of the nation are
+/// seeded at once — the maritime network connects every port uniformly, so a
+/// single hop saturates it and no further iteration is needed. Rail BFS then
+/// continues from each seeded port. The result is a `BTreeSet` for
+/// deterministic iteration because it feeds turn-order-dependent resource
+/// collection (see Known Bugs).
+///
+/// `owned_tiles` bounds which hexes may act as the nation's ports for the
+/// port-hop; rail edges themselves conduct regardless of ownership (physical
+/// infrastructure persists across conquest).
+pub fn rail_reach(
+    hex_map: &HexMap,
+    sea_zones: &[crate::map::sea_zones::SeaZone],
+    seeds: &[HexCoord],
+    owned_tiles: &BTreeSet<HexCoord>,
+    blockaded_ports: &HashSet<HexCoord>,
+) -> BTreeSet<HexCoord> {
+    // The nation's effective ports, in deterministic (sorted) order.
+    let ports: Vec<HexCoord> = owned_tiles
+        .iter()
+        .copied()
+        .filter(|&c| has_effective_port_filtered(hex_map, sea_zones, c, blockaded_ports))
+        .collect();
+
+    let mut reach: BTreeSet<HexCoord> = BTreeSet::new();
+    let mut queue: VecDeque<HexCoord> = VecDeque::new();
+
+    let mut sorted_seeds: Vec<HexCoord> = seeds.to_vec();
+    sorted_seeds.sort();
+    sorted_seeds.dedup();
+    for s in sorted_seeds {
+        if reach.insert(s) {
+            queue.push_back(s);
+        }
+    }
+
+    let mut port_hopped = false;
+    while let Some(current) = queue.pop_front() {
+        for neighbor in hex_map.rail_neighbors(current) {
+            if reach.insert(neighbor) {
+                queue.push_back(neighbor);
+            }
+        }
+        if !port_hopped && ports.contains(&current) {
+            port_hopped = true;
+            for &p in &ports {
+                if reach.insert(p) {
+                    queue.push_back(p);
+                }
+            }
+        }
+    }
+
+    reach
+}
+
 /// Set of hexes a nation can harvest this turn under the unified collector
 /// model (cards #130 + #131).
 ///
 /// A tile is a *collector* if either
-///   * it has a depot AND its province is in `connected` (reachable from a
-///     country capital by rail/port chain), or
+///   * it has a depot AND its hex is in `reach` (rail-reachable from a country
+///     capital, directly or via the port network), or
 ///   * `tile.is_country_capital` is set (country capitals are their own hubs,
 ///     rail-independent — this keeps conquered foreign capitals productive
 ///     even when the rail link is lost).
@@ -391,7 +487,7 @@ pub fn build_fort(
 pub fn collectable_hexes(
     hex_map: &HexMap,
     owned_provinces: &[&Province],
-    connected: &HashSet<ProvinceId>,
+    reach: &BTreeSet<HexCoord>,
 ) -> HashSet<HexCoord> {
     let mut out: HashSet<HexCoord> = HashSet::new();
     // Owned-tile lookup so a collector's radius never leaks onto enemy hexes.
@@ -401,12 +497,11 @@ pub fn collectable_hexes(
         .collect();
 
     for province in owned_provinces {
-        let province_connected = connected.contains(&province.id);
         for &tile_coord in &province.tiles {
             let Some(tile) = hex_map.get_tile(tile_coord) else {
                 continue;
             };
-            let connected_depot = tile.infrastructure.has_depot && province_connected;
+            let connected_depot = tile.infrastructure.has_depot && reach.contains(&tile_coord);
             let is_collector = connected_depot || tile.is_country_capital;
             if !is_collector {
                 continue;
@@ -467,62 +562,61 @@ pub fn is_province_connected_multi_filtered(
     provinces: &[Province],
     blockaded_ports: &HashSet<HexCoord>,
 ) -> bool {
+    let Some(target) = provinces.iter().find(|p| p.id == target_province_id) else {
+        return false;
+    };
+
     // Shortcut: if the target province contains any of the seed tiles (the
     // nation's capital or a captured country capital), it's trivially connected.
-    if let Some(prov) = provinces.iter().find(|p| p.id == target_province_id) {
-        for &seed in capital_tiles {
-            if prov.tiles.contains(&seed) {
-                return true;
-            }
+    for &seed in capital_tiles {
+        if target.tiles.contains(&seed) {
+            return true;
         }
     }
 
-    let mut visited = HashSet::new();
-    let mut queue = VecDeque::new();
-    let seed_set: HashSet<HexCoord> = capital_tiles.iter().copied().collect();
-    for &c in capital_tiles {
-        queue.push_back(c);
-        visited.insert(c);
-    }
+    // Owned tiles of the nation owning the seeds — bounds the port-hop network.
+    // Derive the owner from the province containing a seed tile.
+    let owned_tiles = owned_tiles_for_seeds(provinces, capital_tiles);
 
-    let any_seed_has_port = capital_tiles
+    let reach = rail_reach(
+        hex_map,
+        sea_zones,
+        capital_tiles,
+        &owned_tiles,
+        blockaded_ports,
+    );
+
+    // Connected ⟺ reach touches one of the target's depot hexes or one of its
+    // effective-port hexes (the port network is folded into `reach`).
+    target.tiles.iter().any(|&coord| {
+        if !reach.contains(&coord) {
+            return false;
+        }
+        let is_depot = hex_map
+            .get_tile(coord)
+            .is_some_and(|t| t.infrastructure.has_depot);
+        is_depot || has_effective_port_filtered(hex_map, sea_zones, coord, blockaded_ports)
+    })
+}
+
+/// Collect every tile owned by the nation that owns the seed tiles. Used to
+/// bound the port-hop network in `rail_reach`-based connectivity checks.
+fn owned_tiles_for_seeds(provinces: &[Province], seeds: &[HexCoord]) -> BTreeSet<HexCoord> {
+    let mut owner: Option<NationId> = None;
+    for &seed in seeds {
+        if let Some(p) = provinces.iter().find(|p| p.tiles.contains(&seed)) {
+            owner = Some(p.owner);
+            break;
+        }
+    }
+    let Some(owner) = owner else {
+        return BTreeSet::new();
+    };
+    provinces
         .iter()
-        .any(|c| has_effective_port_filtered(hex_map, sea_zones, *c, blockaded_ports));
-
-    while let Some(current) = queue.pop_front() {
-        if let Some(tile) = hex_map.get_tile(current) {
-            if tile.province_id == Some(target_province_id) && tile.infrastructure.has_depot {
-                return true;
-            }
-            if tile.infrastructure.has_railroad || seed_set.contains(&current) {
-                for neighbor in current.neighbors() {
-                    if !visited.contains(&neighbor)
-                        && let Some(n_tile) = hex_map.get_tile(neighbor)
-                        && (n_tile.infrastructure.has_railroad || n_tile.infrastructure.has_depot)
-                    {
-                        visited.insert(neighbor);
-                        queue.push_back(neighbor);
-                    }
-                }
-            }
-        }
-    }
-
-    // Port-to-port: if any seed tile has a port (real or capital-implicit) and
-    // the target province has a port (real or capital-implicit), they are
-    // connected by sea (card #419). Blockaded ports are skipped (card #408).
-    if any_seed_has_port {
-        let target_prov = provinces.iter().find(|p| p.id == target_province_id);
-        if let Some(prov) = target_prov {
-            for tile_coord in &prov.tiles {
-                if has_effective_port_filtered(hex_map, sea_zones, *tile_coord, blockaded_ports) {
-                    return true;
-                }
-            }
-        }
-    }
-
-    false
+        .filter(|p| p.owner == owner)
+        .flat_map(|p| p.tiles.iter().copied())
+        .collect()
 }
 
 #[cfg(test)]
@@ -537,15 +631,17 @@ mod tests {
 
     /// Thin wrapper so existing tests don't need to thread tech state — uses
     /// an empty researched-techs list and the default `GameData`.
-    fn test_build_railroad(
+    fn test_build_rail_link(
         map: &mut HexMap,
-        coord: HexCoord,
+        a: HexCoord,
+        b: HexCoord,
         nation_id: NationId,
         provinces: &[Province],
     ) -> Result<Money, DomainError> {
-        build_railroad(
+        build_rail_link(
             map,
-            coord,
+            a,
+            b,
             nation_id,
             &[],
             provinces,
@@ -563,6 +659,25 @@ mod tests {
             NationId(1),
             coord,
             vec![coord],
+            4,
+        )]
+    }
+
+    /// Test helper: place two adjacent land tiles owned by nation 1 at `a`/`b`.
+    fn owned_pair(
+        map: &mut HexMap,
+        a: HexCoord,
+        b: HexCoord,
+        terrain: TerrainType,
+    ) -> Vec<Province> {
+        map.set_tile(a, Tile::with_province(terrain, ProvinceId(1)));
+        map.set_tile(b, Tile::with_province(terrain, ProvinceId(1)));
+        vec![Province::new(
+            ProvinceId(1),
+            "Own".to_string(),
+            NationId(1),
+            a,
+            vec![a, b],
             4,
         )]
     }
@@ -624,91 +739,170 @@ mod tests {
         assert_eq!(railroad_cost(TerrainType::Sea, &cfg()), None);
     }
 
-    // ── build_railroad ────────────────────────────────────────
+    // ── rail_link_cost ────────────────────────────────────────
 
     #[test]
-    fn build_railroad_on_valid_tile() {
-        let mut map = HexMap::new(10, 10);
-        let coord = HexCoord::new(0, 0);
-        let provinces = owned_land(&mut map, coord, TerrainType::Grassland);
-        let result = test_build_railroad(&mut map, coord, NationId(1), &provinces);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Money::dollars(100));
-        assert!(map.get_tile(coord).unwrap().infrastructure.has_railroad);
+    fn rail_link_cost_is_average_of_endpoints() {
+        let c = cfg();
+        // Grassland ($100) + Grassland ($100) = $100.
+        assert_eq!(
+            rail_link_cost(TerrainType::Grassland, TerrainType::Grassland, &c),
+            Some(Money::dollars(100))
+        );
+        // Grassland ($100) + Mountain ($500) = $300.
+        assert_eq!(
+            rail_link_cost(TerrainType::Grassland, TerrainType::Mountain, &c),
+            Some(Money::dollars(300))
+        );
+        // Hills ($200) + Swamp ($300) = $250.
+        assert_eq!(
+            rail_link_cost(TerrainType::Hills, TerrainType::Swamp, &c),
+            Some(Money::dollars(250))
+        );
     }
 
     #[test]
-    fn build_railroad_requires_ownership() {
+    fn rail_link_cost_sea_returns_none() {
+        let c = cfg();
+        assert_eq!(
+            rail_link_cost(TerrainType::Sea, TerrainType::Grassland, &c),
+            None
+        );
+        assert_eq!(
+            rail_link_cost(TerrainType::Grassland, TerrainType::Sea, &c),
+            None
+        );
+    }
+
+    // ── build_rail_link ───────────────────────────────────────
+
+    #[test]
+    fn build_rail_link_on_valid_pair() {
         let mut map = HexMap::new(10, 10);
-        let coord = HexCoord::new(0, 0);
+        let a = HexCoord::new(0, 0);
+        let b = HexCoord::new(1, 0);
+        let provinces = owned_pair(&mut map, a, b, TerrainType::Grassland);
+        let result = test_build_rail_link(&mut map, a, b, NationId(1), &provinces);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Money::dollars(100));
+        assert!(map.has_rail_link(a, b));
+        // Symmetry: the edge is undirected.
+        assert!(map.has_rail_link(b, a));
+    }
+
+    #[test]
+    fn build_rail_link_requires_ownership() {
+        let mut map = HexMap::new(10, 10);
+        let a = HexCoord::new(0, 0);
+        let b = HexCoord::new(1, 0);
         map.set_tile(
-            coord,
+            a,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
+        );
+        map.set_tile(
+            b,
             Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
         );
         let provinces = vec![Province::new(
             ProvinceId(1),
             "Foreign".to_string(),
             NationId(7),
-            coord,
-            vec![coord],
+            a,
+            vec![a, b],
             4,
         )];
-        let result = test_build_railroad(&mut map, coord, NationId(1), &provinces);
+        let result = test_build_rail_link(&mut map, a, b, NationId(1), &provinces);
         assert!(result.is_err());
     }
 
     #[test]
-    fn build_railroad_already_exists() {
+    fn build_rail_link_non_adjacent_rejected() {
         let mut map = HexMap::new(10, 10);
-        let coord = HexCoord::new(0, 0);
-        let provinces = owned_land(&mut map, coord, TerrainType::Grassland);
-        test_build_railroad(&mut map, coord, NationId(1), &provinces).unwrap();
-        let result = test_build_railroad(&mut map, coord, NationId(1), &provinces);
+        let a = HexCoord::new(0, 0);
+        let b = HexCoord::new(3, 0);
+        let provinces = owned_pair(&mut map, a, b, TerrainType::Grassland);
+        let result = test_build_rail_link(&mut map, a, b, NationId(1), &provinces);
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
-            "illegal move: Railroad already exists"
+            "illegal move: Rail link endpoints must be adjacent"
         );
     }
 
     #[test]
-    fn build_railroad_on_sea_tile() {
+    fn build_rail_link_already_exists() {
         let mut map = HexMap::new(10, 10);
-        let coord = HexCoord::new(0, 0);
-        let provinces = owned_land(&mut map, coord, TerrainType::Sea);
-        let result = test_build_railroad(&mut map, coord, NationId(1), &provinces);
+        let a = HexCoord::new(0, 0);
+        let b = HexCoord::new(1, 0);
+        let provinces = owned_pair(&mut map, a, b, TerrainType::Grassland);
+        test_build_rail_link(&mut map, a, b, NationId(1), &provinces).unwrap();
+        // Ordering the reverse edge must also be rejected (canonical key).
+        let result = test_build_rail_link(&mut map, b, a, NationId(1), &provinces);
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
-            "illegal move: Cannot build railroad on sea"
+            "illegal move: Rail link already exists"
         );
     }
 
     #[test]
-    fn build_railroad_tile_not_found() {
+    fn build_rail_link_on_sea_tile() {
         let mut map = HexMap::new(10, 10);
-        let result = test_build_railroad(&mut map, HexCoord::new(5, 5), NationId(1), &[]);
+        let a = HexCoord::new(0, 0);
+        let b = HexCoord::new(1, 0);
+        map.set_tile(
+            a,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
+        );
+        map.set_tile(b, Tile::with_province(TerrainType::Sea, ProvinceId(1)));
+        let provinces = vec![Province::new(
+            ProvinceId(1),
+            "Own".to_string(),
+            NationId(1),
+            a,
+            vec![a, b],
+            4,
+        )];
+        let result = test_build_rail_link(&mut map, a, b, NationId(1), &provinces);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "illegal move: Cannot build rail link on sea"
+        );
+    }
+
+    #[test]
+    fn build_rail_link_tile_not_found() {
+        let mut map = HexMap::new(10, 10);
+        let result = test_build_rail_link(
+            &mut map,
+            HexCoord::new(5, 5),
+            HexCoord::new(6, 5),
+            NationId(1),
+            &[],
+        );
         assert!(result.is_err());
     }
 
     // ── build_depot ───────────────────────────────────────────
 
     #[test]
-    fn build_depot_on_railroad_hex() {
+    fn build_depot_on_linked_hex() {
         let mut map = HexMap::new(10, 10);
-        let coord = HexCoord::new(0, 0);
-        let provinces = owned_land(&mut map, coord, TerrainType::Grassland);
-        // Build a railroad first so the depot prerequisite is met
-        test_build_railroad(&mut map, coord, NationId(1), &provinces).unwrap();
-        let result = build_depot(&mut map, coord, NationId(1), &provinces, &cfg());
+        let a = HexCoord::new(0, 0);
+        let b = HexCoord::new(1, 0);
+        let provinces = owned_pair(&mut map, a, b, TerrainType::Grassland);
+        // Lay a rail link touching `a` so the depot prerequisite is met.
+        test_build_rail_link(&mut map, a, b, NationId(1), &provinces).unwrap();
+        let result = build_depot(&mut map, a, NationId(1), &provinces, &cfg());
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), Money::dollars(2000));
-        assert!(map.get_tile(coord).unwrap().infrastructure.has_depot);
+        assert!(map.get_tile(a).unwrap().infrastructure.has_depot);
     }
 
     #[test]
-    fn build_depot_rejects_capital_tile_without_railroad() {
-        // Depots require an actual railroad; the `is_capital` flag is set on
+    fn build_depot_rejects_capital_tile_without_rail_link() {
+        // Depots require an actual rail link; the `is_capital` flag is set on
         // every province's centroid (not just the nation's capital) so bypassing
         // the rail prerequisite based on that flag is wrong. Starting-state
         // capital depots are placed via `place_depot_unchecked` at setup,
@@ -731,7 +925,7 @@ mod tests {
     }
 
     #[test]
-    fn build_depot_rejected_without_railroad() {
+    fn build_depot_rejected_without_rail_link() {
         let mut map = HexMap::new(10, 10);
         let coord = HexCoord::new(0, 0);
         let provinces = owned_land(&mut map, coord, TerrainType::Grassland);
@@ -742,11 +936,12 @@ mod tests {
     #[test]
     fn build_depot_already_exists() {
         let mut map = HexMap::new(10, 10);
-        let coord = HexCoord::new(0, 0);
-        let provinces = owned_land(&mut map, coord, TerrainType::Grassland);
-        test_build_railroad(&mut map, coord, NationId(1), &provinces).unwrap();
-        build_depot(&mut map, coord, NationId(1), &provinces, &cfg()).unwrap();
-        let result = build_depot(&mut map, coord, NationId(1), &provinces, &cfg());
+        let a = HexCoord::new(0, 0);
+        let b = HexCoord::new(1, 0);
+        let provinces = owned_pair(&mut map, a, b, TerrainType::Grassland);
+        test_build_rail_link(&mut map, a, b, NationId(1), &provinces).unwrap();
+        build_depot(&mut map, a, NationId(1), &provinces, &cfg()).unwrap();
+        let result = build_depot(&mut map, a, NationId(1), &provinces, &cfg());
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
@@ -1063,15 +1258,18 @@ mod tests {
         capital_tile.is_capital = true;
         map.set_tile(capital_coord, capital_tile);
 
-        // Middle tile with railroad (province 1)
-        let mut mid_tile = Tile::with_province(TerrainType::Grassland, capital_pid);
-        mid_tile.infrastructure.has_railroad = true;
+        // Middle tile (province 1)
+        let mid_tile = Tile::with_province(TerrainType::Grassland, capital_pid);
         map.set_tile(mid_coord, mid_tile);
 
         // Target tile with depot (province 2)
         let mut target_tile = Tile::with_province(TerrainType::Grassland, target_pid);
         target_tile.infrastructure.has_depot = true;
         map.set_tile(target_coord, target_tile);
+
+        // Rail links: capital → mid → target.
+        map.add_rail_link(capital_coord, mid_coord);
+        map.add_rail_link(mid_coord, target_coord);
 
         let provinces = vec![
             Province::new(
@@ -1524,8 +1722,8 @@ mod tests {
             4,
         );
         let provinces_ref: Vec<&Province> = vec![&capital];
-        let connected: HashSet<ProvinceId> = HashSet::from([ProvinceId(1)]);
-        let set = collectable_hexes(&map, &provinces_ref, &connected);
+        let reach: BTreeSet<HexCoord> = BTreeSet::from([cap]);
+        let set = collectable_hexes(&map, &provinces_ref, &reach);
         assert!(set.contains(&cap), "capital tile is a collector");
         assert!(set.contains(&neighbor), "neighbor is in 1-hex radius");
         assert!(
@@ -1573,8 +1771,9 @@ mod tests {
             3,
         );
         let provinces_ref: Vec<&Province> = vec![&capital, &target];
-        let connected: HashSet<ProvinceId> = HashSet::from([ProvinceId(1), ProvinceId(2)]);
-        let set = collectable_hexes(&map, &provinces_ref, &connected);
+        // The depot hex is rail-reachable → it collects.
+        let reach: BTreeSet<HexCoord> = BTreeSet::from([cap, depot_hex]);
+        let set = collectable_hexes(&map, &provinces_ref, &reach);
         assert!(set.contains(&depot_hex));
         assert!(set.contains(&neighbor));
         assert!(!set.contains(&far), "far tile is outside depot radius");
@@ -1626,10 +1825,10 @@ mod tests {
             3,
         );
         let provinces_ref: Vec<&Province> = vec![&own_cap, &captured];
-        // Captured province NOT in the connected set — country capital is
-        // its own hub, rail-independent.
-        let connected: HashSet<ProvinceId> = HashSet::from([ProvinceId(1)]);
-        let set = collectable_hexes(&map, &provinces_ref, &connected);
+        // Captured hex NOT in reach — country capital is its own hub,
+        // rail-independent.
+        let reach: BTreeSet<HexCoord> = BTreeSet::from([cap]);
+        let set = collectable_hexes(&map, &provinces_ref, &reach);
 
         assert!(
             set.contains(&captured_cap),
@@ -1674,8 +1873,9 @@ mod tests {
             3,
         );
         let provinces_ref: Vec<&Province> = vec![&capital, &target];
-        let connected: HashSet<ProvinceId> = HashSet::from([ProvinceId(1)]); // not 2
-        let set = collectable_hexes(&map, &provinces_ref, &connected);
+        // Depot hex is NOT rail-reachable → it does not collect.
+        let reach: BTreeSet<HexCoord> = BTreeSet::from([cap]);
+        let set = collectable_hexes(&map, &provinces_ref, &reach);
         assert!(!set.contains(&depot_hex));
     }
 
@@ -1721,8 +1921,9 @@ mod tests {
             4,
         );
         let provinces_ref: Vec<&Province> = vec![&prov];
-        let connected: HashSet<ProvinceId> = HashSet::from([ProvinceId(1)]);
-        let set = collectable_hexes(&map, &provinces_ref, &connected);
+        // Both depot hexes are rail-reachable.
+        let reach: BTreeSet<HexCoord> = BTreeSet::from([d1, d2]);
+        let set = collectable_hexes(&map, &provinces_ref, &reach);
 
         let shared_count = set.iter().filter(|h| **h == shared).count();
         assert_eq!(
@@ -1775,9 +1976,9 @@ mod tests {
             3,
         );
         let provinces_ref: Vec<&Province> = vec![&home, &province];
-        // Even if province 2 is "connected", no depot → no collector.
-        let connected: HashSet<ProvinceId> = HashSet::from([ProvinceId(1), ProvinceId(2)]);
-        let set = collectable_hexes(&map, &provinces_ref, &connected);
+        // Even if the centroid hex is in reach, no depot → no collector.
+        let reach: BTreeSet<HexCoord> = BTreeSet::from([home_cap, prov_centroid]);
+        let set = collectable_hexes(&map, &provinces_ref, &reach);
 
         assert!(
             !set.contains(&prov_centroid),
@@ -1831,10 +2032,9 @@ mod tests {
             3,
         );
         let provinces_ref: Vec<&Province> = vec![&home, &captured_prov];
-        // Captured province NOT in connected set — country-capital seeds are
-        // rail-independent.
-        let connected: HashSet<ProvinceId> = HashSet::from([ProvinceId(1)]);
-        let set = collectable_hexes(&map, &provinces_ref, &connected);
+        // Captured hex NOT in reach — country-capital seeds are rail-independent.
+        let reach: BTreeSet<HexCoord> = BTreeSet::from([home_cap]);
+        let set = collectable_hexes(&map, &provinces_ref, &reach);
 
         assert!(
             set.contains(&captured),
@@ -1913,15 +2113,16 @@ mod tests {
     }
 
     #[test]
-    fn build_railroad_rejects_swamp_without_tech() {
+    fn build_rail_link_rejects_swamp_without_tech() {
         let mut map = HexMap::new(10, 10);
-        let coord = HexCoord::new(0, 0);
-        let provinces = owned_land(&mut map, coord, TerrainType::Swamp);
+        let a = HexCoord::new(0, 0);
+        let b = HexCoord::new(1, 0);
+        let provinces = owned_pair(&mut map, a, b, TerrainType::Swamp);
         let data = crate::data::test_game_data();
-        let result = build_railroad(&mut map, coord, NationId(1), &[], &provinces, &data, &cfg());
+        let result = build_rail_link(&mut map, a, b, NationId(1), &[], &provinces, &data, &cfg());
         assert!(
             result.is_err(),
-            "swamp railroad without tech must fail, got {:?}",
+            "swamp rail link without tech must fail, got {:?}",
             result
         );
         assert!(
@@ -2011,13 +2212,16 @@ mod tests {
         map.set_tile(sea_near_capital, Tile::new(TerrainType::Sea));
 
         // Railroad chain from capital to province 2 (railroad pathway)
-        let mut rr_tile = Tile::with_province(TerrainType::Grassland, capital_pid);
-        rr_tile.infrastructure.has_railroad = true;
+        let rr_tile = Tile::with_province(TerrainType::Grassland, capital_pid);
         map.set_tile(railroad_coord, rr_tile);
 
         let mut depot_tile = Tile::with_province(TerrainType::Grassland, railroad_pid);
         depot_tile.infrastructure.has_depot = true;
         map.set_tile(depot_coord, depot_tile);
+
+        // Rail links: capital → railroad_coord → depot_coord.
+        map.add_rail_link(capital_coord, railroad_coord);
+        map.add_rail_link(railroad_coord, depot_coord);
 
         // Port province (connected via sea to capital's port)
         let mut port_tile = Tile::with_province(TerrainType::Grassland, port_pid);

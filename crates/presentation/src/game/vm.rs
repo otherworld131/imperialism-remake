@@ -32,7 +32,10 @@ pub struct MapTile {
     pub resource_hidden: bool,
     pub improvement_level: u32,
     pub max_improvement_level: u32,
-    pub has_railroad: bool,
+    /// Direction indices (0-5, matching `domain::hex::HEX_DIRECTIONS` order as
+    /// emitted by `frontend_api::map`) of rail links leaving this hex.
+    #[serde(default)]
+    pub rail_links: Vec<u8>,
     pub has_depot: bool,
     pub has_port: bool,
     pub has_fort: bool,

@@ -17,7 +17,6 @@ impl std::fmt::Display for UnitId {
 /// Infrastructure built on a tile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Infrastructure {
-    pub has_railroad: bool,
     pub has_depot: bool,
     pub has_port: bool,
     pub has_fort: bool,
@@ -27,7 +26,6 @@ pub struct Infrastructure {
 
 impl Infrastructure {
     pub const NONE: Self = Self {
-        has_railroad: false,
         has_depot: false,
         has_port: false,
         has_fort: false,
@@ -355,7 +353,6 @@ mod tests {
     #[test]
     fn new_tile_has_no_infrastructure() {
         let tile = Tile::new(TerrainType::Grassland);
-        assert!(!tile.infrastructure.has_railroad);
         assert!(!tile.infrastructure.has_depot);
         assert!(!tile.infrastructure.has_port);
         assert!(!tile.infrastructure.has_fort);
@@ -395,9 +392,7 @@ mod tests {
     #[test]
     fn infrastructure_can_be_set() {
         let mut tile = Tile::new(TerrainType::Grassland);
-        tile.infrastructure.has_railroad = true;
         tile.infrastructure.has_depot = true;
-        assert!(tile.infrastructure.has_railroad);
         assert!(tile.infrastructure.has_depot);
     }
 

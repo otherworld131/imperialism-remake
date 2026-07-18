@@ -157,14 +157,25 @@ fn take_snapshot(
                                 depots += 1;
                             }
                         }
-                        if tile.infrastructure.has_railroad {
-                            railroads += 1;
-                        }
                         if tile.infrastructure.has_fort {
                             forts += 1;
                         }
                     }
                 }
+            }
+        }
+
+        // Rail metric: count of rail-link edges with both endpoints owned by
+        // this nation (physical infrastructure that this nation controls).
+        let owned_hexes: std::collections::HashSet<domain::hex::HexCoord> = nation
+            .province_ids
+            .iter()
+            .filter_map(|pid| game.get_province(*pid))
+            .flat_map(|p| p.tiles.iter().copied())
+            .collect();
+        for (a, b) in game.world.hex_map.rail_links() {
+            if owned_hexes.contains(&a) && owned_hexes.contains(&b) {
+                railroads += 1;
             }
         }
 
@@ -699,12 +710,27 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
             .get_nation(player_id)
             .map(|n| n.researched_techs.clone())
             .unwrap_or_default();
-        for &tile_coord in &capital_tiles {
-            let terrain = match game.world.hex_map.get_tile(tile_coord) {
-                Some(t) if !t.infrastructure.has_railroad => t.terrain(),
-                _ => continue,
+        for &a in &capital_tiles {
+            // Lay a link from `a` to an adjacent capital-province land tile that
+            // isn't linked yet, so the capital province gains a rail network.
+            let Some(b) = a.neighbors().into_iter().find(|b| {
+                capital_tiles.contains(b)
+                    && game
+                        .world
+                        .hex_map
+                        .get_tile(*b)
+                        .is_some_and(|t| t.terrain().is_land())
+                    && !game.world.hex_map.has_rail_link(a, *b)
+            }) else {
+                continue;
             };
-            let rr_cost = match infrastructure::railroad_cost(terrain, &cfg_snapshot) {
+            let (Some(ta), Some(tb)) = (
+                game.world.hex_map.get_tile(a).map(|t| t.terrain()),
+                game.world.hex_map.get_tile(b).map(|t| t.terrain()),
+            ) else {
+                continue;
+            };
+            let rr_cost = match infrastructure::rail_link_cost(ta, tb, &cfg_snapshot) {
                 Some(c) => c,
                 None => continue,
             };
@@ -715,9 +741,10 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
             if !can_afford {
                 continue;
             }
-            if let Ok(cost) = infrastructure::build_railroad(
+            if let Ok(cost) = infrastructure::build_rail_link(
                 &mut game.world.hex_map,
-                tile_coord,
+                a,
+                b,
                 player_id,
                 &researched,
                 &provinces_snapshot,
@@ -789,13 +816,27 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
                 .get_nation(player_id)
                 .map(|n| n.researched_techs.clone())
                 .unwrap_or_default();
-            // Build railroads on tiles first (depot needs a railroad hex now)
-            for &tile_coord in &tiles {
-                let terrain = match game.world.hex_map.get_tile(tile_coord) {
-                    Some(t) => t.terrain(),
-                    None => continue,
+            // Build rail links between adjacent owned land tiles (depot needs a
+            // linked hex now).
+            for &a in &tiles {
+                let Some(b) = a.neighbors().into_iter().find(|b| {
+                    tiles.contains(b)
+                        && game
+                            .world
+                            .hex_map
+                            .get_tile(*b)
+                            .is_some_and(|t| t.terrain().is_land())
+                        && !game.world.hex_map.has_rail_link(a, *b)
+                }) else {
+                    continue;
                 };
-                let rr_cost = match infrastructure::railroad_cost(terrain, &cfg_snapshot) {
+                let (Some(ta), Some(tb)) = (
+                    game.world.hex_map.get_tile(a).map(|t| t.terrain()),
+                    game.world.hex_map.get_tile(b).map(|t| t.terrain()),
+                ) else {
+                    continue;
+                };
+                let rr_cost = match infrastructure::rail_link_cost(ta, tb, &cfg_snapshot) {
                     Some(c) => c,
                     None => continue,
                 };
@@ -805,22 +846,16 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
                 if !can_afford_rr {
                     continue;
                 }
-                let needs_rr = game
-                    .world
-                    .hex_map
-                    .get_tile(tile_coord)
-                    .is_some_and(|t| !t.infrastructure.has_railroad);
-                if needs_rr
-                    && let Ok(cost) = infrastructure::build_railroad(
-                        &mut game.world.hex_map,
-                        tile_coord,
-                        player_id,
-                        &researched,
-                        &provinces_snapshot,
-                        &game.game_data,
-                        &cfg_snapshot,
-                    )
-                    && let Some(nation) = game.get_nation_mut(player_id)
+                if let Ok(cost) = infrastructure::build_rail_link(
+                    &mut game.world.hex_map,
+                    a,
+                    b,
+                    player_id,
+                    &researched,
+                    &provinces_snapshot,
+                    &game.game_data,
+                    &cfg_snapshot,
+                ) && let Some(nation) = game.get_nation_mut(player_id)
                     && let Some(remaining) = nation.economy.treasury.checked_sub(cost)
                 {
                     nation.economy.treasury = remaining;

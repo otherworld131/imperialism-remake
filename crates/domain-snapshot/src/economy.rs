@@ -110,7 +110,7 @@ pub struct Building {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum BuildTask {
-    Railroad,
+    Railroad { to: crate::hex::HexCoord },
     Depot,
     Port,
 }
@@ -618,7 +618,7 @@ impl From<Building> for d::buildings::Building {
 impl From<d::civilians::BuildTask> for BuildTask {
     fn from(v: d::civilians::BuildTask) -> Self {
         match v {
-            d::civilians::BuildTask::Railroad => Self::Railroad,
+            d::civilians::BuildTask::Railroad { to } => Self::Railroad { to: to.into() },
             d::civilians::BuildTask::Depot => Self::Depot,
             d::civilians::BuildTask::Port => Self::Port,
         }
@@ -627,7 +627,7 @@ impl From<d::civilians::BuildTask> for BuildTask {
 impl From<BuildTask> for d::civilians::BuildTask {
     fn from(v: BuildTask) -> Self {
         match v {
-            BuildTask::Railroad => Self::Railroad,
+            BuildTask::Railroad { to } => Self::Railroad { to: to.into() },
             BuildTask::Depot => Self::Depot,
             BuildTask::Port => Self::Port,
         }

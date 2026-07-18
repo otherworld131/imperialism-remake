@@ -90,11 +90,17 @@ pub fn load_icons(mut commands: Commands, asset_server: Res<AssetServer>) {
                 // Icons are pixel art: sample with nearest-neighbor so the
                 // pixels stay crisp at any map zoom instead of blurring.
                 // Ground textures additionally repeat: the map tiles them
-                // across merged meshes with world-space UVs.
-                let sampler = if group_name == "ground" {
+                // across merged meshes with world-space UVs. Rail textures
+                // repeat along U only (the track tiles down its length; V
+                // clamps across the track width).
+                let sampler = if group_name == "ground" || group_name == "rail" {
                     ImageSampler::Descriptor(ImageSamplerDescriptor {
                         address_mode_u: ImageAddressMode::Repeat,
-                        address_mode_v: ImageAddressMode::Repeat,
+                        address_mode_v: if group_name == "rail" {
+                            ImageAddressMode::ClampToEdge
+                        } else {
+                            ImageAddressMode::Repeat
+                        },
                         mag_filter: ImageFilterMode::Nearest,
                         min_filter: ImageFilterMode::Nearest,
                         mipmap_filter: ImageFilterMode::Nearest,

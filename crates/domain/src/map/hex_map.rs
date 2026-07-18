@@ -1,10 +1,19 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use crate::hex::HexCoord;
+use crate::hex::{HEX_DIRECTIONS, HexCoord};
 use crate::types::*;
 
 use super::bounds::MapBounds;
 use super::tile::Tile;
+
+/// Canonical rail-link key: an undirected edge between two adjacent hexes,
+/// stored with `.0 <= .1` so each physical link has exactly one representation.
+pub type RailLink = (HexCoord, HexCoord);
+
+/// Normalise an unordered hex pair into the canonical `(min, max)` edge key.
+pub fn canonical_link(a: HexCoord, b: HexCoord) -> RailLink {
+    if a <= b { (a, b) } else { (b, a) }
+}
 
 /// The hex-based game map. Stores all tiles indexed by axial hex coordinates.
 ///
@@ -13,6 +22,10 @@ use super::tile::Tile;
 #[derive(Clone)]
 pub struct HexMap {
     tiles: BTreeMap<HexCoord, Tile>,
+    /// Undirected railroad edges between adjacent hexes. Canonical keys
+    /// (`.0 <= .1`); a `BTreeSet` for deterministic iteration — this feeds
+    /// turn-order-dependent resource collection (see Known Bugs).
+    rail_links: BTreeSet<RailLink>,
     width: i32,
     height: i32,
 }
@@ -25,6 +38,7 @@ impl HexMap {
     pub fn new(width: i32, height: i32) -> Self {
         Self {
             tiles: BTreeMap::new(),
+            rail_links: BTreeSet::new(),
             width,
             height,
         }
@@ -100,6 +114,52 @@ impl HexMap {
     /// these bounds are off-map and never populated by map generation.
     pub fn bounds(&self) -> MapBounds {
         MapBounds::new(self.width, self.height)
+    }
+
+    // ── Railroad edges (rail links) ────────────────────────────────
+
+    /// Whether an undirected rail link exists between `a` and `b`.
+    pub fn has_rail_link(&self, a: HexCoord, b: HexCoord) -> bool {
+        self.rail_links.contains(&canonical_link(a, b))
+    }
+
+    /// Insert an undirected rail link between `a` and `b`. Rejects
+    /// non-adjacent pairs and duplicates. Returns `true` if a new link was
+    /// added, `false` otherwise. (No removal: railroads are never destroyed.)
+    pub fn add_rail_link(&mut self, a: HexCoord, b: HexCoord) -> bool {
+        if a.distance(b) != 1 {
+            return false;
+        }
+        self.rail_links.insert(canonical_link(a, b))
+    }
+
+    /// Number of rail links incident to `coord`.
+    pub fn rail_link_count(&self, coord: HexCoord) -> usize {
+        coord
+            .neighbors()
+            .into_iter()
+            .filter(|n| self.has_rail_link(coord, *n))
+            .count()
+    }
+
+    /// Neighbours of `coord` reachable by a direct rail link, probed in
+    /// `HEX_DIRECTIONS` order for deterministic output.
+    pub fn rail_neighbors(&self, coord: HexCoord) -> Vec<HexCoord> {
+        HEX_DIRECTIONS
+            .iter()
+            .map(|d| coord + *d)
+            .filter(|n| self.has_rail_link(coord, *n))
+            .collect()
+    }
+
+    /// Iterate over all rail links in canonical sorted order.
+    pub fn rail_links(&self) -> impl Iterator<Item = RailLink> + '_ {
+        self.rail_links.iter().copied()
+    }
+
+    /// Total number of rail links on the map.
+    pub fn rail_link_total(&self) -> usize {
+        self.rail_links.len()
     }
 }
 

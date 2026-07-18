@@ -190,6 +190,20 @@ used in every map mode. Unlike the icon groups these fill all 32×32 pixels
 | Tundra | `crates/presentation/assets/icons/ground/Tundra.png` | Pale frost with snow drifts |
 | Sea | `crates/presentation/assets/icons/ground/Sea.png` | Calm blue with staggered wave crests |
 
+## rail/ (2)
+
+Textures for the edge-based railway rendering (card #497), authored in
+`pixel-src/rail.py`. `Track` is repeated along each hex-center-to-hex-center
+rail quad with arc-length UVs (U tiles with period 8 px ties, V spans the quad
+width) — it must stay **horizontally seamless**; the top/bottom ~25% is
+transparent so the painted track reads narrower than the quad. `Node` is not
+tiled.
+
+| Name | Output | Pictogram |
+|------|--------|-----------|
+| Track | `crates/presentation/assets/icons/rail/Track.png` | Horizontal ballast bed, 8px-period wooden sleepers, two steel rails |
+| Node | `crates/presentation/assets/icons/rail/Node.png` | Round ballast pad hiding the joint where rail quads meet at a hex center |
+
 ## splash/ (1)
 
 Full-scene pixel art (authored in `pixel-src/splash.py`). Unlike the icon

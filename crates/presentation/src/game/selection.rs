@@ -16,8 +16,9 @@ use std::collections::HashSet;
 use crate::game::commands::GameCommand;
 use crate::game::resources::{
     DeployMode, DeployState, DiploUi, EngineerPrompt, EngineerPromptState, FleetTargets, GameMeta,
-    MoveTargets, PendingMoveList, PendingMoves, ProvinceUnits, SelectedCivilian, SelectedNavy,
-    SelectedShips, SelectedUnits, SessionRes, TileIndex, ViewModels,
+    MoveTargets, PendingMoveList, PendingMoves, ProvinceUnits, RailLinkOption, RailLinkOptions,
+    RailLinkState, SelectedCivilian, SelectedNavy, SelectedShips, SelectedUnits, SessionRes,
+    TileIndex, ViewModels,
 };
 use crate::game::vm::{self, MapTile};
 use crate::map::icons::IconAssets;
@@ -121,6 +122,7 @@ pub fn handle_map_click(
         ResMut<SelectedCivilian>,
         ResMut<DeployMode>,
         ResMut<EngineerPrompt>,
+        ResMut<RailLinkOptions>,
     ),
 ) {
     let (windows, ui_scale, icons) = popover_ui;
@@ -131,6 +133,7 @@ pub fn handle_map_click(
         mut selected_civilian,
         mut deploy,
         mut prompt,
+        mut rail,
     ) = selections;
     for MapClick(target) in clicks.read() {
         // Any map click closes an open engineer build popover (choosing a
@@ -256,6 +259,34 @@ pub fn handle_map_click(
             let Some(tile) = tile else {
                 continue;
             };
+            // 3a. Rail-link click (card #497): for a settled armed engineer,
+            //     the six neighbouring hexes are link targets, not redeploy
+            //     targets — clicking an allowed one orders the link, clicking
+            //     a refused one explains why (the ghost preview showed red).
+            if let Some(rail_state) = rail.0.as_ref()
+                && rail_state.civilian_id == state.civilian_id
+                && let Some(opt) = rail_state
+                    .options
+                    .iter()
+                    .find(|o| (o.q, o.r) == (tile.q, tile.r))
+            {
+                if opt.allowed && opt.affordable {
+                    game_commands.write(GameCommand::EngineerBuildRailLink {
+                        civilian_id: state.civilian_id as u32,
+                        to_q: tile.q,
+                        to_r: tile.r,
+                    });
+                    deploy.0 = None;
+                    rail.0 = None;
+                } else {
+                    let why = opt
+                        .reason
+                        .clone()
+                        .unwrap_or_else(|| "not enough funds".to_string());
+                    toasts.write(Toast::info(format!("Cannot lay track: {}", why)));
+                }
+                continue;
+            }
             if !state.deployable.contains(&(tile.q, tile.r)) {
                 if !meta.observer
                     && let Some(civ) = tile.civilian_on_tile.as_ref()
@@ -275,6 +306,7 @@ pub fn handle_map_click(
                         &mut toasts,
                         &mut deploy,
                         &mut prompt,
+                        &mut rail,
                     );
                 }
                 continue;
@@ -332,6 +364,7 @@ pub fn handle_map_click(
                     &mut toasts,
                     &mut deploy,
                     &mut prompt,
+                    &mut rail,
                 );
                 continue;
             }
@@ -384,6 +417,7 @@ fn arm_civilian_deploy(
     toasts: &mut MessageWriter<Toast>,
     deploy: &mut DeployMode,
     prompt: &mut EngineerPrompt,
+    rail: &mut RailLinkOptions,
 ) {
     let (theme, icons, windows, ui_scale) = ui;
     if let Some(tiles) = vms.map.as_ref() {
@@ -395,6 +429,7 @@ fn arm_civilian_deploy(
             player_nation,
         ));
     }
+    rail.0 = None;
     if civ.civ_type == "Engineer"
         && let Some(session) = session.0.as_ref()
         && let Ok(options) =
@@ -414,10 +449,56 @@ fn arm_civilian_deploy(
                 civ.id,
                 prompt,
             );
+            // Card #497: a settled engineer's neighbouring hexes become rail
+            // link targets — fetch the per-direction options that drive the
+            // hover ghost preview and adjacent-click orders.
+            rail.0 = parse_rail_link_state(
+                frontend_api::units::get_rail_link_options(session.game(), civ.id as u32).ok(),
+                civ.id,
+                (q, r),
+            );
         } else if let Some(reason) = options.get("blocked_reason").and_then(|v| v.as_str()) {
             toasts.write(Toast::info(format!("Engineer: {}", reason)));
         }
     }
+}
+
+/// Parse the six-direction rail-link options JSON for a settled engineer
+/// (card #497). Returns `None` when the query failed or the engineer turns
+/// out not to be buildable right now.
+fn parse_rail_link_state(
+    json: Option<serde_json::Value>,
+    civilian_id: i64,
+    origin: (i32, i32),
+) -> Option<RailLinkState> {
+    let json = json?;
+    if !json
+        .get("can_build_now")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let options = json
+        .get("options")?
+        .as_array()?
+        .iter()
+        .filter_map(|o| {
+            Some(RailLinkOption {
+                q: i32::try_from(o.get("q")?.as_i64()?).ok()?,
+                r: i32::try_from(o.get("r")?.as_i64()?).ok()?,
+                allowed: o.get("allowed")?.as_bool().unwrap_or(false),
+                affordable: o.get("affordable")?.as_bool().unwrap_or(false),
+                cost: o.get("cost").and_then(|c| c.as_i64()),
+                reason: o.get("reason").and_then(|s| s.as_str()).map(str::to_string),
+            })
+        })
+        .collect();
+    Some(RailLinkState {
+        civilian_id,
+        origin,
+        options,
+    })
 }
 
 /// Where the popover opens: just beside the cursor, clamped to the window
@@ -557,6 +638,19 @@ fn open_engineer_popover(
                     }
                 });
         }
+
+        // Card #497: railroads left the popover — point at the new gesture.
+        row.spawn((
+            Text::new("Click a neighbouring tile to lay track"),
+            theme.font(10.5),
+            TextColor(theme::TEXT_DIM),
+            Node {
+                margin: UiRect::left(Val::Px(6.0)),
+                max_width: Val::Px(120.0),
+                ..default()
+            },
+            bevy::picking::Pickable::IGNORE,
+        ));
     });
 
     prompt.0 = Some(EngineerPromptState { civilian_id, root });
@@ -613,6 +707,7 @@ pub fn esc_cascade(
     mut selected_hex: ResMut<SelectedHex>,
     mut selected_civilian: ResMut<SelectedCivilian>,
     mut prompt: ResMut<EngineerPrompt>,
+    mut rail: ResMut<RailLinkOptions>,
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -634,6 +729,7 @@ pub fn esc_cascade(
         commands.entity(state.root).despawn();
     } else if deploy.0.is_some() {
         deploy.0 = None;
+        rail.0 = None;
     } else if !selected_units.0.is_empty() {
         selected_units.0.clear();
     } else if selected_navy.0.is_some() {
@@ -851,7 +947,7 @@ mod tests {
             "is_anarchic": false, "is_prospected": false,
             "resource": null, "resource_hidden": false,
             "improvement_level": 0, "max_improvement_level": 0,
-            "has_railroad": false, "has_depot": false, "has_port": false,
+            "rail_links": [], "has_depot": false, "has_port": false,
             "has_fort": false, "has_river": false, "fort_level": 0,
             "port_blockaded": false, "army_unit_count": 0, "army_firepower": 0.0,
             "army_composition": null, "naval_ship_count": 0, "naval_firepower": 0,

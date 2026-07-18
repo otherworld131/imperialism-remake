@@ -5,7 +5,7 @@ use crate::hex::HexCoord;
 use crate::map::hex_map::HexMap;
 use crate::map::{Province, railroad_cost};
 #[cfg(test)]
-use crate::map::{build_depot, build_railroad, is_province_connected};
+use crate::map::{build_depot, build_rail_link, is_province_connected};
 use crate::nation::Nation;
 use crate::types::*;
 use std::cmp::Reverse;
@@ -74,26 +74,18 @@ pub(super) fn get_rail_network_for_nation(
 ) -> HashSet<HexCoord> {
     let mut visited = HashSet::new();
     let mut queue = VecDeque::new();
-    let capital_set: HashSet<HexCoord> = capital_tiles.iter().copied().collect();
     for &c in capital_tiles {
-        queue.push_back(c);
-        visited.insert(c);
+        if visited.insert(c) {
+            queue.push_back(c);
+        }
     }
 
+    // BFS along rail edges (undirected links). Seeds conduct even without a
+    // link (a capital may have no rail yet); every other hop requires a link.
     while let Some(current) = queue.pop_front() {
-        if let Some(tile) = hex_map.get_tile(current)
-            && (tile.infrastructure.has_railroad
-                || tile.infrastructure.has_depot
-                || capital_set.contains(&current))
-        {
-            for neighbor in current.neighbors() {
-                if !visited.contains(&neighbor)
-                    && let Some(n_tile) = hex_map.get_tile(neighbor)
-                    && (n_tile.infrastructure.has_railroad || n_tile.infrastructure.has_depot)
-                {
-                    visited.insert(neighbor);
-                    queue.push_back(neighbor);
-                }
+        for neighbor in hex_map.rail_neighbors(current) {
+            if visited.insert(neighbor) {
+                queue.push_back(neighbor);
             }
         }
     }
@@ -307,8 +299,11 @@ pub(super) fn score_province(
 pub(super) struct DepotPlan {
     /// Where the depot will go.
     pub candidate: HexCoord,
-    /// Unbuilt hexes from `origin_capital` to `candidate`, in build order.
-    /// Empty when the candidate is already reached by rail.
+    /// Full node sequence from `origin_capital` to `candidate`, in build
+    /// order (edge model). Remaining work is the consecutive pairs that
+    /// don't yet have a rail link — see [`DepotPlan::first_unbuilt_edge`].
+    /// Always contains at least `candidate`; a single-element path means the
+    /// candidate is itself the origin capital (no rail needed).
     pub path: Vec<HexCoord>,
     /// Country-capital tile the path roots from. Card #132: planning is
     /// always anchored at a country capital (original or conquered), never
@@ -324,6 +319,33 @@ pub(super) struct DepotPlan {
     pub coverage_value: u32,
     /// `coverage_value * horizon - path_cost - depot_cost`, used as the priority.
     pub net_score: f64,
+}
+
+impl DepotPlan {
+    /// The first consecutive path pair that still needs a rail link laid
+    /// (`(from, to)`), in build order. `None` when every edge is already
+    /// built — the candidate is reached and it's time to drop the depot.
+    pub(super) fn first_unbuilt_edge(&self, hex_map: &HexMap) -> Option<(HexCoord, HexCoord)> {
+        self.path
+            .windows(2)
+            .map(|w| (w[0], w[1]))
+            .find(|(a, b)| !hex_map.has_rail_link(*a, *b))
+    }
+
+    /// Number of still-unbuilt edges on the path — i.e. the turns of rail
+    /// work remaining before the depot can be built.
+    pub(super) fn unbuilt_edge_count(&self, hex_map: &HexMap) -> usize {
+        self.path
+            .windows(2)
+            .filter(|w| !hex_map.has_rail_link(w[0], w[1]))
+            .count()
+    }
+
+    /// True when every edge on the path is already built (candidate reached
+    /// by rail — only the depot remains).
+    pub(super) fn is_fully_railed(&self, hex_map: &HexMap) -> bool {
+        self.first_unbuilt_edge(hex_map).is_none()
+    }
 }
 
 /// Outcome of a planning call. Card #132: the AI must commit to a depot
@@ -429,7 +451,6 @@ fn plan_next_depot_with(
     other_planned_depots: &HashSet<HexCoord>,
 ) -> PlanOutcome {
     use crate::map::infrastructure::collectable_hexes;
-    use crate::turn::connected_provinces;
 
     let nation = match game.get_nation(nation_id) {
         Some(n) => n,
@@ -437,14 +458,14 @@ fn plan_next_depot_with(
     };
     let cfg = &game.game_data.game_config;
 
-    let connected = connected_provinces(game, nation_id);
+    let reach = crate::turn::nation_rail_reach(game, nation_id);
     let owned_provinces: Vec<&Province> = game
         .world
         .provinces
         .iter()
         .filter(|p| p.owner == nation_id)
         .collect();
-    let mut already_covered = collectable_hexes(&game.world.hex_map, &owned_provinces, &connected);
+    let mut already_covered = collectable_hexes(&game.world.hex_map, &owned_provinces, &reach);
 
     let owned_hexes: HashSet<HexCoord> = owned_provinces
         .iter()
@@ -524,7 +545,7 @@ fn plan_next_depot_with(
                 &game.game_data,
             );
             if t.candidate == t.origin_capital || dist.contains_key(&t.candidate) {
-                let path = reconstruct_path(&game.world.hex_map, &prev, t.candidate);
+                let path = reconstruct_path(&prev, t.candidate);
                 let path_cost = sum_path_cost(&game.world.hex_map, &path, cfg);
                 let coverage_value = coverage_around(
                     &game.world.hex_map,
@@ -656,7 +677,7 @@ fn plan_next_depot_with(
             continue;
         }
 
-        let path = reconstruct_path(&game.world.hex_map, &prev, candidate);
+        let path = reconstruct_path(&prev, candidate);
         let path_cost = sum_path_cost(&game.world.hex_map, &path, cfg);
 
         // Origin capital = the seed this candidate was reached from. If the
@@ -819,7 +840,6 @@ pub(super) fn province_adjacent_to_any(
 /// has a port, or has no qualifying coastal tile.
 pub(super) fn find_stranded_port_target(game: &GameState, nation_id: NationId) -> Option<HexCoord> {
     use crate::map::infrastructure::collectable_hexes;
-    use crate::turn::connected_provinces;
 
     let nation = game.get_nation(nation_id)?;
     let cfg = &game.game_data.game_config;
@@ -863,8 +883,8 @@ pub(super) fn find_stranded_port_target(game: &GameState, nation_id: NationId) -
         &game.game_data,
     );
 
-    let connected = connected_provinces(game, nation_id);
-    let already_covered = collectable_hexes(&game.world.hex_map, &owned_provinces, &connected);
+    let reach = crate::turn::nation_rail_reach(game, nation_id);
+    let already_covered = collectable_hexes(&game.world.hex_map, &owned_provinces, &reach);
     let demand = compute_resource_demand(nation, game, cfg);
     // Trello #426: don't pick a province whose neighbour already has an
     // engineer building a port — two ports in adjacent provinces typically
@@ -1027,37 +1047,32 @@ fn coverage_around(
     v as u32
 }
 
-/// Reconstruct the build-order path to `candidate`, dropping any tiles that
-/// already have railroad or a depot (zero-cost edges reused from the network).
-fn reconstruct_path(
-    hex_map: &HexMap,
-    prev: &HashMap<HexCoord, HexCoord>,
-    candidate: HexCoord,
-) -> Vec<HexCoord> {
-    let mut path: Vec<HexCoord> = Vec::new();
+/// Reconstruct the full node sequence from the seed to `candidate`, in build
+/// order. The edge model derives remaining work from consecutive pairs, so
+/// the path keeps every node (including already-linked hexes and the seed) —
+/// no built-hex filtering.
+fn reconstruct_path(prev: &HashMap<HexCoord, HexCoord>, candidate: HexCoord) -> Vec<HexCoord> {
+    let mut path: Vec<HexCoord> = vec![candidate];
     let mut c = candidate;
     while let Some(&p) = prev.get(&c) {
-        let already_built = hex_map
-            .get_tile(c)
-            .is_some_and(|t| t.infrastructure.has_railroad || t.infrastructure.has_depot);
-        if !already_built {
-            path.push(c);
-        }
+        path.push(p);
         c = p;
     }
     path.reverse();
     path
 }
 
-/// Sum the $ cost to lay railroad on every hex in `path` that doesn't
-/// already have rail/depot. Existing rail is traversed at $0.
+/// Sum the $ cost of the still-unbuilt edges on `path`: for every consecutive
+/// pair without a rail link, add that link's average per-terrain cost. Pairs
+/// already joined by a link contribute $0.
 fn sum_path_cost(hex_map: &HexMap, path: &[HexCoord], cfg: &crate::data::GameConfig) -> Money {
     let cents: i64 = path
-        .iter()
-        .filter_map(|c| hex_map.get_tile(*c))
-        .filter(|t| !t.infrastructure.has_railroad && !t.infrastructure.has_depot)
-        .filter_map(|t| {
-            crate::map::infrastructure::railroad_cost(t.terrain(), cfg).map(|m| m.cents())
+        .windows(2)
+        .filter(|w| !hex_map.has_rail_link(w[0], w[1]))
+        .filter_map(|w| {
+            let ta = hex_map.get_tile(w[0])?.terrain();
+            let tb = hex_map.get_tile(w[1])?.terrain();
+            crate::map::infrastructure::rail_link_cost(ta, tb, cfg).map(|m| m.cents())
         })
         .sum();
     Money::from_cents(cents)
@@ -1114,6 +1129,10 @@ fn dijkstra_from_seeds(
             Some(s) => s,
             None => continue,
         };
+        let current_terrain = match hex_map.get_tile(current) {
+            Some(t) => t.terrain(),
+            None => continue,
+        };
         for neighbor in current.neighbors() {
             let tile = match hex_map.get_tile(neighbor) {
                 Some(t) => t,
@@ -1125,21 +1144,33 @@ fn dijkstra_from_seeds(
             if !owned_hexes.contains(&neighbor) && !seeds.contains(&neighbor) {
                 continue;
             }
-            let has_existing = tile.infrastructure.has_railroad || tile.infrastructure.has_depot;
-            if !has_existing
-                && !crate::map::infrastructure::rail_terrain_enabled(
+            // Edge model: a rail link between `current` and `neighbor` conducts
+            // at zero cost. Otherwise the AI must lay it — the link's average
+            // cost — and both endpoint terrains must be rail-enabled by tech
+            // (a depot hex does NOT conduct without a real link).
+            let link_exists = hex_map.has_rail_link(current, neighbor);
+            let edge_cost = if link_exists {
+                0i64
+            } else {
+                let both_enabled = crate::map::infrastructure::rail_terrain_enabled(
+                    current_terrain,
+                    researched_techs,
+                    game_data,
+                    cfg,
+                ) && crate::map::infrastructure::rail_terrain_enabled(
                     tile.terrain(),
                     researched_techs,
                     game_data,
                     cfg,
-                )
-            {
-                continue;
-            }
-            let edge_cost = if has_existing {
-                0i64
-            } else {
-                match railroad_cost(tile.terrain(), cfg) {
+                );
+                if !both_enabled {
+                    continue;
+                }
+                match crate::map::infrastructure::rail_link_cost(
+                    current_terrain,
+                    tile.terrain(),
+                    cfg,
+                ) {
                     Some(m) => m.cents(),
                     None => continue,
                 }
@@ -1213,12 +1244,11 @@ pub(super) fn find_cheapest_path(
                 if !owned_hexes.contains(&neighbor) && !network.contains(&neighbor) {
                     continue;
                 }
-                // Skip terrain we don't have tech to lay rail on (unless it
-                // already has rail/depot — existing infrastructure is always
-                // traversable even if the current nation couldn't rebuild it).
-                let has_existing_rail =
-                    tile.infrastructure.has_railroad || tile.infrastructure.has_depot;
-                if !has_existing_rail
+                // Edge-model semantics (review F-002): only a real rail link
+                // between `current` and `neighbor` is free/pre-traversable —
+                // a depot without links does not conduct.
+                let link_exists = hex_map.has_rail_link(current, neighbor);
+                if !link_exists
                     && !crate::map::infrastructure::rail_terrain_enabled(
                         tile.terrain(),
                         researched_techs,
@@ -1228,7 +1258,7 @@ pub(super) fn find_cheapest_path(
                 {
                     continue;
                 }
-                let edge_cost = if has_existing_rail {
+                let edge_cost = if link_exists {
                     0i64
                 } else {
                     match railroad_cost(tile.terrain(), cfg) {
@@ -1438,19 +1468,27 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
             &researched,
             &game.game_data,
         ) {
+            // Build rail links along the path: connect the first path hex to an
+            // adjacent network hex, then each consecutive pair.
+            let mut prev_hex: Option<HexCoord> = None;
             for &coord in &path {
                 if spent >= budget {
                     break;
                 }
-                if let Ok(cost) = build_railroad(
-                    &mut game.world.hex_map,
-                    coord,
-                    nation_id,
-                    &researched,
-                    &provinces_snapshot,
-                    &game.game_data,
-                    &cfg,
-                ) {
+                let from = prev_hex
+                    .or_else(|| coord.neighbors().into_iter().find(|n| network.contains(n)));
+                if let Some(from) = from
+                    && let Ok(cost) = build_rail_link(
+                        &mut game.world.hex_map,
+                        from,
+                        coord,
+                        nation_id,
+                        &researched,
+                        &provinces_snapshot,
+                        &game.game_data,
+                        &cfg,
+                    )
+                {
                     if let Some(nation) = game.get_nation_mut(nation_id) {
                         nation.economy.treasury -= cost;
                     }
@@ -1462,6 +1500,7 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
                     ));
                     spent += cost;
                 }
+                prev_hex = Some(coord);
             }
         }
 
@@ -3199,12 +3238,9 @@ mod tests {
                 (extra_timber, ResourceType::Timber),
             ],
         );
-        // Mark the intermediate hex AND the target as existing rail.
-        for h in [rail_hex, target] {
-            if let Some(t) = game.world.hex_map.get_tile_mut(h) {
-                t.infrastructure.has_railroad = true;
-            }
-        }
+        // Lay rail links all the way: capital → rail_hex → target.
+        game.world.hex_map.add_rail_link(capital, rail_hex);
+        game.world.hex_map.add_rail_link(rail_hex, target);
 
         let outcome = plan_next_depot(&game, NationId(1));
         let plan = outcome

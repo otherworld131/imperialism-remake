@@ -9,8 +9,9 @@ use crate::game::resources::{
     Blink, CameraCentered, CurrentTurnNews, DataVersion, DeferredProposals, DeployMode, DiploUi,
     EngineerPrompt, FleetTargets, GameMeta, MoveTargets, NewsArchive, NewsDebugSettings,
     PendingMoveList, PendingMoves, PerspectiveNation, PrevLedger, ProposalPrompt, ProvinceUnits,
-    QueuedDiplomacyAction, RenderSettings, SelectedCivilian, SelectedNavy, SelectedShips,
-    SelectedUnits, SessionRes, TileIndex, TreatyMarkerIndex, TurnInfo, ViewModels, tick_blink,
+    QueuedDiplomacyAction, RailLinkOptions, RenderSettings, SelectedCivilian, SelectedNavy,
+    SelectedShips, SelectedUnits, SessionRes, TileIndex, TreatyMarkerIndex, TurnInfo, ViewModels,
+    tick_blink,
 };
 use crate::game::selection;
 use crate::game::turn_runner::{self, ActiveSkip, ActiveTurn, BusyProgress};
@@ -81,6 +82,16 @@ fn debug_screenshot(
             settings.disable_fog = false;
         }
     }
+    // Re-applied every frame (not only under MAP_DEBUG_SKIP): camera setup
+    // and session install would otherwise overwrite an early one-shot value.
+    if let Ok(zoom) = std::env::var("MAP_DEBUG_ZOOM")
+        && let Ok(zoom) = zoom.parse::<f32>()
+        && let Ok(mut projection) = camera.single_mut()
+        && let Projection::Orthographic(ref mut ortho) = *projection
+        && ortho.scale != zoom
+    {
+        ortho.scale = zoom;
+    }
     // Fires after the M6/M7 drivers' scripted clicks (latest at frame 70) so
     // a queued order (e.g. a civilian deploy) resolves during the skip.
     if *frames == 100
@@ -91,13 +102,6 @@ fn debug_screenshot(
         game_commands.write(GameCommand::SkipTurns { count });
         if std::env::var("MAP_DEBUG_STRAIGHT").as_deref() == Ok("1") {
             settings.organic_borders = false;
-        }
-        if let Ok(zoom) = std::env::var("MAP_DEBUG_ZOOM")
-            && let Ok(zoom) = zoom.parse::<f32>()
-            && let Ok(mut projection) = camera.single_mut()
-            && let Projection::Orthographic(ref mut ortho) = *projection
-        {
-            ortho.scale = zoom;
         }
     }
     // Long-running drivers (e.g. the M9 battle hunt) override the capture
@@ -119,24 +123,36 @@ fn debug_screenshot(
 /// Debug driver for the M6 flows: `M6_DEBUG=<script>` replays a player
 /// interaction through the real click path so screenshots show live state.
 /// Scripts: `units`, `move`, `endturn`, `deploy[:CivilianType]`, `fleet`,
-/// `fleetmove`.
+/// `fleetmove`, `raillink` (select engineer → click neighbour → end turn),
+/// `railpreview` (select engineer, hold the hover ghost on a neighbour).
+#[allow(clippy::too_many_arguments)]
 fn m6_debug_driver(
     mut frames: Local<u32>,
     meta: Res<GameMeta>,
     vms: Res<ViewModels>,
     move_targets: Res<MoveTargets>,
     fleet_targets: Res<FleetTargets>,
+    rail: Res<RailLinkOptions>,
     phase: Res<State<TurnPhase>>,
+    screen: Res<State<Screen>>,
+    mut next_screen: ResMut<NextState<Screen>>,
     mut clicks: MessageWriter<MapClick>,
     mut game_commands: MessageWriter<GameCommand>,
     mut deploy: ResMut<DeployMode>,
     mut selected_navy: ResMut<SelectedNavy>,
+    mut hovered: ResMut<crate::map::picking::HoveredHex>,
     mut camera: Query<&mut Transform, With<camera::GameCamera>>,
 ) {
     let Ok(script) = std::env::var("M6_DEBUG") else {
         return;
     };
     if *phase.get() != TurnPhase::Idle {
+        return;
+    }
+    // `raillink` ends a turn: dismiss the newspaper it lands on so the
+    // capture shows the map with the freshly laid track.
+    if script.starts_with("raillink") && *screen.get() == Screen::News {
+        next_screen.set(Screen::Map);
         return;
     }
     let Some(tiles) = vms.map.as_ref() else {
@@ -213,6 +229,40 @@ fn m6_debug_driver(
     {
         focus_camera(&mut camera, q, r);
         clicks.write(MapClick(HoverTarget::Hex(q, r)));
+    }
+    // Card #497 rail-link flows: click the parked engineer through the real
+    // path (arms deploy + rail options + popover), then either hold the
+    // hover ghost on a neighbour (`railpreview`) or click it to order the
+    // link and end the turn (`raillink`).
+    if matches!(verb, "raillink" | "railpreview")
+        && *frames == 30
+        && let Some(civs) = vms.civilians.as_ref()
+        && let Some(civ) = civs
+            .deployed
+            .iter()
+            .find(|c| c.civ_type == "Engineer" && !c.working)
+        && let Some(pos) = civ.position.as_ref()
+    {
+        focus_camera(&mut camera, pos.q, pos.r);
+        clicks.write(MapClick(HoverTarget::Hex(pos.q, pos.r)));
+    }
+    if matches!(verb, "raillink" | "railpreview")
+        && *frames >= 70
+        && let Some(opt) = rail
+            .0
+            .as_ref()
+            .and_then(|s| s.options.iter().find(|o| o.allowed && o.affordable))
+    {
+        if verb == "railpreview" {
+            // Hold the hover every frame so the ghost stays visible for the
+            // screenshot.
+            hovered.0 = Some((opt.q, opt.r));
+        } else if *frames == 70 {
+            clicks.write(MapClick(HoverTarget::Hex(opt.q, opt.r)));
+        }
+    }
+    if verb == "raillink" && *frames == 100 {
+        game_commands.write(GameCommand::EndTurn);
     }
     if matches!(verb, "fleet" | "fleetmove")
         && *frames == 30
@@ -1494,6 +1544,7 @@ pub fn run_game() {
         .init_resource::<SelectedShips>()
         .init_resource::<DeployMode>()
         .init_resource::<EngineerPrompt>()
+        .init_resource::<RailLinkOptions>()
         .init_resource::<MapTooltipState>()
         .add_message::<GameCommand>()
         .add_message::<MapClick>()
@@ -1546,7 +1597,11 @@ pub fn run_game() {
                     .chain(),
                 camera::center_camera_when_map_ready,
                 (lod::update_zoom_lod, lod::apply_lod_gates).chain(),
-                layers::update_rings,
+                // After the M6 driver so a script-held HoveredHex (railpreview)
+                // is seen the same frame it is written, not clobbered by the
+                // cursor-less pick_hover pass.
+                layers::update_rings.after(m6_debug_driver),
+                layers::update_rail_preview.after(m6_debug_driver),
                 tick_blink,
                 markers::blink_selected_markers,
                 markers::animate_map_markers,
@@ -1565,7 +1620,9 @@ pub fn run_game() {
             Update,
             (
                 (
-                    m6_debug_driver,
+                    // After pick_hover so `railpreview`'s held hover isn't
+                    // overwritten by the (cursor-less) picking pass.
+                    m6_debug_driver.after(picking::pick_hover),
                     m7_debug_driver,
                     m8_debug_driver,
                     m9_debug_driver,

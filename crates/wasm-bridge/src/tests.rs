@@ -2700,9 +2700,9 @@ fn engineer_and_redeploy_target(
         .flat_map(|p| p.tiles.iter().copied())
         .find(|&c| {
             !occupied.contains(&c)
+                && game.world.hex_map.rail_link_count(c) == 0
                 && game.world.hex_map.get_tile(c).is_some_and(|t| {
                     t.terrain() == TerrainType::Grassland
-                        && !t.infrastructure.has_railroad
                         && t.assigned_civilian.is_none()
                         && !t.is_capital
                 })
@@ -2719,25 +2719,79 @@ fn engineer_build_waits_a_turn_after_placement() {
     frontend_api::units::recall_civilian(&mut game, eng_id).expect("recall");
     frontend_api::units::deploy_civilian(&mut game, eng_id, target.q, target.r).expect("deploy");
 
-    // Same turn: the build must be rejected (placement turn ≠ build turn).
+    // Phase 1 interim: `engineer_build("railroad")` is no longer a valid point
+    // build — railroads are edge links laid via `engineer_build_rail_link`
+    // (Phase 3). The kind is redirected before the arrival gate is reached.
     let err = frontend_api::units::engineer_build(&mut game, eng_id, "railroad")
+        .expect_err("railroad point-build is rejected");
+    assert!(
+        err.message().contains("engineer_build_rail_link"),
+        "unexpected error: {}",
+        err.message()
+    );
+
+    // The placement-turn arrival gate still fires for a valid build kind.
+    let err = frontend_api::units::engineer_build(&mut game, eng_id, "depot")
         .expect_err("build on the placement turn must fail");
     assert!(
         err.message().contains("arrives this turn"),
         "unexpected error: {}",
         err.message()
     );
+}
 
-    // Next turn: the arrival flag cleared and the build goes through.
-    process_turn(&mut game);
-    // Simulate the slot release a completed previous build performs, so the
-    // build order also re-claims the tile (F-002 regression).
-    if let Some(tile) = game.world.hex_map.get_tile_mut(target) {
-        tile.assigned_civilian = None;
-    }
-    frontend_api::units::engineer_build(&mut game, eng_id, "railroad").expect("build next turn");
-
+#[test]
+fn engineer_rail_link_order_flow() {
+    let mut game = new_game("default", Difficulty::Normal, 0);
     let nid = game.human_player_nation;
+    let (eng_id, target) = engineer_and_redeploy_target(&game);
+
+    frontend_api::units::recall_civilian(&mut game, eng_id).expect("recall");
+    frontend_api::units::deploy_civilian(&mut game, eng_id, target.q, target.r).expect("deploy");
+
+    // Placement turn: the arrival gate blocks link orders too.
+    let err =
+        frontend_api::units::engineer_build_rail_link(&mut game, eng_id, target.q + 1, target.r)
+            .expect_err("link order on the placement turn must fail");
+    assert!(err.message().contains("arrives this turn"));
+
+    // Settle the engineer (the turn processor clears the flag at turn start).
+    if let Some(civ) = game
+        .get_nation_mut(nid)
+        .unwrap()
+        .military
+        .civilians
+        .iter_mut()
+        .find(|c| c.id.0 == eng_id)
+    {
+        civ.arrived_this_turn = false;
+    }
+
+    // The options query names all six neighbours with dir indices.
+    let opts = frontend_api::units::get_rail_link_options(&game, eng_id).expect("options");
+    assert_eq!(opts["deployed"], true);
+    assert_eq!(opts["can_build_now"], true);
+    assert_eq!(opts["origin"]["q"], target.q);
+    let options = opts["options"].as_array().expect("options array");
+    assert_eq!(options.len(), 6);
+    let allowed = options
+        .iter()
+        .find(|o| o["allowed"] == true && o["affordable"] == true)
+        .expect("at least one buildable neighbour from an owned grassland tile");
+    let (to_q, to_r) = (
+        allowed["q"].as_i64().unwrap() as i32,
+        allowed["r"].as_i64().unwrap() as i32,
+    );
+
+    // Non-adjacent target is rejected outright.
+    let err =
+        frontend_api::units::engineer_build_rail_link(&mut game, eng_id, target.q + 3, target.r)
+            .expect_err("non-adjacent link must fail");
+    assert!(err.message().contains("adjacent"), "got: {}", err.message());
+
+    // Valid order: engineer starts the link build with the target embedded.
+    frontend_api::units::engineer_build_rail_link(&mut game, eng_id, to_q, to_r)
+        .expect("link order");
     let civ = game
         .get_nation(nid)
         .unwrap()
@@ -2746,15 +2800,67 @@ fn engineer_build_waits_a_turn_after_placement() {
         .iter()
         .find(|c| c.id.0 == eng_id)
         .unwrap();
-    assert!(civ.working, "engineer should be building");
+    assert!(civ.working);
     assert_eq!(
-        game.world
-            .hex_map
-            .get_tile(target)
-            .unwrap()
-            .assigned_civilian,
-        Some(domain::map::UnitId(eng_id)),
-        "starting a build must re-claim the tile slot"
+        civ.build_task,
+        Some(domain::economy::BuildTask::Railroad {
+            to: domain::hex::HexCoord::new(to_q, to_r)
+        })
+    );
+}
+
+#[test]
+fn duplicate_rail_link_order_from_opposite_endpoint_rejected() {
+    // Codex review F-002: engineer A orders P→Q; engineer B standing on Q
+    // must not be able to order Q→P for the same physical edge in the same
+    // turn — the duplicate would only fail at completion, wasting B's turn.
+    let mut game = new_game("default", Difficulty::Normal, 0);
+    let nid = game.human_player_nation;
+    let (eng_a, p) = engineer_and_redeploy_target(&game);
+
+    frontend_api::units::recall_civilian(&mut game, eng_a).expect("recall");
+    frontend_api::units::deploy_civilian(&mut game, eng_a, p.q, p.r).expect("deploy A");
+    // Settle A, then find its first allowed link target Q.
+    if let Some(civ) = game
+        .get_nation_mut(nid)
+        .unwrap()
+        .military
+        .civilians
+        .iter_mut()
+        .find(|c| c.id.0 == eng_a)
+    {
+        civ.arrived_this_turn = false;
+    }
+    let opts = frontend_api::units::get_rail_link_options(&game, eng_a).expect("options");
+    let allowed = opts["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["allowed"] == true && o["affordable"] == true)
+        .expect("an allowed neighbour");
+    let q = domain::hex::HexCoord::new(
+        allowed["q"].as_i64().unwrap() as i32,
+        allowed["r"].as_i64().unwrap() as i32,
+    );
+
+    // Second engineer standing on Q, settled.
+    let eng_b = domain::map::UnitId(3_950_000);
+    let mut b = domain::economy::Civilian::new(eng_b, domain::economy::CivilianType::Engineer, nid);
+    b.deploy(q);
+    b.arrived_this_turn = false;
+    game.get_nation_mut(nid).unwrap().military.civilians.push(b);
+    if let Some(tile) = game.world.hex_map.get_tile_mut(q) {
+        tile.assigned_civilian = Some(eng_b);
+    }
+
+    frontend_api::units::engineer_build_rail_link(&mut game, eng_a, q.q, q.r)
+        .expect("A's order is accepted");
+    let err = frontend_api::units::engineer_build_rail_link(&mut game, eng_b.0, p.q, p.r)
+        .expect_err("B's opposite-endpoint duplicate must be rejected at order time");
+    assert!(
+        err.message().contains("already laying"),
+        "unexpected error: {}",
+        err.message()
     );
 }
 

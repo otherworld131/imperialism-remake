@@ -65,6 +65,13 @@ pub enum FrontendCommand {
         civilian_id: u32,
         build_kind: String,
     },
+    /// Card #497: railroads are edge links — build from the engineer's hex
+    /// to the adjacent `(to_q, to_r)`.
+    EngineerBuildRailLink {
+        civilian_id: u32,
+        to_q: i32,
+        to_r: i32,
+    },
 
     // ── Economy ───────────────────────────────────────────────────────────
     ExpandBuilding {

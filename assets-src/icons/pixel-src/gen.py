@@ -9,6 +9,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ground
 import pixelkit
+import rail
 import splash
 import sprites
 import sprites2
@@ -24,6 +25,7 @@ for batch in (
     sprites3.BATCH3,
     sprites4.BATCH4,
     ground.GROUND,
+    rail.RAIL,
     splash.SPLASH,
 ):
     ALL.update(dict(batch))
