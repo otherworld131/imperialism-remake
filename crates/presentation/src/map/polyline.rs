@@ -21,6 +21,10 @@ pub struct MeshBuilder2d {
 /// joins fall back to a bevel-ish clamped miter.
 const MITER_LIMIT: f32 = 4.0;
 
+/// Degenerate-geometry guard: segments/gaps shorter than this (world units)
+/// are dropped — their normals are numerically meaningless.
+const MIN_LEN: f32 = 1e-4;
+
 impl MeshBuilder2d {
     pub fn is_empty(&self) -> bool {
         self.positions.is_empty()
@@ -50,11 +54,11 @@ impl MeshBuilder2d {
         // Drop consecutive duplicates — zero-length segments break normals.
         let mut clean: Vec<Vec2> = Vec::with_capacity(pts.len());
         for &p in pts {
-            if clean.last().is_none_or(|last| last.distance(p) > 1e-4) {
+            if clean.last().is_none_or(|last| last.distance(p) > MIN_LEN) {
                 clean.push(p);
             }
         }
-        if closed && clean.len() > 1 && clean[0].distance(clean[clean.len() - 1]) <= 1e-4 {
+        if closed && clean.len() > 1 && clean[0].distance(clean[clean.len() - 1]) <= MIN_LEN {
             clean.pop();
         }
         let n = clean.len();
@@ -124,7 +128,7 @@ impl MeshBuilder2d {
     /// in the same builder (see `uvs`).
     pub fn add_textured_segment(&mut self, a: Vec2, b: Vec2, width: f32, u_period: f32) {
         let len = a.distance(b);
-        if len <= 1e-4 || u_period <= 0.0 {
+        if len <= MIN_LEN || u_period <= 0.0 {
             return;
         }
         let dir = (b - a) / len;
@@ -154,7 +158,7 @@ impl MeshBuilder2d {
     /// Dashed straight line from `a` to `b`.
     pub fn add_dashed_line(&mut self, a: Vec2, b: Vec2, width: f32, dash: f32, gap: f32) {
         let total = a.distance(b);
-        if total <= 1e-4 || dash <= 0.0 {
+        if total <= MIN_LEN || dash <= 0.0 {
             return;
         }
         let dir = (b - a) / total;

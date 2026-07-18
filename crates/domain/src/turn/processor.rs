@@ -1183,6 +1183,18 @@ fn finalize_resource_flow(game: &mut GameState, report: &mut TurnReport) {
 /// port-hop fixpoint). Computed once per nation and shared between connectivity
 /// and resource collection so the two can never disagree.
 pub fn nation_rail_reach(game: &GameState, nation_id: NationId) -> BTreeSet<crate::hex::HexCoord> {
+    let blockaded_ports = crate::military::naval::compute_blockaded_ports(game, nation_id);
+    nation_rail_reach_with_blockades(game, nation_id, &blockaded_ports)
+}
+
+/// `nation_rail_reach` with the blockaded-port set supplied by the caller —
+/// lets the turn pipeline compute blockades once per nation and share them
+/// with province connectivity (review F-001).
+pub fn nation_rail_reach_with_blockades(
+    game: &GameState,
+    nation_id: NationId,
+    blockaded_ports: &HashSet<crate::hex::HexCoord>,
+) -> BTreeSet<crate::hex::HexCoord> {
     let Some(nation) = game.get_nation(nation_id) else {
         return BTreeSet::new();
     };
@@ -1210,19 +1222,19 @@ pub fn nation_rail_reach(game: &GameState, nation_id: NationId) -> BTreeSet<crat
         }
     }
 
-    let blockaded_ports = crate::military::naval::compute_blockaded_ports(game, nation_id);
     crate::map::infrastructure::rail_reach(
         &game.world.hex_map,
         &game.world.sea_zones,
         &seeds,
         &owned_tiles,
-        &blockaded_ports,
+        blockaded_ports,
     )
 }
 
 pub fn connected_provinces(game: &GameState, nation_id: NationId) -> HashSet<ProvinceId> {
-    let reach = nation_rail_reach(game, nation_id);
-    connected_provinces_with_reach(game, nation_id, &reach)
+    let blockaded_ports = crate::military::naval::compute_blockaded_ports(game, nation_id);
+    let reach = nation_rail_reach_with_blockades(game, nation_id, &blockaded_ports);
+    connected_provinces_with_reach(game, nation_id, &reach, &blockaded_ports)
 }
 
 /// Province-level connectivity derived from a precomputed rail-edge `reach`.
@@ -1232,6 +1244,7 @@ pub fn connected_provinces_with_reach(
     game: &GameState,
     nation_id: NationId,
     reach: &BTreeSet<crate::hex::HexCoord>,
+    blockaded_ports: &HashSet<crate::hex::HexCoord>,
 ) -> HashSet<ProvinceId> {
     let mut connected = HashSet::new();
     let nation = match game.get_nation(nation_id) {
@@ -1252,8 +1265,6 @@ pub fn connected_provinces_with_reach(
         .iter()
         .flat_map(|t| t.neighbors())
         .collect();
-
-    let blockaded_ports = crate::military::naval::compute_blockaded_ports(game, nation_id);
 
     for &pid in &nation.province_ids {
         if pid == capital_pid {
@@ -1280,7 +1291,7 @@ pub fn connected_provinces_with_reach(
                     &game.world.hex_map,
                     &game.world.sea_zones,
                     coord,
-                    &blockaded_ports,
+                    blockaded_ports,
                 )
         });
         if reach_connected {
@@ -1304,38 +1315,38 @@ pub fn connected_provinces_with_reach(
 /// Only resources from provinces connected to the capital are delivered;
 /// resources from disconnected provinces are tracked in `report.disconnected_resources`.
 pub(super) fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
-    // Phase 0: precompute the rail-edge reach set once per nation, then derive
-    // both province-level connectivity and the collectable-hex set from it so
-    // connectivity and collection can never disagree.
+    // Phase 0: per nation, compute the blockaded-port set and the rail-edge
+    // reach set ONCE, then derive both province-level connectivity and the
+    // collectable-hex set from the same reach so the two can never disagree
+    // (and nothing is recomputed — review F-001).
     let nation_ids: Vec<NationId> = game.world.nations.iter().map(|n| n.id).collect();
-    let connected_map: Vec<(NationId, HashSet<ProvinceId>)> = nation_ids
-        .iter()
-        .map(|&nid| {
-            let reach = nation_rail_reach(game, nid);
-            (nid, connected_provinces_with_reach(game, nid, &reach))
-        })
-        .collect();
-
-    // Phase 0b: per-nation collectable-hex sets (capital radius plus a 1-hex
-    // radius around every rail-reachable depot).
-    let collectable_by_nation: Vec<(NationId, HashSet<crate::hex::HexCoord>)> = nation_ids
-        .iter()
-        .map(|&nid| {
-            if game.get_nation(nid).is_none() {
-                return (nid, HashSet::new());
-            }
-            let owned: Vec<&crate::map::Province> = game
-                .world
-                .provinces
-                .iter()
-                .filter(|p| p.owner == nid)
-                .collect();
-            let reach = nation_rail_reach(game, nid);
-            let set =
-                crate::map::infrastructure::collectable_hexes(&game.world.hex_map, &owned, &reach);
-            (nid, set)
-        })
-        .collect();
+    let mut connected_map: Vec<(NationId, HashSet<ProvinceId>)> =
+        Vec::with_capacity(nation_ids.len());
+    let mut collectable_by_nation: Vec<(NationId, HashSet<crate::hex::HexCoord>)> =
+        Vec::with_capacity(nation_ids.len());
+    for &nid in &nation_ids {
+        if game.get_nation(nid).is_none() {
+            connected_map.push((nid, HashSet::new()));
+            collectable_by_nation.push((nid, HashSet::new()));
+            continue;
+        }
+        let blockaded_ports = crate::military::naval::compute_blockaded_ports(game, nid);
+        let reach = nation_rail_reach_with_blockades(game, nid, &blockaded_ports);
+        connected_map.push((
+            nid,
+            connected_provinces_with_reach(game, nid, &reach, &blockaded_ports),
+        ));
+        let owned: Vec<&crate::map::Province> = game
+            .world
+            .provinces
+            .iter()
+            .filter(|p| p.owner == nid)
+            .collect();
+        collectable_by_nation.push((
+            nid,
+            crate::map::infrastructure::collectable_hexes(&game.world.hex_map, &owned, &reach),
+        ));
+    }
 
     // Phase 1: collect production data using immutable borrows
     let mut production_data: Vec<(NationId, ResourceType, u32)> = Vec::new();
@@ -14950,6 +14961,62 @@ mod tests {
             game.world.hex_map.get_tile(far).unwrap().assigned_civilian,
             Some(eng_id),
             "far tile slot is claimed by the advanced engineer"
+        );
+    }
+
+    #[test]
+    fn engineer_rail_link_far_hex_occupied_builds_but_stays() {
+        use crate::economy::{BuildTask, Civilian, CivilianType};
+
+        let mut game = test_game_state();
+        let near = HexCoord::new(1, 0);
+        let far = HexCoord::new(0, 0);
+
+        // Engineer laying near→far…
+        let eng_id = crate::map::UnitId(3_900_001);
+        let mut eng = Civilian::new(eng_id, CivilianType::Engineer, NationId(1));
+        eng.deploy(near);
+        eng.start_build(BuildTask::Railroad { to: far }, &game.game_data.game_config);
+        game.world.nations[0].military.civilians.push(eng);
+        if let Some(tile) = game.world.hex_map.get_tile_mut(near) {
+            tile.assigned_civilian = Some(eng_id);
+        }
+        // …while another civilian occupies the far endpoint.
+        let blocker_id = crate::map::UnitId(3_900_002);
+        let mut blocker = Civilian::new(blocker_id, CivilianType::Prospector, NationId(1));
+        blocker.deploy(far);
+        game.world.nations[0].military.civilians.push(blocker);
+        if let Some(tile) = game.world.hex_map.get_tile_mut(far) {
+            tile.assigned_civilian = Some(blocker_id);
+        }
+
+        let _ = process_turn(&mut game);
+
+        // The link is still laid (and paid for)…
+        assert!(
+            game.world.hex_map.has_rail_link(near, far),
+            "occupied far hex must not cancel the link build"
+        );
+        // …but the engineer stays on the near hex, idle and unflagged.
+        let eng = game
+            .world
+            .nations
+            .iter()
+            .flat_map(|n| n.military.civilians.iter())
+            .find(|c| c.id == eng_id)
+            .unwrap();
+        assert!(!eng.working);
+        assert_eq!(eng.build_task, None);
+        assert_eq!(
+            eng.position,
+            Some(near),
+            "auto-advance must be skipped when `to` is occupied"
+        );
+        assert!(!eng.arrived_this_turn);
+        assert_eq!(
+            game.world.hex_map.get_tile(far).unwrap().assigned_civilian,
+            Some(blocker_id),
+            "the blocker keeps its tile slot"
         );
     }
 

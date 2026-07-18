@@ -34,6 +34,14 @@ pub const REACT_SCALE: f32 = HEX_SIZE / 18.0;
 /// ground and motif pixels are the same size on screen.
 pub const GROUND_TEX_WORLD: f32 = HEX_SIZE * 1.5;
 
+/// Axial deltas for the rail-link direction indices 0-5 emitted by
+/// frontend-api's `MapTile.rail_links`. MUST stay identical to
+/// `domain::hex::HEX_DIRECTIONS` (presentation has no domain dependency, so
+/// the contract is pinned by `rail_dirs_contract_pinned` below).
+/// The renderer relies on the opposite of dir `i` being `(i + 3) % 6` for
+/// its draw-each-edge-once dedup.
+pub const RAIL_DIRS: [(i32, i32); 6] = [(1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1)];
+
 /// Rail-link quad width in world units. Half a hex keeps the 64x64 track
 /// texture's texels square (V maps 32 art texels across this width).
 pub const RAIL_TRACK_WIDTH: f32 = HEX_SIZE * 0.5;
@@ -902,8 +910,6 @@ pub fn rebuild_layers(
     // drawing only dirs {0,1,2} (the opposite is (i+3)%6 ∈ {3,4,5}) gives a
     // free dedup so each link is drawn exactly once.
     if *mode == MapMode::Terrain && settings.show_transport_network {
-        // Axial deltas for direction indices 0-5, matching domain HEX_DIRECTIONS.
-        const DIRS: [(i32, i32); 6] = [(1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1)];
         // Quad width HEX_SIZE/2 with one texture repeat per HEX_SIZE keeps
         // the 64x64 art's texels square (32 texels across the width).
         let track_w = RAIL_TRACK_WIDTH;
@@ -926,7 +932,7 @@ pub fn rebuild_layers(
                 if dir > 2 {
                     continue;
                 }
-                let (dq, dr) = DIRS[dir as usize];
+                let (dq, dr) = RAIL_DIRS[dir as usize];
                 let b = geometry::hex_to_world(tile.q + dq, tile.r + dr);
                 if track_tex.is_some() {
                     track.add_textured_segment(a, b, track_w, u_period);
@@ -1293,6 +1299,23 @@ mod tests {
             civilian_on_tile: None,
             visible: true,
             visual_group: None,
+        }
+    }
+
+    /// Pins the rail direction contract literals (review F-010: presentation
+    /// cannot import `domain::hex::HEX_DIRECTIONS`, so this guards against
+    /// accidental local edits, not cross-crate drift — the doc on `RAIL_DIRS`
+    /// records the source of truth). Also asserts opposite(i) == (i+3) % 6.
+    #[test]
+    fn rail_dirs_contract_pinned() {
+        assert_eq!(
+            RAIL_DIRS,
+            [(1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1)]
+        );
+        for i in 0..6 {
+            let (dq, dr) = RAIL_DIRS[i];
+            let (oq, or) = RAIL_DIRS[(i + 3) % 6];
+            assert_eq!((dq + oq, dr + or), (0, 0), "dir {i} opposite mismatch");
         }
     }
 

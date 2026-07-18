@@ -1258,14 +1258,14 @@ pub fn get_rail_link_options(
 
     let nation = match game.get_nation(human_nid) {
         Some(n) => n,
-        None => return Err(ApiError::raw("{\"error\":\"nation not found\"}")),
+        None => return Err(ApiError::msg("nation not found")),
     };
     let civ = match nation.military.civilians.iter().find(|c| c.id == cid) {
         Some(c) => c,
-        None => return Err(ApiError::raw("{\"error\":\"civilian not found\"}")),
+        None => return Err(ApiError::msg("civilian not found")),
     };
     if civ.civilian_type != domain::economy::CivilianType::Engineer {
-        return Err(ApiError::raw("{\"error\":\"civilian is not an engineer\"}"));
+        return Err(ApiError::msg("civilian is not an engineer"));
     }
     let treasury = nation.economy.treasury;
 

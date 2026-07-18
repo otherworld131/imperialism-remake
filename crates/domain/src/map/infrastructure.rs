@@ -410,15 +410,17 @@ pub fn build_fort(
 }
 
 /// Compute the set of hexes reachable from `seeds` over the nation's rail-edge
-/// network, with a port-hop fixpoint.
+/// network, with a one-shot port hop.
 ///
 /// BFS relaxes rail **edges** (`hex_map.rail_neighbors`) from the sorted seeds.
-/// When any reached hex is one of the nation's *effective* ports (built or
-/// implicit, ocean- or river-facing, not blockaded — see
-/// `has_effective_port_filtered`), every other effective port of the nation is
-/// seeded too (the maritime network connects all of them), and rail BFS
-/// continues from each. The result is a `BTreeSet` for deterministic iteration
-/// because it feeds turn-order-dependent resource collection (see Known Bugs).
+/// The first time a reached hex is one of the nation's *effective* ports
+/// (built or implicit, ocean- or river-facing, not blockaded — see
+/// `has_effective_port_filtered`), ALL other effective ports of the nation are
+/// seeded at once — the maritime network connects every port uniformly, so a
+/// single hop saturates it and no further iteration is needed. Rail BFS then
+/// continues from each seeded port. The result is a `BTreeSet` for
+/// deterministic iteration because it feeds turn-order-dependent resource
+/// collection (see Known Bugs).
 ///
 /// `owned_tiles` bounds which hexes may act as the nation's ports for the
 /// port-hop; rail edges themselves conduct regardless of ownership (physical

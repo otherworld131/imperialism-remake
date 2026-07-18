@@ -485,8 +485,8 @@ fn parse_rail_link_state(
         .iter()
         .filter_map(|o| {
             Some(RailLinkOption {
-                q: o.get("q")?.as_i64()? as i32,
-                r: o.get("r")?.as_i64()? as i32,
+                q: i32::try_from(o.get("q")?.as_i64()?).ok()?,
+                r: i32::try_from(o.get("r")?.as_i64()?).ok()?,
                 allowed: o.get("allowed")?.as_bool().unwrap_or(false),
                 affordable: o.get("affordable")?.as_bool().unwrap_or(false),
                 cost: o.get("cost").and_then(|c| c.as_i64()),

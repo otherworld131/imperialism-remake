@@ -1244,12 +1244,11 @@ pub(super) fn find_cheapest_path(
                 if !owned_hexes.contains(&neighbor) && !network.contains(&neighbor) {
                     continue;
                 }
-                // Skip terrain we don't have tech to lay rail on (unless it
-                // already has rail/depot — existing infrastructure is always
-                // traversable even if the current nation couldn't rebuild it).
-                let has_existing_rail =
-                    hex_map.rail_link_count(neighbor) > 0 || tile.infrastructure.has_depot;
-                if !has_existing_rail
+                // Edge-model semantics (review F-002): only a real rail link
+                // between `current` and `neighbor` is free/pre-traversable —
+                // a depot without links does not conduct.
+                let link_exists = hex_map.has_rail_link(current, neighbor);
+                if !link_exists
                     && !crate::map::infrastructure::rail_terrain_enabled(
                         tile.terrain(),
                         researched_techs,
@@ -1259,7 +1258,7 @@ pub(super) fn find_cheapest_path(
                 {
                     continue;
                 }
-                let edge_cost = if has_existing_rail {
+                let edge_cost = if link_exists {
                     0i64
                 } else {
                     match railroad_cost(tile.terrain(), cfg) {
