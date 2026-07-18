@@ -1206,10 +1206,12 @@ pub fn update_rail_preview(
         builder.add_textured_segment(Vec2::ZERO, b - a, RAIL_TRACK_WIDTH, RAIL_TRACK_U_PERIOD);
         let _ = meshes.insert(mesh2d.0.id(), builder.build());
         if let Some(mat) = materials.get_mut(material2d.0.id()) {
+            // Allowed: the ghost looks like the real track, only slightly
+            // translucent so it reads as "not built yet". Refused: red tint.
             mat.color = if ok {
-                Color::srgba(0.6, 1.0, 0.65, 0.6)
+                Color::srgba(1.0, 1.0, 1.0, 0.8)
             } else {
-                Color::srgba(1.0, 0.45, 0.4, 0.6)
+                Color::srgba(1.0, 0.4, 0.35, 0.65)
             };
             if mat.texture.is_none() {
                 mat.texture = icons.as_deref().and_then(|i| i.get("rail", "Track"));

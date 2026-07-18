@@ -82,6 +82,16 @@ fn debug_screenshot(
             settings.disable_fog = false;
         }
     }
+    // Re-applied every frame (not only under MAP_DEBUG_SKIP): camera setup
+    // and session install would otherwise overwrite an early one-shot value.
+    if let Ok(zoom) = std::env::var("MAP_DEBUG_ZOOM")
+        && let Ok(zoom) = zoom.parse::<f32>()
+        && let Ok(mut projection) = camera.single_mut()
+        && let Projection::Orthographic(ref mut ortho) = *projection
+        && ortho.scale != zoom
+    {
+        ortho.scale = zoom;
+    }
     // Fires after the M6/M7 drivers' scripted clicks (latest at frame 70) so
     // a queued order (e.g. a civilian deploy) resolves during the skip.
     if *frames == 100
@@ -92,13 +102,6 @@ fn debug_screenshot(
         game_commands.write(GameCommand::SkipTurns { count });
         if std::env::var("MAP_DEBUG_STRAIGHT").as_deref() == Ok("1") {
             settings.organic_borders = false;
-        }
-        if let Ok(zoom) = std::env::var("MAP_DEBUG_ZOOM")
-            && let Ok(zoom) = zoom.parse::<f32>()
-            && let Ok(mut projection) = camera.single_mut()
-            && let Projection::Orthographic(ref mut ortho) = *projection
-        {
-            ortho.scale = zoom;
         }
     }
     // Long-running drivers (e.g. the M9 battle hunt) override the capture
@@ -131,6 +134,8 @@ fn m6_debug_driver(
     fleet_targets: Res<FleetTargets>,
     rail: Res<RailLinkOptions>,
     phase: Res<State<TurnPhase>>,
+    screen: Res<State<Screen>>,
+    mut next_screen: ResMut<NextState<Screen>>,
     mut clicks: MessageWriter<MapClick>,
     mut game_commands: MessageWriter<GameCommand>,
     mut deploy: ResMut<DeployMode>,
@@ -142,6 +147,12 @@ fn m6_debug_driver(
         return;
     };
     if *phase.get() != TurnPhase::Idle {
+        return;
+    }
+    // `raillink` ends a turn: dismiss the newspaper it lands on so the
+    // capture shows the map with the freshly laid track.
+    if script.starts_with("raillink") && *screen.get() == Screen::News {
+        next_screen.set(Screen::Map);
         return;
     }
     let Some(tiles) = vms.map.as_ref() else {
@@ -1586,8 +1597,11 @@ pub fn run_game() {
                     .chain(),
                 camera::center_camera_when_map_ready,
                 (lod::update_zoom_lod, lod::apply_lod_gates).chain(),
-                layers::update_rings,
-                layers::update_rail_preview,
+                // After the M6 driver so a script-held HoveredHex (railpreview)
+                // is seen the same frame it is written, not clobbered by the
+                // cursor-less pick_hover pass.
+                layers::update_rings.after(m6_debug_driver),
+                layers::update_rail_preview.after(m6_debug_driver),
                 tick_blink,
                 markers::blink_selected_markers,
                 markers::animate_map_markers,
