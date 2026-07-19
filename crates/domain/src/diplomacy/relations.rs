@@ -3,6 +3,11 @@ use crate::events::TreatyType;
 use crate::types::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+/// Standing lost by the nation that breaks a treaty (or makes a separate peace).
+pub const BREAK_TREATY_STANDING_LOSS: i32 = 15;
+/// Relation-score lost between the two nations when a treaty is broken.
+pub const BREAK_TREATY_RELATIONS_LOSS: i32 = 20;
+
 /// A diplomatic proposal awaiting evaluation by the target nation.
 #[derive(Debug, Clone)]
 pub struct DiplomaticProposal {
@@ -372,12 +377,12 @@ impl DiplomacyState {
             let had = rel.has_treaty(treaty);
             if had {
                 rel.remove_treaty(treaty);
-                rel.reduce_score(20);
+                rel.reduce_score(BREAK_TREATY_RELATIONS_LOSS);
             }
             had
         };
         if had_treaty {
-            self.reduce_standing(a, 15);
+            self.reduce_standing(a, BREAK_TREATY_STANDING_LOSS);
         }
     }
 
