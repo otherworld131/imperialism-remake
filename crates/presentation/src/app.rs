@@ -7,7 +7,7 @@ use crate::game::commands::{self, GameCommand};
 use crate::game::refresh;
 use crate::game::resources::{
     Blink, CameraCentered, CurrentTurnNews, DataVersion, DeferredProposals, DeployMode, DiploUi,
-    EngineerPrompt, FleetTargets, GameMeta, MoveTargets, NewsArchive, NewsDebugSettings,
+    EngineerPrompt, FleetTargets, FreshRail, GameMeta, MoveTargets, NewsArchive, NewsDebugSettings,
     PendingMoveList, PendingMoves, PerspectiveNation, PrevLedger, ProposalPrompt, ProvinceUnits,
     QueuedDiplomacyAction, RailLinkOptions, RenderSettings, SelectedCivilian, SelectedNavy,
     SelectedShips, SelectedUnits, SessionRes, TileIndex, TreatyMarkerIndex, TurnInfo, ViewModels,
@@ -47,6 +47,10 @@ fn debug_screenshot(
     mut game_commands: MessageWriter<GameCommand>,
     screen: Res<State<Screen>>,
     mut next_screen: ResMut<NextState<Screen>>,
+    mut burger_menus: Query<&mut Node, With<map_hud::BurgerMenu>>,
+    quit_buttons: Query<Entity, With<map_hud::QuitToTitleBtn>>,
+    quit_confirms: Query<Entity, With<map_hud::QuitConfirmBtn>>,
+    mut activations: MessageWriter<ButtonActivated>,
     mut exit: MessageWriter<AppExit>,
 ) {
     use bevy::render::view::screenshot::{Screenshot, save_to_disk};
@@ -69,6 +73,30 @@ fn debug_screenshot(
     // after this hook's first frames tick.
     if std::env::var("MAP_DEBUG_AI_CIVS").as_deref() == Ok("1") && !settings.show_ai_civilians {
         settings.show_ai_civilians = true;
+    }
+    // `MAP_DEBUG_BURGER=1` holds the top-bar burger menu open so the
+    // capture shows the Display / Debug / Quit sections.
+    if std::env::var("MAP_DEBUG_BURGER").as_deref() == Ok("1") {
+        for mut node in &mut burger_menus {
+            if node.display == Display::None {
+                node.display = Display::Flex;
+            }
+        }
+    }
+    // `MAP_DEBUG_QUIT=1` replays the Quit-to-Title flow through the real
+    // button path: menu entry → confirm modal → title screen; the capture
+    // then shows the respawned intro menu.
+    if std::env::var("MAP_DEBUG_QUIT").as_deref() == Ok("1") {
+        if *frames == 60
+            && let Some(button) = quit_buttons.iter().next()
+        {
+            activations.write(ButtonActivated(button));
+        }
+        if *frames == 100
+            && let Some(button) = quit_confirms.iter().next()
+        {
+            activations.write(ButtonActivated(button));
+        }
     }
     if *frames == 1 {
         if let Ok(label) = std::env::var("MAP_DEBUG_MODE")
@@ -563,7 +591,9 @@ fn m8_debug_driver(
 
 /// Debug driver for the M9 screens: `M9_DEBUG=<script>` ends turns and
 /// switches screens so `MAP_SCREENSHOT` captures live state. Scripts:
-/// `news` (end turn → newspaper interstitial), `newsproposal` (end turn →
+/// `news` (end turn → newspaper interstitial), `newsdouble` (end turn →
+/// newspaper → press End Turn again → the second resolution is ignored and
+/// prints `M9_NEWSDOUBLE OK/FAIL`), `newsproposal` (end turn →
 /// newspaper → dismiss → proposal modal), `newsarchive` (two turns →
 /// Archive tab → turn selected → Show Map modal), `battles` /
 /// `battlesdebug` (fast-forwards turns until the battle archive has
@@ -650,10 +680,17 @@ fn m9_debug_driver(
                 activations.write(ButtonActivated(button));
             }
         }
-        "battles" | "battlesdebug" => {
+        // `battlesscroll` additionally scrolls the details panel down so
+        // captures show the FORCES columns (engaged/survived/lost line).
+        "battles" | "battlesdebug" | "battlesscroll" => {
             if *frames == 1 && script == "battlesdebug" {
                 news_debug.show_battle_firepower = true;
                 news_debug.show_retreat_debug = true;
+            }
+            if script == "battlesscroll" && *frames == 100 {
+                for mut position in &mut scroll_areas {
+                    position.y = 220.0;
+                }
             }
             // Fast-forward turns synchronously (blocking is fine for a
             // capture run) until the battle archive has entries — battles
@@ -698,6 +735,63 @@ fn m9_debug_driver(
                     position.y = 100_000.0;
                 }
             }
+        }
+        _ => {}
+    }
+}
+
+/// Bug proof (standalone so `m9_debug_driver` stays under the system-param
+/// limit): `M9_DEBUG=newsdouble`. Ending the turn again while the newspaper
+/// is still open must be ignored — it used to start a second resolution
+/// behind the paper, so the between-turns session opened underneath the
+/// overlay and the UI wedged. This resolves one turn (→ newspaper), then
+/// presses the real top-bar End Turn *button* and confirms the turn did not
+/// advance and we are still on the (dismissable) newspaper. Prints
+/// `M9_NEWSDOUBLE OK/FAIL`.
+fn m9_newsdouble_driver(
+    mut frames: Local<u32>,
+    mut step: Local<u32>,
+    mut click_frame: Local<u32>,
+    phase: Res<State<TurnPhase>>,
+    screen_state: Res<State<Screen>>,
+    session: Res<SessionRes>,
+    mut game_commands: MessageWriter<GameCommand>,
+    mut activations: MessageWriter<ButtonActivated>,
+    end_turn_btn: Query<Entity, With<map_hud::EndTurnButton>>,
+) {
+    if std::env::var("M9_DEBUG").as_deref() != Ok("newsdouble") {
+        return;
+    }
+    if *phase.get() != TurnPhase::Idle {
+        return;
+    }
+    *frames += 1;
+    let turn = session.0.as_ref().map(|s| s.turn_number()).unwrap_or(0);
+    let on_news = *screen_state.get() == Screen::News;
+    match *step {
+        0 if *frames == 20 => {
+            game_commands.write(GameCommand::EndTurn);
+            *step = 1;
+        }
+        1 if turn == 2 && on_news => {
+            if let Some(button) = end_turn_btn.iter().next() {
+                activations.write(ButtonActivated(button));
+                *click_frame = *frames;
+                *step = 2;
+            }
+        }
+        2 if *frames >= *click_frame + 40 => {
+            if turn == 2 && on_news {
+                println!(
+                    "M9_NEWSDOUBLE OK: End Turn ignored while newspaper open (turn stayed {turn})"
+                );
+            } else {
+                println!(
+                    "M9_NEWSDOUBLE FAIL: turn={turn} screen={:?}",
+                    screen_state.get()
+                );
+            }
+            *step = 3;
         }
         _ => {}
     }
@@ -854,7 +948,10 @@ struct M10Driver<'w, 's> {
     restart_rows: Query<'w, 's, Entity, With<saveload::RestartConfirmBtn>>,
     save_rows: Query<'w, 's, Entity, With<saveload::SaveConfirmBtn>>,
     overwrite_rows: Query<'w, 's, Entity, With<saveload::OverwriteConfirmBtn>>,
+    delete_rows: Query<'w, 's, (Entity, &'static saveload::DeleteSaveBtn)>,
+    delete_confirm_rows: Query<'w, 's, Entity, With<saveload::DeleteConfirmBtn>>,
     activations: MessageWriter<'w, ButtonActivated>,
+    scroll_areas: Query<'w, 's, &'static mut bevy::ui::ScrollPosition, With<widgets::UiScrollArea>>,
 }
 
 /// Debug driver for the M10 setup flow: `M10_DEBUG=<script>` drives the
@@ -862,10 +959,14 @@ struct M10Driver<'w, 's> {
 /// check exercise live code. Scripts:
 /// - `config` — config step as booted.
 /// - `preview` — generate and show the preview step.
+/// - `previewscroll` — preview, then jump the sidebar scroll to the bottom
+///   (proves the terrain sliders scroll cleanly above the footer).
 /// - `capital` — non-observer flow into capital placement (yield preview +
 ///   suggestions visible).
 /// - `save` — begin an observer game, open the Save modal.
 /// - `load` — begin, write two saves, open the Load modal.
+/// - `deletesave` — begin, write a save, delete it through the Load modal's
+///   Delete → confirm flow; prints `M10_DELETESAVE OK/FAIL`.
 /// - `loadcli` — loads CLI-written saves (`save_1815_Q1.json` / `.bin`)
 ///   through the real Load-modal buttons; prints `M10_LOADCLI OK/FAIL`.
 /// - `restart` — begin → end turn → confirm Restart → same seed at turn 1;
@@ -916,9 +1017,17 @@ fn m10_debug_driver(
 
     match script.as_str() {
         "config" => {}
-        "preview" => {
+        // `previewscroll`: same, then jump the sidebar scroll to the bottom
+        // so captures prove the terrain sliders scroll cleanly above the
+        // footer (the layout clamps the position to the true content end).
+        "preview" | "previewscroll" => {
             if *frames == 20 {
                 p.actions.write(SetupAction::PreviewMap);
+            }
+            if script == "previewscroll" && *frames == 120 {
+                for mut position in &mut p.scroll_areas {
+                    position.y = 100_000.0;
+                }
             }
         }
         "capital" => match *step {
@@ -1020,6 +1129,50 @@ fn m10_debug_driver(
             }
             _ => {}
         },
+        // CLI-autosave proof: begins a game, then loads the CLI-written
+        // `saves/autosave.json` (an uncompressed v5 JSON envelope, the only
+        // file the CLI autosaves) through the real Load-modal button path and
+        // verifies the session adopted the saved turn. Prints
+        // `M10_LOADAUTO OK/FAIL`.
+        "loadauto" => {
+            match *step {
+                0 => {
+                    p.actions.write(SetupAction::PreviewMap);
+                    *step = 1;
+                }
+                1 if preview_ready => {
+                    p.actions.write(SetupAction::BeginCampaign);
+                    *step = 2;
+                }
+                2 if in_game => {
+                    saveload::open_load_modal(&mut p.commands, &mut p.modal_stack, &p.theme);
+                    *step = 3;
+                }
+                3 => {
+                    let Some((entity, _)) = p.load_rows.iter().find(|(_, row)| {
+                        row.path.file_name().is_some_and(|n| n == "autosave.json")
+                    }) else {
+                        if *frames > 600 {
+                            fail(&mut p.exit, "M10_LOADAUTO", "autosave.json not listed");
+                        }
+                        return;
+                    };
+                    p.activations.write(ButtonActivated(entity));
+                    *step = 4;
+                }
+                // The fresh CLI autosave is past turn 1; a successful load rolls
+                // the just-begun turn-1 session forward to the saved turn.
+                4 if turn > 1 => {
+                    println!("M10_LOADAUTO OK: autosave.json loaded, session at turn {turn}");
+                    p.exit.write(AppExit::Success);
+                    *step = 5;
+                }
+                4 if *frames > 1200 => {
+                    fail(&mut p.exit, "M10_LOADAUTO", "autosave did not load");
+                }
+                _ => {}
+            }
+        }
         // Setup-screen load proof: the config step's "Load Save" button
         // loads straight into the game (needs `saves/m10-e2e.json.gz` from
         // an earlier `e2e` run).
@@ -1047,6 +1200,69 @@ fn m10_debug_driver(
                 _ => {}
             }
         }
+        // Delete proof: the load modal's per-row Delete opens a confirm
+        // modal; confirming removes the file and refreshes the browser.
+        // Prints `M10_DELETESAVE OK/FAIL`.
+        "deletesave" => match *step {
+            0 => {
+                p.actions.write(SetupAction::PreviewMap);
+                *step = 1;
+            }
+            1 if preview_ready => {
+                p.actions.write(SetupAction::BeginCampaign);
+                *step = 2;
+            }
+            2 if in_game => {
+                saveload::write_save(&p.session, "todelete.json.gz", &mut p.toasts);
+                saveload::open_load_modal(&mut p.commands, &mut p.modal_stack, &p.theme);
+                *step = 3;
+            }
+            3 => {
+                if let Some((entity, _)) = p.delete_rows.iter().find(|(_, row)| {
+                    row.path
+                        .file_name()
+                        .is_some_and(|n| n == "todelete.json.gz")
+                }) {
+                    p.activations.write(ButtonActivated(entity));
+                    *step = 4;
+                } else if *frames > 600 {
+                    fail(&mut p.exit, "M10_DELETESAVE", "delete button not listed");
+                }
+            }
+            4 => {
+                if let Some(entity) = p.delete_confirm_rows.iter().next() {
+                    println!("M10_DELETESAVE confirm modal appeared");
+                    p.activations.write(ButtonActivated(entity));
+                    *step = 5;
+                } else if *frames > 800 {
+                    fail(
+                        &mut p.exit,
+                        "M10_DELETESAVE",
+                        "confirm modal never appeared",
+                    );
+                }
+            }
+            5 if p.delete_confirm_rows.is_empty() => {
+                let gone = !saveload::saves_dir().join("todelete.json.gz").exists();
+                let relisted = !p.delete_rows.iter().any(|(_, row)| {
+                    row.path
+                        .file_name()
+                        .is_some_and(|n| n == "todelete.json.gz")
+                });
+                if gone && relisted {
+                    println!("M10_DELETESAVE OK: file deleted and browser refreshed");
+                    p.exit.write(AppExit::Success);
+                } else {
+                    fail(
+                        &mut p.exit,
+                        "M10_DELETESAVE",
+                        &format!("gone={gone} relisted={relisted}"),
+                    );
+                }
+                *step = 6;
+            }
+            _ => {}
+        },
         // Overwrite proof: saving onto an existing file must raise the
         // confirm modal, and confirming must write and close everything.
         "overwrite" => match *step {
@@ -1539,6 +1755,7 @@ pub fn run_game() {
         .init_resource::<PendingMoveList>()
         .init_resource::<MoveTargets>()
         .init_resource::<FleetTargets>()
+        .init_resource::<FreshRail>()
         .init_resource::<ProvinceUnits>()
         .init_resource::<SelectedUnits>()
         .init_resource::<SelectedShips>()
@@ -1574,7 +1791,8 @@ pub fn run_game() {
             )
                 .run_if(in_state(AppState::Intro)),
         )
-        // The in-game HUD chrome exists only once a game starts.
+        // The in-game HUD chrome exists only once a game starts, and is
+        // torn down again when Quit to Title leaves the state.
         .add_systems(
             OnEnter(AppState::InGame),
             (
@@ -1584,6 +1802,10 @@ pub fn run_game() {
                 tooltip::setup_map_tooltip,
             ),
         )
+        .add_systems(OnExit(AppState::InGame), map_hud::cleanup_ingame_chrome)
+        // Re-entering Setup after Quit to Title restarts the flow at the
+        // config step (the previous game left it on Preview).
+        .add_systems(OnEnter(AppState::Setup), setup::ui::reset_setup_flow)
         // Shared map/world systems (setup preview + in-game).
         .add_systems(
             Update,
@@ -1605,6 +1827,8 @@ pub fn run_game() {
                 tick_blink,
                 markers::blink_selected_markers,
                 markers::animate_map_markers,
+                markers::scale_map_labels,
+                layers::animate_fresh_rail,
                 debug_screenshot,
                 turn_runner::poll_begin_task.run_if(in_state(TurnPhase::Processing)),
                 turn_runner::poll_turn_task.run_if(in_state(TurnPhase::Processing)),
@@ -1626,6 +1850,7 @@ pub fn run_game() {
                     m7_debug_driver,
                     m8_debug_driver,
                     m9_debug_driver,
+                    m9_newsdouble_driver,
                     m11_debug_driver,
                 )
                     .run_if(in_state(AppState::InGame)),
@@ -1712,6 +1937,7 @@ pub fn run_game() {
                         map_hud::keyboard_commands,
                         map_hud::handle_convenience_buttons,
                         map_hud::handle_burger_menu,
+                        map_hud::handle_quit_to_title,
                         map_hud::handle_viewpoint_dropdown,
                         panels::handle_unit_checkboxes,
                         panels::handle_panel_buttons,
@@ -1838,32 +2064,25 @@ pub fn run_game() {
             Update,
             (
                 map_hud::update_turn_display,
-                map_hud::update_mode_display,
+                map_hud::sync_end_turn_enabled,
+                map_hud::populate_screen_tab_icons,
                 map_hud::sync_viewpoint_dropdown,
                 side_panel::handle_toggles,
                 side_panel::handle_debug_disclosure,
-                side_panel::sync_side_panel_for_diplomacy,
                 side_panel::handle_ui_scale_slider,
                 side_panel::sync_ui_scale_slider,
                 side_panel::handle_mode_dropdown,
                 side_panel::sync_mode_dropdown,
                 side_panel::update_selected_info,
                 side_panel::update_legend,
-                side_panel::update_nations,
                 panels::update_banners,
                 panels::update_unit_panel,
                 panels::update_naval_panel,
             )
                 .run_if(in_state(AppState::InGame)),
         )
-        .add_systems(
-            OnEnter(TurnPhase::Processing),
-            (map_hud::show_busy_overlay, map_hud::disable_end_turn),
-        )
-        .add_systems(
-            OnExit(TurnPhase::Processing),
-            (map_hud::hide_busy_overlay, map_hud::enable_end_turn),
-        )
+        .add_systems(OnEnter(TurnPhase::Processing), map_hud::show_busy_overlay)
+        .add_systems(OnExit(TurnPhase::Processing), map_hud::hide_busy_overlay)
         // ── Between-turns sessions (card #494) ──────────────────────────
         .add_systems(
             OnEnter(TurnPhase::DiploSession),

@@ -18,8 +18,10 @@ pub struct MeshBuilder2d {
 }
 
 /// Miter length clamp, in multiples of the half-width. Sharp spikes at acute
-/// joins fall back to a bevel-ish clamped miter.
-const MITER_LIMIT: f32 = 4.0;
+/// joins fall back to a bevel-ish clamped miter. 2.0 keeps 90° corners exact
+/// (miter factor √2) while capping anything sharper — noisy organic borders
+/// produce acute joins whose unclamped miters read as spikes.
+const MITER_LIMIT: f32 = 2.0;
 
 /// Degenerate-geometry guard: segments/gaps shorter than this (world units)
 /// are dropped — their normals are numerically meaningless.

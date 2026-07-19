@@ -32,17 +32,18 @@ pub struct IntroQuitBtn;
 
 /// Spawn the intro UI on the first `Update` frame of the `Intro` state —
 /// not `OnEnter`: the initial state transition fires before `Startup`, so
-/// `IconAssets` (loaded in `Startup`) would not exist yet.
+/// `IconAssets` (loaded in `Startup`) would not exist yet. Guarded by the
+/// root query (not a `Local` flag) so Quit to Title re-enters the state
+/// with a freshly spawned menu.
 pub fn setup_intro(
-    mut done: Local<bool>,
     mut commands: Commands,
     icons: Res<IconAssets>,
     theme: Res<Theme>,
+    roots: Query<(), With<IntroRoot>>,
 ) {
-    if *done {
+    if !roots.is_empty() {
         return;
     }
-    *done = true;
     let mut root = commands.spawn((
         Node {
             width: Val::Percent(100.0),
@@ -54,6 +55,10 @@ pub fn setup_intro(
         BackgroundColor(theme::BG),
         GlobalZIndex(50),
         IntroRoot,
+        // A quit-to-title game may still exist behind the splash — swallow
+        // pointer events so they never reach the map.
+        Interaction::default(),
+        crate::map::picking::PickingBlocker,
     ));
     if let Some(image) = icons.get("splash", "Title") {
         root.insert(ImageNode::new(image));
@@ -102,10 +107,14 @@ pub fn setup_intro(
                 BackgroundColor(Color::srgba(0.05, 0.05, 0.1, 0.55)),
             ))
             .with_children(|menu| {
-                // Continue = load the newest save; hidden when none exist.
+                // Continue = load the newest *loadable* save; hidden when
+                // none exist. Incompatible or unreadable saves are skipped —
+                // the load modal disables them, and a one-click shortcut
+                // must not route around that gate.
+                let current = frontend_api::session::current_save_version();
                 let newest_save = frontend_api::session::list_saves(&saveload::saves_dir())
                     .into_iter()
-                    .next();
+                    .find(|save| save.version == Some(current));
                 if let Some(save) = newest_save {
                     let detail = if save.nation_name.is_empty() {
                         save.file_name.clone()

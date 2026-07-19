@@ -362,14 +362,17 @@ struct LedgerCtx<'a> {
 
 // ── Cell helpers ─────────────────────────────────────────────────────────
 
-const NATION_COL: f32 = 170.0;
+const NATION_COL: f32 = 150.0;
 
 fn header_row(content: &mut ChildSpawnerCommands, theme: &Theme, columns: &[&str]) {
     content
         .spawn((
             Node {
                 flex_direction: FlexDirection::Row,
-                padding: UiRect::vertical(Val::Px(6.0)),
+                // Fit the viewport instead of growing to min-content and
+                // running under the scrollbar / off the screen edge.
+                min_width: Val::Px(0.0),
+                padding: UiRect::vertical(Val::Px(6.0)).with_right(Val::Px(8.0)),
                 border: UiRect::bottom(Val::Px(1.0)),
                 ..default()
             },
@@ -510,9 +513,13 @@ fn spawn_row_node(
             LedgerRowButton(entry.nation_id),
             Node {
                 width: Val::Percent(100.0),
+                // Fit the viewport (see `header_row`): without this floor
+                // the row's min-content width pushes the last column off
+                // the right screen edge at high UI scales.
+                min_width: Val::Px(0.0),
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
-                padding: UiRect::axes(Val::Px(0.0), Val::Px(6.0)),
+                padding: UiRect::axes(Val::Px(0.0), Val::Px(6.0)).with_right(Val::Px(8.0)),
                 border: UiRect::bottom(Val::Px(1.0)),
                 ..default()
             },
@@ -584,8 +591,12 @@ fn spawn_value_cell(
             flex_basis: Val::Px(0.0),
             min_width: Val::Px(0.0),
             flex_direction: FlexDirection::Row,
+            // Tight columns: the delta chip wraps under the value instead
+            // of overlapping the neighbouring column.
+            flex_wrap: FlexWrap::Wrap,
             justify_content: JustifyContent::FlexEnd,
             align_items: AlignItems::Center,
+            align_content: AlignContent::Center,
             column_gap: Val::Px(4.0),
             ..default()
         },
@@ -852,6 +863,7 @@ fn cash_flow_tab(content: &mut ChildSpawnerCommands, ctx: &LedgerCtx) {
                         Node {
                             flex_grow: 1.0,
                             flex_basis: Val::Px(0.0),
+                            min_width: Val::Px(0.0),
                             justify_content: JustifyContent::FlexEnd,
                             ..default()
                         },
@@ -1323,6 +1335,7 @@ fn stockpile_flow_breakdown(
     panel
         .spawn(Node {
             flex_direction: FlexDirection::Row,
+            min_width: Val::Px(0.0),
             padding: UiRect::vertical(Val::Px(4.0)),
             ..default()
         })
@@ -1363,6 +1376,7 @@ fn stockpile_flow_breakdown(
         panel
             .spawn(Node {
                 flex_direction: FlexDirection::Row,
+                min_width: Val::Px(0.0),
                 padding: UiRect::vertical(Val::Px(2.0)),
                 ..default()
             })

@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 use crate::game::resources::{
-    DeployMode, FleetTargets, MoveTargets, RailLinkOptions, RenderSettings, ViewModels,
+    DeployMode, FleetTargets, FreshRail, MoveTargets, RailLinkOptions, RenderSettings, ViewModels,
 };
 use crate::game::vm::MapTile;
 use crate::map::borders::{self, MapBorders};
@@ -127,6 +127,11 @@ pub struct RailPreviewGhostPads;
 
 #[derive(Component)]
 pub struct SelectionRing;
+
+/// Pulsing under-glow beneath rail links laid in the last turn resolution
+/// (see [`FreshRail`]): freshly built track must be spottable at a glance.
+#[derive(Component)]
+pub struct FreshRailGlow;
 
 /// World-space extent of the (unwrapped) map, derived from the map VM.
 #[derive(Resource, Clone, Copy)]
@@ -367,6 +372,7 @@ pub fn rebuild_layers(
     vms: Res<ViewModels>,
     mode: Res<MapMode>,
     settings: Res<RenderSettings>,
+    fresh_rail: Res<FreshRail>,
     mut cache: ResMut<BordersCache>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
@@ -593,6 +599,12 @@ pub fn rebuild_layers(
         let terrain_size = HEX_SIZE * 1.5;
         for tile in tiles {
             if tile.is_sea() {
+                continue;
+            }
+            // Plains read cleaner as open ground: the grass-tuft motif looked
+            // like stray clutter on every grassland tile, so grassland keeps
+            // only its ground texture (other terrains keep their motifs).
+            if tile.terrain == "Grassland" {
                 continue;
             }
             let Some(image) = icons.get("terrain", &tile.terrain) else {
@@ -935,6 +947,7 @@ pub fn rebuild_layers(
         let mut track = MeshBuilder2d::default();
         let mut nodes = MeshBuilder2d::default();
         let mut fallback = MeshBuilder2d::default();
+        let mut glow = MeshBuilder2d::default();
         for tile in tiles {
             if tile.is_sea() {
                 continue;
@@ -954,6 +967,33 @@ pub fn rebuild_layers(
                 } else {
                     fallback.add_segment(a, b, HEX_SIZE * 0.12);
                 }
+                // Track laid in the last turn resolution gets a pulsing
+                // golden under-glow for one turn (see `FreshRail`).
+                if fresh_rail
+                    .fresh_edges
+                    .contains(&((tile.q, tile.r), (tile.q + dq, tile.r + dr)))
+                {
+                    glow.add_segment(a, b, track_w * 1.9);
+                    glow.add_circle(a, track_w * 0.95, 16);
+                    glow.add_circle(b, track_w * 0.95, 16);
+                }
+            }
+        }
+        if !glow.is_empty() {
+            // Under the ballast pads and track so the pixel art stays crisp;
+            // `animate_fresh_rail` pulses the shared material's alpha.
+            let mesh = meshes.add(glow.build());
+            let material = materials.add(Color::srgba(1.0, 0.84, 0.25, 0.65));
+            for &(root, _) in &roots {
+                commands.spawn((
+                    Mesh2d(mesh.clone()),
+                    MeshMaterial2d(material.clone()),
+                    Transform::from_xyz(0.0, 0.0, 1.04),
+                    StaticLayer,
+                    FreshRailGlow,
+                    LodGate::Infra,
+                    ChildOf(root),
+                ));
             }
         }
         if let (Some(tex), false) = (node_tex, nodes.is_empty()) {
@@ -1099,8 +1139,11 @@ pub fn rebuild_highlight_layers(
             Color::srgba(1.0, 65.0 / 255.0, 54.0 / 255.0, 0.25),
             Vec::new(),
         ),
+        // Fleet move targets: bright cyan at a higher alpha than the army
+        // tints — the old dark-blue 0.28 wash was nearly invisible on the
+        // sea texture (a zone-perimeter outline is added below too).
         (
-            Color::srgba(64.0 / 255.0, 156.0 / 255.0, 1.0, 0.28),
+            Color::srgba(80.0 / 255.0, 200.0 / 255.0, 1.0, 0.42),
             Vec::new(),
         ),
         // Deployable tiles (civilian deploy mode), green like the web.
@@ -1149,6 +1192,46 @@ pub fn rebuild_highlight_layers(
             ));
         }
     }
+    // Bright outline around each reachable sea zone: only edges whose
+    // neighbour is not itself a fleet target, so the whole zone reads as one
+    // clearly bounded region on any sea shade.
+    if !fleet_targets.0.is_empty()
+        && let Some(map_width) = tiles.first().map(|t| t.map_width)
+    {
+        let verts = borders::hex_vertices(f64::from(HEX_SIZE));
+        let mut outline = MeshBuilder2d::default();
+        for &(q, r) in &fleet_targets.0 {
+            let [px, py] = borders::hex_to_pixel(q, r, f64::from(HEX_SIZE));
+            for (d, (nq, nr)) in borders::hex_neighbors(q, r).iter().enumerate() {
+                if fleet_targets
+                    .0
+                    .contains(&borders::wrap_axial(*nq, *nr, map_width))
+                {
+                    continue;
+                }
+                let v1 = verts[d];
+                let v2 = verts[(d + 1) % 6];
+                outline.add_segment(
+                    react_to_world([px + v1[0], py + v1[1]]),
+                    react_to_world([px + v2[0], py + v2[1]]),
+                    2.4 * REACT_SCALE,
+                );
+            }
+        }
+        if !outline.is_empty() {
+            let mesh = meshes.add(outline.build());
+            let material = materials.add(Color::srgba(0.75, 0.97, 1.0, 0.95));
+            for root in &wrap_roots {
+                commands.spawn((
+                    Mesh2d(mesh.clone()),
+                    MeshMaterial2d(material.clone()),
+                    Transform::from_xyz(0.0, 0.0, 1.32),
+                    HighlightLayer,
+                    ChildOf(root),
+                ));
+            }
+        }
+    }
     if !cross_builder.is_empty() {
         let mesh = meshes.add(cross_builder.build());
         let material = materials.add(Color::srgba(0.95, 0.25, 0.2, 0.85));
@@ -1160,6 +1243,24 @@ pub fn rebuild_highlight_layers(
                 HighlightLayer,
                 ChildOf(root),
             ));
+        }
+    }
+}
+
+/// Pulse the fresh-rail under-glow (card: newly laid track has very quiet
+/// feedback). The wrap copies clone the same material handle (same asset),
+/// so the per-copy writes are idempotent re-writes of one shared asset; the
+/// alpha floor keeps the highlight obvious even in still screenshots.
+pub fn animate_fresh_rail(
+    time: Res<Time>,
+    glows: Query<&MeshMaterial2d<ColorMaterial>, With<FreshRailGlow>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
+    let wave = (time.elapsed_secs() * 3.4).sin() * 0.5 + 0.5;
+    let alpha = 0.45 + wave * 0.4;
+    for material in &glows {
+        if let Some(mat) = materials.get_mut(&material.0) {
+            mat.color.set_alpha(alpha);
         }
     }
 }
@@ -1454,6 +1555,7 @@ mod tests {
         app.init_resource::<ViewModels>();
         app.init_resource::<MapMode>();
         app.init_resource::<RenderSettings>();
+        app.init_resource::<FreshRail>();
         app.init_resource::<BordersCache>();
         app.insert_resource(icons_with_ground());
         app.add_systems(Update, rebuild_layers);

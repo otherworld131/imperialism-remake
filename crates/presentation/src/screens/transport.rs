@@ -374,8 +374,18 @@ pub fn update_transport(
                         })
                         .with_children(|cell| {
                             if shortfall > 0 {
+                                // Zero available at the depots is a supply
+                                // problem, not an allocation one — "short"
+                                // implies the +/− steppers could close the
+                                // gap, which they can't when there's nothing
+                                // to haul (the + stays disabled below).
+                                let label = if delivery.available == 0 {
+                                    format!("{shortfall} needed")
+                                } else {
+                                    format!("{shortfall} short")
+                                };
                                 cell.spawn((
-                                    Text::new(format!("{shortfall} short")),
+                                    Text::new(label),
                                     theme.font(10.0),
                                     TextColor(if alarm { theme::ALARM } else { theme::WARN }),
                                 ));
@@ -383,14 +393,29 @@ pub fn update_transport(
                         })
                         .id();
                     if shortfall > 0 {
-                        row.commands().entity(warn_cell).insert(TooltipText(format!(
-                            "Hauling {projected} of the {demand_qty} demanded this turn{}",
-                            if alarm {
-                                " — workers will go hungry without more food"
-                            } else {
-                                ""
-                            }
-                        )));
+                        let tooltip = if delivery.available == 0 {
+                            format!(
+                                "No {} available at your depots this turn — {demand_qty} needed{}",
+                                delivery.resource,
+                                if alarm {
+                                    " — workers will go hungry without more food"
+                                } else {
+                                    ""
+                                }
+                            )
+                        } else {
+                            format!(
+                                "Hauling {projected} of the {demand_qty} demanded this turn{}",
+                                if alarm {
+                                    " — workers will go hungry without more food"
+                                } else {
+                                    ""
+                                }
+                            )
+                        };
+                        row.commands()
+                            .entity(warn_cell)
+                            .insert(TooltipText(tooltip));
                     }
                 });
         }

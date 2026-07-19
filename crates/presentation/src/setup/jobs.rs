@@ -15,7 +15,7 @@ use frontend_api::Session;
 use super::{PreviewStage, SetupConfig, SetupStep, SetupUi};
 use crate::game::resources::{
     CameraCentered, CurrentTurnNews, DataVersion, DeferredProposals, DeployMode, DiploUi,
-    EngineerPrompt, FleetTargets, GameMeta, MoveTargets, NewsArchive, PendingMoveList,
+    EngineerPrompt, FleetTargets, FreshRail, GameMeta, MoveTargets, NewsArchive, PendingMoveList,
     PendingMoves, PerspectiveNation, PrevLedger, ProposalPrompt, ProvinceUnits, RenderSettings,
     SelectedCivilian, SelectedNavy, SelectedShips, SelectedUnits, SessionRes, TurnInfo,
 };
@@ -329,6 +329,7 @@ pub struct ResetSelections<'w> {
     pub selected_hex: ResMut<'w, SelectedHex>,
     pub province_units: ResMut<'w, ProvinceUnits>,
     pub diplo: ResMut<'w, DiploUi>,
+    pub fresh_rail: ResMut<'w, FreshRail>,
 }
 
 #[derive(bevy::ecs::system::SystemParam)]
@@ -409,6 +410,8 @@ pub fn apply_pending_session(
     selections.selected_hex.0 = None;
     *selections.province_units = ProvinceUnits::default();
     *selections.diplo = DiploUi::default();
+    // A new/loaded world's existing rail must not read as freshly laid.
+    *selections.fresh_rail = FreshRail::default();
 
     *archives.news = CurrentTurnNews::default();
     *archives.news_archive = NewsArchive::default();

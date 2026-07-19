@@ -1,6 +1,6 @@
 //! Between-turns session screens (card #494): after End Turn the first half
 //! of the pipeline resolves, then these screens run over the live map with
-//! the normal chrome hidden — the diplomatic session (accept/refuse
+//! the normal chrome hidden — the diplomatic session (accept/reject
 //! proposals, be notified of every diplomatic change), the trade session
 //! (wishlist offers arrive seller by seller, best relationships first), and
 //! finally the read-only trade summary before the newspaper opens.
@@ -45,7 +45,7 @@ pub struct SummaryRoot;
 #[derive(Component)]
 pub struct DiploContinueBtn;
 
-/// Accept / refuse the first remaining proposal (its authoritative index).
+/// Accept / reject the first remaining proposal (its authoritative index).
 #[derive(Component)]
 pub struct DiploAcceptBtn(pub u32);
 
@@ -436,7 +436,7 @@ pub fn update_diplo_session(
                             row,
                             &theme,
                             ButtonProps {
-                                label: "Refuse".into(),
+                                label: "Reject".into(),
                                 font_size: 13.0,
                                 width: Some(Val::Px(140.0)),
                                 ..default()
@@ -525,7 +525,7 @@ pub fn handle_diplo_session_buttons(
                 reject.0,
             ) {
                 toasts.write(widgets::Toast::error(format!(
-                    "Refuse failed: {}",
+                    "Reject failed: {}",
                     err.message()
                 )));
             }
@@ -831,7 +831,7 @@ pub fn update_trade_session(
                                 row,
                                 &theme,
                                 ButtonProps {
-                                    label: format!("No more {resource_label} offers"),
+                                    label: format!("Skip remaining {resource_label} offers"),
                                     font_size: 13.0,
                                     ..default()
                                 },

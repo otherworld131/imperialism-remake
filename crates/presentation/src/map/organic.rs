@@ -61,6 +61,15 @@ pub const RUGGEDNESS_MIN: f64 = 0.35;
 /// Most rugged amplitude multiplier.
 pub const RUGGEDNESS_MAX: f64 = 1.55;
 
+/// Displacement slope clamp used for map borders (see
+/// [`AnchoredOpts::slope_clamp`]). Because segment endpoints are pinned
+/// anchors, an unclamped displacement right next to an endpoint can fold the
+/// curve almost perpendicular to the hex edge — the "border spike" artifact.
+/// Limiting |d| to `slope_clamp * len * min(t, 1-t)` tapers the wiggle into
+/// each anchor (max flare-out angle `atan(slope_clamp)`) while leaving the
+/// mid-edge displacement untouched.
+pub const BORDER_SLOPE_CLAMP: f64 = 1.5;
+
 /// Border-noise frequency scaled so the wiggle wavelength stays a constant
 /// number of hexes regardless of hex size.
 #[must_use]
@@ -432,6 +441,22 @@ pub struct AnchoredOpts {
     pub smoothing: u32,
     /// Treat the polyline as a closed loop.
     pub closed: bool,
+    /// Anchor-taper clamp on the displacement: at parameter `t` along a
+    /// segment of length `len`, |d| is limited to
+    /// `slope_clamp * len * min(t, 1 - t)`. `0.0` disables the clamp
+    /// (bit-faithful to the TS original); [`BORDER_SLOPE_CLAMP`] is the map
+    /// borders' anti-spike setting.
+    pub slope_clamp: f64,
+}
+
+/// Clamp a displacement to the anchor-taper envelope (see
+/// [`AnchoredOpts::slope_clamp`]).
+fn clamp_displacement(d: f64, slope_clamp: f64, len: f64, t: f64) -> f64 {
+    if slope_clamp <= 0.0 {
+        return d;
+    }
+    let limit = slope_clamp * len * t.min(1.0 - t);
+    d.clamp(-limit, limit)
 }
 
 /// Full "organic edge" pipeline that keeps every hex vertex as a hard anchor:
@@ -487,6 +512,7 @@ pub fn smooth_polyline_anchored(
                         opts.octaves,
                         opts.seed,
                     );
+                let d = clamp_displacement(d, opts.slope_clamp, len, t);
                 seg.push([px + nx * d, py + ny * d]);
             }
         }
@@ -605,6 +631,7 @@ pub fn displace_along_normal_mixed(
                     opts.octaves,
                     opts.seed,
                 );
+            let d = clamp_displacement(d, opts.slope_clamp, len, t);
             out.push([px + nx * d, py + ny * d]);
         }
     }
@@ -1151,6 +1178,7 @@ mod tests {
             seed: 1337,
             smoothing: 1,
             closed: true,
+            slope_clamp: 0.0,
         };
         let closed = smooth_polyline_anchored(PTS_E, SEG_AMP_E, SEG_SUB_E, base, None);
         assert_pts_eq(&closed, ANCHORED_CLOSED, "anchored closed");
@@ -1226,6 +1254,39 @@ mod tests {
             ],
             "open polylines"
         );
+    }
+
+    /// The anti-spike clamp bounds every sub-point's displacement from the
+    /// straight chord by `slope_clamp * len * min(t, 1-t)`, tapering into the
+    /// pinned anchors, while `slope_clamp: 0.0` stays bit-faithful.
+    #[test]
+    fn slope_clamp_tapers_displacement_into_anchors() {
+        // One long horizontal segment with a huge amplitude so the raw noise
+        // displacement dwarfs the clamp envelope near the anchors.
+        let pts: &[Point] = &[[0.0, 0.0], [40.0, 0.0]];
+        let opts = AnchoredOpts {
+            frequency: 0.06,
+            octaves: 4,
+            seed: 1337,
+            smoothing: 0,
+            closed: false,
+            slope_clamp: BORDER_SLOPE_CLAMP,
+        };
+        let sub = 12;
+        let out = smooth_polyline_anchored(pts, &[100.0], &[sub], opts, Some(&[[0.0, 1.0]]));
+        assert_eq!(out.len(), sub + 1);
+        for (k, p) in out.iter().enumerate() {
+            let t = k as f64 / sub as f64;
+            let limit = BORDER_SLOPE_CLAMP * 40.0 * t.min(1.0 - t) + 1e-9;
+            assert!(
+                p[1].abs() <= limit,
+                "sub-point {k}: displacement {} exceeds envelope {limit}",
+                p[1]
+            );
+        }
+        // Somewhere mid-edge the noise must actually displace (the clamp is
+        // a taper, not a flattener).
+        assert!(out.iter().any(|p| p[1].abs() > 1.0));
     }
 
     #[test]

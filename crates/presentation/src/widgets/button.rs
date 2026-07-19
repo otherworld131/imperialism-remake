@@ -18,6 +18,11 @@ use crate::theme::{self, Theme};
 pub struct UiButton {
     flat: bool,
     auto_label_tint: bool,
+    /// The border the disabled style displaced, restored on re-enable so
+    /// custom border colors round-trip unchanged. Mutated in place (not a
+    /// separate component) so restyling never queues commands that could
+    /// target an entity despawned in the same frame.
+    saved_border: Option<BorderColor>,
 }
 
 #[derive(Component)]
@@ -89,6 +94,7 @@ pub fn spawn_button(
         UiButton {
             flat: props.flat,
             auto_label_tint: props.auto_label_tint,
+            saved_border: None,
         },
         node,
         BorderColor::all(theme::GOLD),
@@ -129,21 +135,26 @@ fn forward_activations(
 /// compare-guarded so render-side change detection only fires on transitions.
 fn restyle_buttons(
     mut buttons: Query<(
-        &UiButton,
+        &mut UiButton,
         &Hovered,
         Has<Pressed>,
         Has<InteractionDisabled>,
         &mut BackgroundColor,
+        &mut BorderColor,
         &Children,
     )>,
     mut labels: Query<&mut TextColor, With<UiButtonLabel>>,
 ) {
-    for (button, hovered, pressed, disabled, mut background, children) in &mut buttons {
+    for (mut button, hovered, pressed, disabled, mut background, mut border, children) in
+        &mut buttons
+    {
         let rest = if button.flat {
             Color::NONE
         } else {
             theme::BUTTON_BG
         };
+        // Disabled is unmistakable: desaturated fill + muted border + muted
+        // label, vs the bright gold border every enabled button keeps.
         let (bg, fg) = if disabled {
             (
                 if button.flat {
@@ -151,7 +162,7 @@ fn restyle_buttons(
                 } else {
                     theme::BUTTON_BG_DISABLED
                 },
-                theme::TEXT_DIM,
+                theme::TEXT_DISABLED,
             )
         } else if pressed {
             (theme::BUTTON_BG_PRESSED, theme::GOLD)
@@ -162,6 +173,18 @@ fn restyle_buttons(
         };
         if background.0 != bg {
             background.0 = bg;
+        }
+        // Border: stash the current border when the disabled style claims
+        // it, and restore that exact border on re-enable — custom colors
+        // (war-red confirm, tech-green picks) round-trip unchanged.
+        if !button.flat {
+            let muted = BorderColor::all(theme::BUTTON_BORDER_DISABLED);
+            if disabled && *border != muted {
+                button.saved_border = Some(*border);
+                *border = muted;
+            } else if !disabled && let Some(original) = button.saved_border.take() {
+                *border = original;
+            }
         }
         if !button.auto_label_tint {
             continue;

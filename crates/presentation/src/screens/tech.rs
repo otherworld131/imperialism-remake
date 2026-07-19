@@ -292,8 +292,13 @@ pub fn update_tech(
                 .as_ref()
                 .is_some_and(|pending| pending.id == entry.id);
             let can_afford = tech.treasury >= entry.cost;
-            let year_range = (entry.latest_year < 9999)
-                .then(|| format!("{}–{}", entry.earliest_year, entry.latest_year));
+            let year_range = (entry.latest_year < 9999).then(|| {
+                if entry.earliest_year == entry.latest_year {
+                    entry.earliest_year.to_string()
+                } else {
+                    format!("{}–{}", entry.earliest_year, entry.latest_year)
+                }
+            });
             let locked = researched_year.is_none() && !is_available;
 
             tech_row(

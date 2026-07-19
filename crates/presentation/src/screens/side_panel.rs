@@ -1,9 +1,9 @@
-//! Map side panel: selected-tile / selected-navy info, per-mode legends,
-//! UI & debug toggles, and the Great Power list — mirroring the web
-//! frontend's right-hand panel. Also owns the bottom-right map-mode dropup.
+//! Map side panel: selected-tile / selected-navy info, per-mode legends and
+//! the contextual unit panels. Also owns the bottom-right map-mode dropup,
+//! plus the "Display" / "Debug" settings block the burger menu embeds
+//! (the toggles lived here before moving into the menu).
 
 use bevy::prelude::*;
-use std::collections::{HashMap, HashSet};
 
 use crate::game::resources::{
     NewsDebugSettings, RenderSettings, SelectedNavy, TileIndex, ViewModels,
@@ -28,12 +28,9 @@ pub struct SelectedInfoSection;
 pub struct LegendSection;
 
 #[derive(Component)]
-pub struct NationsSection;
-
-#[derive(Component)]
 pub struct MapModeDropdown;
 
-/// The "UI size" interface-scale slider in the UI section.
+/// The "UI size" interface-scale slider (burger menu, Display section).
 #[derive(Component)]
 pub struct UiScaleSlider;
 
@@ -49,11 +46,6 @@ pub struct DebugDisclosureLabel;
 /// Container holding the debug toggles; `Display` follows the state.
 #[derive(Component)]
 pub struct DebugSectionBody;
-
-/// Generic side-panel sections hidden while the Diplomacy screen is open
-/// (it shows only the legend + relation details).
-#[derive(Component)]
-pub struct GenericPanelSection;
 
 #[derive(Resource)]
 pub struct DebugPanelExpanded(pub bool);
@@ -80,15 +72,9 @@ pub enum ToggleKind {
     ShowBattleFirepower,
 }
 
-pub fn setup_side_panel(
-    mut commands: Commands,
-    theme: Res<Theme>,
-    settings: Res<RenderSettings>,
-    news_debug: Res<NewsDebugSettings>,
-    ui_scale: Res<bevy::ui::UiScale>,
-    debug_expanded: Res<DebugPanelExpanded>,
-) {
-    // ── Right-hand panel ─────────────────────────────────────────────────
+pub fn setup_side_panel(mut commands: Commands, theme: Res<Theme>) {
+    // ── Right-hand panel: hex/selection details + contextual unit panels.
+    // Display and debug settings live in the top-bar burger menu.
     commands
         .spawn((
             Node {
@@ -105,6 +91,7 @@ pub fn setup_side_panel(
             Interaction::default(),
             PickingBlocker,
             crate::screens::session::SessionHiddenChrome,
+            crate::screens::map_hud::InGameChrome,
         ))
         .with_children(|panel| {
             let scroll = widgets::spawn_scroll_area(
@@ -122,6 +109,10 @@ pub fn setup_side_panel(
                         flex_direction: FlexDirection::Column,
                         row_gap: Val::Px(2.0),
                         min_height: Val::Px(60.0),
+                        // Never compress below content when the panel is
+                        // full — the explicit min_height would otherwise let
+                        // this section shrink and its text overlap "Legend".
+                        flex_shrink: 0.0,
                         ..default()
                     },
                     SelectedInfoSection,
@@ -131,6 +122,7 @@ pub fn setup_side_panel(
                         flex_direction: FlexDirection::Column,
                         row_gap: Val::Px(3.0),
                         margin: UiRect::top(Val::Px(8.0)),
+                        flex_shrink: 0.0,
                         ..default()
                     },
                     LegendSection,
@@ -140,172 +132,6 @@ pub fn setup_side_panel(
                 content.spawn((panel_section(), panels::BannerSection));
                 content.spawn((panel_section(), panels::UnitPanelSection));
                 content.spawn((panel_section(), panels::NavalPanelSection));
-
-                content
-                    .spawn((
-                        Node {
-                            flex_direction: FlexDirection::Column,
-                            row_gap: Val::Px(2.0),
-                            ..default()
-                        },
-                        GenericPanelSection,
-                    ))
-                    .with_children(|content| {
-                section_title(content, &theme, "UI");
-                let ui_toggles = [
-                    (
-                        ToggleKind::OrganicBorders,
-                        "Organic borders",
-                        settings.organic_borders,
-                    ),
-                    (
-                        ToggleKind::HideHexGrid,
-                        "Hide hex grid",
-                        settings.hide_hex_grid,
-                    ),
-                    (
-                        ToggleKind::ShowResources,
-                        "Show resources",
-                        settings.show_resources,
-                    ),
-                    (
-                        ToggleKind::ShowTransport,
-                        "Show transport network",
-                        settings.show_transport_network,
-                    ),
-                    (ToggleKind::ShowArmies, "Show armies", settings.show_armies),
-                ];
-                spawn_toggles(content, &theme, &ui_toggles);
-
-                // Interface scale (web parity: the side-panel font slider).
-                content
-                    .spawn(Node {
-                        align_items: AlignItems::Center,
-                        column_gap: Val::Px(8.0),
-                        margin: UiRect::vertical(Val::Px(4.0)),
-                        ..default()
-                    })
-                    .with_children(|row| {
-                        row.spawn((
-                            Text::new("UI size"),
-                            theme.font(12.0),
-                            TextColor(theme::TEXT),
-                        ));
-                        let slider = widgets::spawn_slider(
-                            row,
-                            &theme,
-                            widgets::SliderProps {
-                                min: crate::ui_scale::MIN_SCALE,
-                                max: crate::ui_scale::MAX_SCALE,
-                                step: 0.05,
-                                value: ui_scale.0,
-                                width: Val::Px(130.0),
-                                format: Some(std::sync::Arc::new(|v: f32| {
-                                    format!("{:.0}%", v * 100.0)
-                                })),
-                                ..default()
-                            },
-                        );
-                        row.commands().entity(slider).insert((
-                            UiScaleSlider,
-                            widgets::TooltipText(
-                                "Interface text & icon scale (also Ctrl + / Ctrl - / Ctrl 0 on any screen)".into(),
-                            ),
-                        ));
-                    });
-
-                // Nations (gameplay info) sits above Debug (developer UI).
-                section_title(content, &theme, "Nations");
-                content.spawn((
-                    Node {
-                        flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(2.0),
-                        ..default()
-                    },
-                    NationsSection,
-                ));
-
-                // Debug: collapsed disclosure row by default.
-                let expanded = debug_expanded.0;
-                let disclosure = widgets::spawn_button(
-                    content,
-                    &theme,
-                    widgets::ButtonProps {
-                        label: debug_disclosure_label(expanded),
-                        font_size: 13.0,
-                        flat: true,
-                        auto_label_tint: false,
-                        ..default()
-                    },
-                );
-                {
-                    let mut commands = content.commands();
-                    let mut entity = commands.entity(disclosure);
-                    entity.insert((
-                        DebugDisclosureButton,
-                        widgets::TooltipText("Developer toggles (fog, AI internals)".into()),
-                        Node {
-                            margin: UiRect::top(Val::Px(10.0)),
-                            padding: UiRect::horizontal(Val::Px(0.0)),
-                            ..default()
-                        },
-                    ));
-                }
-                content
-                    .spawn((
-                        Node {
-                            flex_direction: FlexDirection::Column,
-                            row_gap: Val::Px(2.0),
-                            display: if expanded {
-                                Display::Flex
-                            } else {
-                                Display::None
-                            },
-                            ..default()
-                        },
-                        DebugSectionBody,
-                    ))
-                    .with_children(|body| {
-                        let debug_toggles = [
-                            (
-                                ToggleKind::ShowHiddenResources,
-                                "Show hidden resources",
-                                settings.show_hidden_resources,
-                            ),
-                            (
-                                ToggleKind::ShowAiCivilians,
-                                "Show AI civilians",
-                                settings.show_ai_civilians,
-                            ),
-                            (
-                                ToggleKind::DisableFog,
-                                "Disable fog of war",
-                                settings.disable_fog,
-                            ),
-                            (
-                                ToggleKind::ShowAiReasoning,
-                                "Show AI reasoning",
-                                news_debug.show_ai_reasoning,
-                            ),
-                            (
-                                ToggleKind::ShowAiNonActions,
-                                "Show AI non-actions",
-                                news_debug.show_ai_non_actions,
-                            ),
-                            (
-                                ToggleKind::ShowRetreatDebug,
-                                "Battle retreat math",
-                                news_debug.show_retreat_debug,
-                            ),
-                            (
-                                ToggleKind::ShowBattleFirepower,
-                                "Battle firepower detail",
-                                news_debug.show_battle_firepower,
-                            ),
-                        ];
-                        spawn_toggles(body, &theme, &debug_toggles);
-                    });
-                    });
             });
         });
 
@@ -321,6 +147,7 @@ pub fn setup_side_panel(
             Interaction::default(),
             PickingBlocker,
             crate::screens::session::SessionHiddenChrome,
+            crate::screens::map_hud::InGameChrome,
         ))
         .with_children(|anchor| {
             let dropdown = widgets::spawn_dropdown(
@@ -345,6 +172,8 @@ fn panel_section() -> Node {
         flex_direction: FlexDirection::Column,
         row_gap: Val::Px(2.0),
         margin: UiRect::top(Val::Px(8.0)),
+        // Sections scroll instead of compressing into each other.
+        flex_shrink: 0.0,
         ..default()
     }
 }
@@ -380,18 +209,159 @@ fn spawn_toggles(
     }
 }
 
-/// Hide the generic UI/Nations/Debug sections while Diplomacy is open.
-pub fn sync_side_panel_for_diplomacy(
-    screen: Res<State<crate::state::Screen>>,
-    mut sections: Query<&mut Node, With<GenericPanelSection>>,
+/// The "Display" section + "Debug" disclosure the burger menu embeds:
+/// render toggles, the UI-size slider, and the developer toggles. The
+/// handlers below ([`handle_toggles`], [`handle_ui_scale_slider`],
+/// [`handle_debug_disclosure`]) drive them wherever they are spawned.
+pub fn spawn_display_and_debug(
+    parent: &mut ChildSpawnerCommands,
+    theme: &Theme,
+    settings: &RenderSettings,
+    news_debug: &NewsDebugSettings,
+    ui_scale: f32,
+    debug_expanded: bool,
 ) {
-    if !screen.is_changed() {
-        return;
+    section_title(parent, theme, "Display");
+    let ui_toggles = [
+        (
+            ToggleKind::OrganicBorders,
+            "Organic borders",
+            settings.organic_borders,
+        ),
+        (
+            ToggleKind::HideHexGrid,
+            "Hide hex grid",
+            settings.hide_hex_grid,
+        ),
+        (
+            ToggleKind::ShowResources,
+            "Show resources",
+            settings.show_resources,
+        ),
+        (
+            ToggleKind::ShowTransport,
+            "Show transport network",
+            settings.show_transport_network,
+        ),
+        (ToggleKind::ShowArmies, "Show armies", settings.show_armies),
+    ];
+    spawn_toggles(parent, theme, &ui_toggles);
+
+    // Interface scale (web parity: the former side-panel font slider).
+    parent
+        .spawn(Node {
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(8.0),
+            margin: UiRect::vertical(Val::Px(4.0)),
+            ..default()
+        })
+        .with_children(|row| {
+            row.spawn((
+                Text::new("UI size"),
+                theme.font(12.0),
+                TextColor(theme::TEXT),
+            ));
+            let slider = widgets::spawn_slider(
+                row,
+                theme,
+                widgets::SliderProps {
+                    min: crate::ui_scale::MIN_SCALE,
+                    max: crate::ui_scale::MAX_SCALE,
+                    step: 0.05,
+                    value: ui_scale,
+                    width: Val::Px(130.0),
+                    format: Some(std::sync::Arc::new(|v: f32| format!("{:.0}%", v * 100.0))),
+                    ..default()
+                },
+            );
+            row.commands().entity(slider).insert((
+                UiScaleSlider,
+                widgets::TooltipText(
+                    "Interface text & icon scale (also Ctrl + / Ctrl - / Ctrl 0 on any screen)"
+                        .into(),
+                ),
+            ));
+        });
+
+    // Debug: collapsed disclosure row by default.
+    let disclosure = widgets::spawn_button(
+        parent,
+        theme,
+        widgets::ButtonProps {
+            label: debug_disclosure_label(debug_expanded),
+            font_size: 13.0,
+            flat: true,
+            auto_label_tint: false,
+            ..default()
+        },
+    );
+    {
+        let mut commands = parent.commands();
+        let mut entity = commands.entity(disclosure);
+        entity.insert((
+            DebugDisclosureButton,
+            widgets::TooltipText("Developer toggles (fog, AI internals)".into()),
+            Node {
+                margin: UiRect::top(Val::Px(6.0)),
+                padding: UiRect::horizontal(Val::Px(0.0)),
+                ..default()
+            },
+        ));
     }
-    let hide = *screen.get() == crate::state::Screen::Diplomacy;
-    for mut node in &mut sections {
-        node.display = if hide { Display::None } else { Display::Flex };
-    }
+    parent
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(2.0),
+                display: if debug_expanded {
+                    Display::Flex
+                } else {
+                    Display::None
+                },
+                ..default()
+            },
+            DebugSectionBody,
+        ))
+        .with_children(|body| {
+            let debug_toggles = [
+                (
+                    ToggleKind::ShowHiddenResources,
+                    "Show hidden resources",
+                    settings.show_hidden_resources,
+                ),
+                (
+                    ToggleKind::ShowAiCivilians,
+                    "Show AI civilians",
+                    settings.show_ai_civilians,
+                ),
+                (
+                    ToggleKind::DisableFog,
+                    "Disable fog of war",
+                    settings.disable_fog,
+                ),
+                (
+                    ToggleKind::ShowAiReasoning,
+                    "Show AI reasoning",
+                    news_debug.show_ai_reasoning,
+                ),
+                (
+                    ToggleKind::ShowAiNonActions,
+                    "Show AI non-actions",
+                    news_debug.show_ai_non_actions,
+                ),
+                (
+                    ToggleKind::ShowRetreatDebug,
+                    "Battle retreat math",
+                    news_debug.show_retreat_debug,
+                ),
+                (
+                    ToggleKind::ShowBattleFirepower,
+                    "Battle firepower detail",
+                    news_debug.show_battle_firepower,
+                ),
+            ];
+            spawn_toggles(body, theme, &debug_toggles);
+        });
 }
 
 fn debug_disclosure_label(expanded: bool) -> String {
@@ -772,8 +742,15 @@ pub fn update_selected_info(
         ));
         commands.spawn((
             Text::new(format!(
-                "{} ships · {} FP · {} hull",
-                marker.ship_count, marker.total_fp, marker.total_hull
+                "{} {} · {} FP · {} hull",
+                marker.ship_count,
+                if marker.ship_count == 1 {
+                    "ship"
+                } else {
+                    "ships"
+                },
+                marker.total_fp,
+                marker.total_hull
             )),
             theme.font(12.0),
             TextColor(theme::TEXT),
@@ -942,69 +919,5 @@ pub fn update_legend(
                 ChildOf(row),
             ));
         }
-    }
-}
-
-// ── Nations list ─────────────────────────────────────────────────────────
-
-pub fn update_nations(
-    vms: Res<ViewModels>,
-    theme: Res<Theme>,
-    mut commands: Commands,
-    sections: Query<Entity, With<NationsSection>>,
-    mut built_version: Local<u64>,
-) {
-    if *built_version == vms.version {
-        return;
-    }
-    let Some(tiles) = vms.map.as_ref() else {
-        return;
-    };
-    let Ok(section) = sections.single() else {
-        return;
-    };
-    *built_version = vms.version;
-    commands.entity(section).despawn_children();
-
-    // Great Powers = non-minor owners; province count = distinct ids.
-    let mut provinces: HashMap<&str, HashSet<u64>> = HashMap::new();
-    let mut order: Vec<&str> = Vec::new();
-    for tile in tiles.iter() {
-        if tile.is_minor || tile.owner.is_empty() || tile.is_sea() {
-            continue;
-        }
-        let entry = provinces.entry(tile.owner.as_str()).or_insert_with(|| {
-            order.push(tile.owner.as_str());
-            HashSet::new()
-        });
-        if let Some(pid) = tile.province_id {
-            entry.insert(pid);
-        }
-    }
-    order.sort_unstable();
-    for name in order {
-        let count = provinces[name].len();
-        let row = commands
-            .spawn((
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    justify_content: JustifyContent::SpaceBetween,
-                    ..default()
-                },
-                ChildOf(section),
-            ))
-            .id();
-        commands.spawn((
-            Text::new(name.to_string()),
-            theme.font(12.0),
-            TextColor(theme::TEXT),
-            ChildOf(row),
-        ));
-        commands.spawn((
-            Text::new(format!("{count} prov")),
-            theme.font(12.0),
-            TextColor(theme::TEXT_DIM),
-            ChildOf(row),
-        ));
     }
 }

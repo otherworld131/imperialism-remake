@@ -266,6 +266,59 @@ pub struct NationLabel {
     pub size: usize,
 }
 
+/// A label ready to render: clamped inside the raster and guaranteed not to
+/// overlap any other placed label.
+pub struct PlacedLabel {
+    /// Uppercased display name.
+    pub name: String,
+    pub pos: Vec2,
+    pub font_size: f32,
+}
+
+/// De-collide + clamp nation labels for a `bounds`-sized raster. Labels are
+/// placed largest-component first; a label whose estimated text box would
+/// overlap an already-placed one is dropped (better absent than illegible).
+/// `font_mult` / `font_min` / `font_max` map component size → font size.
+pub fn place_nation_labels(
+    mut labels: Vec<NationLabel>,
+    bounds: Vec2,
+    font_mult: f32,
+    font_min: f32,
+    font_max: f32,
+) -> Vec<PlacedLabel> {
+    labels.sort_by(|a, b| b.size.cmp(&a.size));
+    let mut placed: Vec<(Vec2, Vec2)> = Vec::new();
+    let mut out = Vec::new();
+    for label in labels {
+        let font_size = ((label.size as f32).sqrt() * font_mult).clamp(font_min, font_max);
+        let name = label.name.to_uppercase();
+        // Clamp the label center so the rendered text stays inside the
+        // clipped frame instead of getting cut mid-word.
+        let half_text = name.chars().count() as f32 * font_size * 0.30;
+        let pos = Vec2::new(
+            label.pos.x.clamp(
+                half_text.min(bounds.x / 2.0),
+                (bounds.x - half_text).max(bounds.x / 2.0),
+            ),
+            label.pos.y.clamp(12.0, bounds.y - 12.0),
+        );
+        let half = Vec2::new(half_text, font_size * 0.65);
+        if placed
+            .iter()
+            .any(|(p, ph)| (pos - *p).abs().cmplt(half + *ph).all())
+        {
+            continue;
+        }
+        placed.push((pos, half));
+        out.push(PlacedLabel {
+            name,
+            pos,
+            font_size,
+        });
+    }
+    out
+}
+
 /// `tiles`: (q, r, group-name) for every labelable land tile.
 pub fn compute_nation_labels(
     tiles: &[(i32, i32, &str)],
@@ -326,4 +379,83 @@ pub fn compute_nation_labels(
         }
     }
     labels
+}
+
+#[cfg(test)]
+mod label_tests {
+    use super::*;
+
+    fn label(name: &str, x: f32, y: f32, size: usize) -> NationLabel {
+        NationLabel {
+            name: name.to_string(),
+            pos: Vec2::new(x, y),
+            size,
+        }
+    }
+
+    #[test]
+    fn overlapping_smaller_label_is_dropped() {
+        let placed = place_nation_labels(
+            vec![
+                label("big", 100.0, 100.0, 100),
+                label("small", 105.0, 102.0, 9),
+            ],
+            Vec2::new(300.0, 220.0),
+            3.0,
+            10.0,
+            18.0,
+        );
+        assert_eq!(placed.len(), 1);
+        assert_eq!(placed[0].name, "BIG");
+    }
+
+    #[test]
+    fn larger_component_wins_regardless_of_input_order() {
+        let placed = place_nation_labels(
+            vec![
+                label("small", 105.0, 102.0, 9),
+                label("big", 100.0, 100.0, 100),
+            ],
+            Vec2::new(300.0, 220.0),
+            3.0,
+            10.0,
+            18.0,
+        );
+        assert_eq!(placed.len(), 1);
+        assert_eq!(placed[0].name, "BIG");
+    }
+
+    #[test]
+    fn disjoint_labels_all_place_and_clamp_inside_bounds() {
+        let bounds = Vec2::new(300.0, 220.0);
+        let placed = place_nation_labels(
+            vec![label("edge", 0.0, 0.0, 25), label("far", 260.0, 200.0, 25)],
+            bounds,
+            3.0,
+            10.0,
+            18.0,
+        );
+        assert_eq!(placed.len(), 2);
+        for p in &placed {
+            assert!(p.pos.y >= 12.0 && p.pos.y <= bounds.y - 12.0);
+            assert!(p.pos.x >= 0.0 && p.pos.x <= bounds.x);
+        }
+    }
+
+    #[test]
+    fn font_size_clamped_to_range() {
+        let placed = place_nation_labels(
+            vec![
+                label("tiny", 50.0, 50.0, 1),
+                label("huge", 250.0, 180.0, 10_000),
+            ],
+            Vec2::new(300.0, 220.0),
+            3.0,
+            10.0,
+            18.0,
+        );
+        let by_name = |n: &str| placed.iter().find(|p| p.name == n).unwrap().font_size;
+        assert_eq!(by_name("TINY"), 10.0);
+        assert_eq!(by_name("HUGE"), 18.0);
+    }
 }
