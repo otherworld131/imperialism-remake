@@ -8,6 +8,7 @@ use bevy::prelude::*;
 
 use crate::game::resources::CameraCentered;
 use crate::map::layers::MapBounds;
+use crate::map::picking::{PickingBlocker, cursor_over_ui};
 
 #[derive(Component)]
 pub struct GameCamera;
@@ -17,6 +18,20 @@ const MIN_ZOOM: f32 = 0.45;
 const MAX_ZOOM: f32 = 2.8;
 const DEFAULT_ZOOM: f32 = 1.25;
 const VERTICAL_PADDING: f32 = 420.0;
+
+/// Per-notch wheel-zoom sensitivity.
+const WHEEL_ZOOM_STEP: f32 = 0.08;
+
+/// New orthographic scale after a wheel notch. Returns `scale` unchanged when
+/// the cursor is over a UI panel (`over_ui`) so scrolling the burger menu or
+/// the setup sidebar never zooms the map behind them (Trello #543).
+fn zoom_after_wheel(scale: f32, scroll_y: f32, over_ui: bool) -> f32 {
+    if over_ui || scroll_y == 0.0 {
+        return scale;
+    }
+    let factor = 1.0 - scroll_y * WHEEL_ZOOM_STEP;
+    (scale * factor).clamp(MIN_ZOOM, MAX_ZOOM)
+}
 
 pub fn setup_camera(mut commands: Commands) {
     commands.spawn((
@@ -61,6 +76,7 @@ pub fn camera_movement(
     mouse_motion: Res<AccumulatedMouseMotion>,
     mouse_scroll: Res<AccumulatedMouseScroll>,
     bounds: Option<Res<MapBounds>>,
+    blockers: Query<&Interaction, With<PickingBlocker>>,
     mut camera: Query<(&mut Transform, &mut Projection), With<GameCamera>>,
 ) {
     let Ok((mut transform, mut projection)) = camera.single_mut() else {
@@ -100,10 +116,14 @@ pub fn camera_movement(
         transform.translation.y += delta.y;
     }
 
-    if mouse_scroll.delta.y != 0.0 {
-        let zoom_factor = 1.0 - mouse_scroll.delta.y * 0.08;
-        orthographic.scale = (orthographic.scale * zoom_factor).clamp(MIN_ZOOM, MAX_ZOOM);
-    }
+    // Wheel zoom, but not when the pointer is over a UI panel that owns the
+    // scroll (burger menu, setup sidebar) — same PickingBlocker gate the map
+    // click/hover path uses (Trello #543).
+    orthographic.scale = zoom_after_wheel(
+        orthographic.scale,
+        mouse_scroll.delta.y,
+        cursor_over_ui(&blockers),
+    );
 
     // +/- step zoom (web parity: HexMap binds '+', '=' and '-').
     if keyboard_free {
@@ -157,5 +177,38 @@ pub fn wrap_camera(
         transform.translation.x -= bounds.width_px;
     } else if dx < -half {
         transform.translation.x += bounds.width_px;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wheel_zoom_over_ui_is_ignored() {
+        // Cursor over a UI panel (burger menu / setup sidebar): scrolling must
+        // not change the map zoom, even with a nonzero wheel delta.
+        assert_eq!(zoom_after_wheel(DEFAULT_ZOOM, 3.0, true), DEFAULT_ZOOM);
+        assert_eq!(zoom_after_wheel(DEFAULT_ZOOM, -3.0, true), DEFAULT_ZOOM);
+    }
+
+    #[test]
+    fn wheel_zoom_over_map_changes_scale() {
+        // Over the bare map, a wheel-up zooms in (smaller scale) and a
+        // wheel-down zooms out (larger scale).
+        assert!(zoom_after_wheel(DEFAULT_ZOOM, 1.0, false) < DEFAULT_ZOOM);
+        assert!(zoom_after_wheel(DEFAULT_ZOOM, -1.0, false) > DEFAULT_ZOOM);
+    }
+
+    #[test]
+    fn wheel_zoom_clamps_to_bounds() {
+        // Runaway scroll can't push scale past the configured limits.
+        assert_eq!(zoom_after_wheel(MIN_ZOOM, 100.0, false), MIN_ZOOM);
+        assert_eq!(zoom_after_wheel(MAX_ZOOM, -100.0, false), MAX_ZOOM);
+    }
+
+    #[test]
+    fn no_wheel_delta_is_a_noop() {
+        assert_eq!(zoom_after_wheel(DEFAULT_ZOOM, 0.0, false), DEFAULT_ZOOM);
     }
 }

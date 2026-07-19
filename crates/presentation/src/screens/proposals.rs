@@ -9,6 +9,7 @@ use bevy::prelude::*;
 use crate::game::commands::GameCommand;
 use crate::game::resources::ProposalPrompt;
 use crate::game::vm::ProposalsVm;
+use crate::screens::session::spawn_proposal_context;
 use crate::theme::{self, Theme};
 use crate::widgets::{self, ButtonActivated, ButtonProps, ModalProps, ModalStack};
 
@@ -164,6 +165,9 @@ fn spawn_rows(parent: &mut ChildSpawnerCommands, theme: &Theme, proposals: &Prop
                         TextColor(theme::TEXT_DIM),
                     ));
                 });
+                // Decision context (card #514): standing + ties, then what
+                // accepting means.
+                spawn_proposal_context(row, theme, proposal);
                 row.spawn(Node {
                     flex_direction: FlexDirection::Row,
                     column_gap: Val::Px(6.0),

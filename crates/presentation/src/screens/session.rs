@@ -191,6 +191,66 @@ fn relation_label(score: i64) -> (String, Color) {
     (format!("{label} ({score:+})"), color)
 }
 
+/// Two compact context lines under a proposal headline (card #514): the
+/// proposer's standing with the player plus existing ties, then what
+/// accepting means. Shared by the diplomatic session and the deferred
+/// proposals modal on the map screen.
+pub fn spawn_proposal_context(
+    parent: &mut ChildSpawnerCommands,
+    theme: &Theme,
+    proposal: &vm::ProposalVm,
+) {
+    let (rel_text, rel_color) = relation_label(proposal.relation_score);
+    let mut ties: Vec<String> = Vec::new();
+    if proposal.at_war {
+        ties.push("at war with you".into());
+    }
+    for treaty in &proposal.treaties {
+        ties.push(match treaty.as_str() {
+            "NonAggressionPact" => "Non-Aggression Pact".into(),
+            other => split_camel(other),
+        });
+    }
+    if proposal.has_embassy {
+        ties.push("embassy".into());
+    } else if proposal.has_consulate {
+        ties.push("consulate".into());
+    }
+    if ties.is_empty() {
+        ties.push("no treaties".into());
+    }
+    parent
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(6.0),
+            flex_wrap: FlexWrap::Wrap,
+            ..default()
+        })
+        .with_children(|line| {
+            line.spawn((
+                Text::new("standing:"),
+                theme.font(11.0),
+                TextColor(theme::TEXT_DIM),
+            ));
+            line.spawn((
+                Text::new(rel_text),
+                theme.font_bold(11.0),
+                TextColor(rel_color),
+            ));
+            line.spawn((
+                Text::new(format!("\u{b7} {}", ties.join(" \u{b7} "))),
+                theme.font(11.0),
+                TextColor(theme::TEXT_DIM),
+            ));
+        });
+    parent.spawn((
+        Text::new(format!("accepting: {}", proposal.accept_hint)),
+        theme.font_italic(11.0),
+        TextColor(theme::TEXT_DIM),
+    ));
+}
+
 // ── Diplomatic session ───────────────────────────────────────────────────
 
 pub fn enter_diplo_session(
@@ -208,8 +268,9 @@ pub fn enter_diplo_session(
     {
         saved.0 = Some((*mode, transform.translation, ortho.scale));
         if let (Some(bounds), Ok(window)) = (bounds.as_deref(), windows.single()) {
-            // Chrome is hidden; leave room for the bottom sheet (~190 px).
-            let usable_h = (window.height() - 190.0).max(200.0);
+            // Chrome is hidden; leave room for the bottom sheet (~220 px —
+            // proposal cards carry two context lines, card #514).
+            let usable_h = (window.height() - 220.0).max(200.0);
             let usable_w = window.width().max(200.0);
             let world_h = bounds.max.y - bounds.min.y + 60.0;
             let fit = (bounds.width_px / usable_w).max(world_h / usable_h);
@@ -373,30 +434,47 @@ pub fn update_diplo_session(
                     row.commands().entity(button).insert(DiploContinueBtn);
                 });
         } else if let Some(proposal) = view.proposals.first() {
-            // Actionable proposal card (observers only watch).
+            // Actionable proposal card (observers only watch): headline plus
+            // the decision context (card #514).
             let expiry = proposal.turns_until_expiry;
             sheet
                 .spawn(Node {
                     flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
+                    align_items: AlignItems::FlexStart,
                     column_gap: Val::Px(12.0),
                     ..default()
                 })
                 .with_children(|row| {
                     spawn_flag(row, &flags, proposal.from_nation_id, 34.0);
-                    row.spawn((
-                        Text::new(proposal.display_text.clone()),
-                        theme.font_bold(14.5),
-                        TextColor(theme::TEXT),
-                    ));
-                    row.spawn((
-                        Text::new(format!(
-                            "(expires in {expiry} turn{})",
-                            if expiry == 1 { "" } else { "s" }
-                        )),
-                        theme.font(11.0),
-                        TextColor(theme::TEXT_DIM),
-                    ));
+                    row.spawn(Node {
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(3.0),
+                        ..default()
+                    })
+                    .with_children(|col| {
+                        col.spawn(Node {
+                            flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::Center,
+                            column_gap: Val::Px(8.0),
+                            ..default()
+                        })
+                        .with_children(|head| {
+                            head.spawn((
+                                Text::new(proposal.display_text.clone()),
+                                theme.font_bold(14.5),
+                                TextColor(theme::TEXT),
+                            ));
+                            head.spawn((
+                                Text::new(format!(
+                                    "(expires in {expiry} turn{})",
+                                    if expiry == 1 { "" } else { "s" }
+                                )),
+                                theme.font(11.0),
+                                TextColor(theme::TEXT_DIM),
+                            ));
+                        });
+                        spawn_proposal_context(col, &theme, proposal);
+                    });
                 });
             sheet
                 .spawn(Node {

@@ -31,10 +31,13 @@ pub enum SetupStep {
     Preview,
 }
 
-/// Preview-step substage (non-observer): pick a nation, then its capital.
+/// Preview-step substage: shape the terrain, then pick a nation, then (non-
+/// observer) place its capital. Each is its own screen with one job
+/// (Trello #528).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PreviewStage {
     #[default]
+    Terrain,
     Nation,
     Capital,
 }
@@ -358,6 +361,10 @@ pub enum SetupAction {
     RandomizeTerrain,
     ResetTerrain,
     PickNation(usize),
+    /// Terrain step → Country step (switches the preview to political mode).
+    EnterNationStage,
+    /// Country step → Terrain step (switches the preview to terrain mode).
+    LeaveNationStage,
     EnterCapitalStage,
     LeaveCapitalStage,
     PickSuggestion(usize),

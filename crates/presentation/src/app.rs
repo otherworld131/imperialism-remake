@@ -835,6 +835,13 @@ fn m11_debug_driver(
                         "display_text": "Shenia proposes an Alliance",
                         "turn_proposed": 1,
                         "turns_until_expiry": 3,
+                        "relation_score": 42,
+                        "relation_status": "NAP",
+                        "at_war": false,
+                        "treaties": ["NonAggressionPact"],
+                        "has_consulate": false,
+                        "has_embassy": true,
+                        "accept_hint": "Allies automatically join each other's wars; breaking it or making a separate peace costs 15 standing.",
                     }
                 ],
                 "offers": [],
@@ -958,11 +965,14 @@ struct M10Driver<'w, 's> {
 /// real setup actions (button paths) so screenshots and the end-to-end
 /// check exercise live code. Scripts:
 /// - `config` — config step as booted.
-/// - `preview` — generate and show the preview step.
-/// - `previewscroll` — preview, then jump the sidebar scroll to the bottom
-///   (proves the terrain sliders scroll cleanly above the footer).
-/// - `capital` — non-observer flow into capital placement (yield preview +
-///   suggestions visible).
+/// - `preview` — generate and show the terrain step (the first preview
+///   step: terrain map + world-shape/terrain-mix sliders).
+/// - `previewscroll` — terrain step, then jump the sidebar scroll to the
+///   bottom (proves the terrain sliders scroll cleanly above the footer).
+/// - `country` — terrain step → Choose Nation → the country step
+///   (political map + nation picker).
+/// - `capital` — non-observer flow through terrain and country steps into
+///   capital placement (yield preview + suggestions visible).
 /// - `save` — begin an observer game, open the Save modal.
 /// - `load` — begin, write two saves, open the Load modal.
 /// - `deletesave` — begin, write a save, delete it through the Load modal's
@@ -971,7 +981,7 @@ struct M10Driver<'w, 's> {
 ///   through the real Load-modal buttons; prints `M10_LOADCLI OK/FAIL`.
 /// - `restart` — begin → end turn → confirm Restart → same seed at turn 1;
 ///   prints `M10_RESTART OK/FAIL`.
-/// - `e2e` — setup → preview → re-roll names → place capital → begin →
+/// - `e2e` — setup → terrain step → country step → re-roll names → place capital → begin →
 ///   two turns → save → load → verify; prints `M10_E2E OK/FAIL` and exits.
 /// - `skip` — begin observer; Skip 5, Skip Until, cancel mid-skip; prints
 ///   `M10_SKIP OK/FAIL` and exits.
@@ -1030,6 +1040,19 @@ fn m10_debug_driver(
                 }
             }
         }
+        // `country`: terrain step → Choose Nation → the country step
+        // (political map + nation picker).
+        "country" => match *step {
+            0 if *frames >= 10 => {
+                p.actions.write(SetupAction::PreviewMap);
+                *step = 1;
+            }
+            1 if preview_ready => {
+                p.actions.write(SetupAction::EnterNationStage);
+                *step = 2;
+            }
+            _ => {}
+        },
         "capital" => match *step {
             0 => {
                 p.config.observer = false;
@@ -1041,16 +1064,20 @@ fn m10_debug_driver(
                 *step = 2;
             }
             2 if preview_ready => {
-                p.actions.write(SetupAction::PickNation(0));
+                p.actions.write(SetupAction::EnterNationStage);
                 *step = 3;
             }
-            3 if p.config.picked_nation == Some(0) => {
-                p.actions.write(SetupAction::EnterCapitalStage);
+            3 if p.ui.stage == setup::PreviewStage::Nation => {
+                p.actions.write(SetupAction::PickNation(0));
                 *step = 4;
             }
-            4 if !p.ui.suggestions.is_empty() => {
-                p.actions.write(SetupAction::PickSuggestion(0));
+            4 if p.config.picked_nation == Some(0) => {
+                p.actions.write(SetupAction::EnterCapitalStage);
                 *step = 5;
+            }
+            5 if !p.ui.suggestions.is_empty() => {
+                p.actions.write(SetupAction::PickSuggestion(0));
+                *step = 6;
             }
             _ => {}
         },
@@ -1060,6 +1087,8 @@ fn m10_debug_driver(
                 *step = 1;
             }
             1 if preview_ready => {
+                // Step through terrain → country, then begin (observer).
+                p.actions.write(SetupAction::EnterNationStage);
                 p.actions.write(SetupAction::BeginCampaign);
                 *step = 2;
             }
@@ -1086,6 +1115,8 @@ fn m10_debug_driver(
                 *step = 1;
             }
             1 if preview_ready => {
+                // Step through terrain → country, then begin (observer).
+                p.actions.write(SetupAction::EnterNationStage);
                 p.actions.write(SetupAction::BeginCampaign);
                 *step = 2;
             }
@@ -1141,6 +1172,8 @@ fn m10_debug_driver(
                     *step = 1;
                 }
                 1 if preview_ready => {
+                    // Step through terrain → country, then begin (observer).
+                    p.actions.write(SetupAction::EnterNationStage);
                     p.actions.write(SetupAction::BeginCampaign);
                     *step = 2;
                 }
@@ -1209,6 +1242,8 @@ fn m10_debug_driver(
                 *step = 1;
             }
             1 if preview_ready => {
+                // Step through terrain → country, then begin (observer).
+                p.actions.write(SetupAction::EnterNationStage);
                 p.actions.write(SetupAction::BeginCampaign);
                 *step = 2;
             }
@@ -1271,6 +1306,8 @@ fn m10_debug_driver(
                 *step = 1;
             }
             1 if preview_ready => {
+                // Step through terrain → country, then begin (observer).
+                p.actions.write(SetupAction::EnterNationStage);
                 p.actions.write(SetupAction::BeginCampaign);
                 *step = 2;
             }
@@ -1313,6 +1350,8 @@ fn m10_debug_driver(
                 *step = 1;
             }
             1 if preview_ready => {
+                // Step through terrain → country, then begin (observer).
+                p.actions.write(SetupAction::EnterNationStage);
                 p.actions.write(SetupAction::BeginCampaign);
                 *step = 2;
             }
@@ -1366,20 +1405,25 @@ fn m10_debug_driver(
                 *step = 1;
             }
             1 if preview_ready => {
-                stash.push(p.ui.gps[0].name.clone()); // pre-reroll name
-                p.actions.write(SetupAction::RerollNames);
+                // Terrain step → country step (where names/nations live).
+                p.actions.write(SetupAction::EnterNationStage);
                 *step = 2;
             }
-            2 if preview_ready && Some(&p.ui.gps[0].name) != stash.first() => {
-                println!("M10_E2E reroll-names: {} -> {}", stash[0], p.ui.gps[0].name);
-                p.actions.write(SetupAction::PickNation(0));
+            2 if p.ui.stage == setup::PreviewStage::Nation => {
+                stash.push(p.ui.gps[0].name.clone()); // pre-reroll name
+                p.actions.write(SetupAction::RerollNames);
                 *step = 3;
             }
-            3 if p.config.picked_nation == Some(0) => {
-                p.actions.write(SetupAction::EnterCapitalStage);
+            3 if preview_ready && Some(&p.ui.gps[0].name) != stash.first() => {
+                println!("M10_E2E reroll-names: {} -> {}", stash[0], p.ui.gps[0].name);
+                p.actions.write(SetupAction::PickNation(0));
                 *step = 4;
             }
-            4 if !p.ui.suggestions.is_empty() => {
+            4 if p.config.picked_nation == Some(0) => {
+                p.actions.write(SetupAction::EnterCapitalStage);
+                *step = 5;
+            }
+            5 if !p.ui.suggestions.is_empty() => {
                 let s = &p.ui.suggestions[0];
                 println!(
                     "M10_E2E capital pick: {} ({}, {}) support {}",
@@ -1387,13 +1431,13 @@ fn m10_debug_driver(
                 );
                 stash.push(format!("{},{}", s.preview.q, s.preview.r));
                 p.actions.write(SetupAction::PickSuggestion(0));
-                *step = 5;
-            }
-            5 if p.ui.picked_capital.is_some() => {
-                p.actions.write(SetupAction::BeginCampaign);
                 *step = 6;
             }
-            6 if in_game => {
+            6 if p.ui.picked_capital.is_some() => {
+                p.actions.write(SetupAction::BeginCampaign);
+                *step = 7;
+            }
+            7 if in_game => {
                 let Some(session) = p.session.0.as_ref() else {
                     return;
                 };
@@ -1423,13 +1467,13 @@ fn m10_debug_driver(
                     session.turn_number()
                 );
                 p.game_commands.write(GameCommand::EndTurn);
-                *step = 7;
-            }
-            7 if turn == 2 => {
-                p.game_commands.write(GameCommand::EndTurn);
                 *step = 8;
             }
-            8 if turn == 3 => {
+            8 if turn == 2 => {
+                p.game_commands.write(GameCommand::EndTurn);
+                *step = 9;
+            }
+            9 if turn == 3 => {
                 if !saveload::write_save(&p.session, "m10-e2e.json.gz", &mut p.toasts) {
                     fail(&mut p.exit, "M10_E2E", "save failed");
                     return;
@@ -1439,10 +1483,10 @@ fn m10_debug_driver(
                     &mut p.next_phase,
                     saveload::saves_dir().join("m10-e2e.json.gz"),
                 );
-                *step = 9;
+                *step = 10;
                 *frames = 0;
             }
-            9 if *frames > 10 => {
+            10 if *frames > 10 => {
                 let Some(session) = p.session.0.as_ref() else {
                     return;
                 };
@@ -1467,7 +1511,7 @@ fn m10_debug_driver(
                         ),
                     );
                 }
-                *step = 10;
+                *step = 11;
             }
             _ => {}
         },
@@ -1477,6 +1521,8 @@ fn m10_debug_driver(
                 *step = 1;
             }
             1 if preview_ready => {
+                // Step through terrain → country, then begin (observer).
+                p.actions.write(SetupAction::EnterNationStage);
                 p.actions.write(SetupAction::BeginCampaign);
                 *step = 2;
             }
