@@ -161,22 +161,53 @@ on a tile the map marker plays the three images ping-pong
 | Ledger | `crates/presentation/assets/icons/ui/Ledger.png` | Open ledger book with entry lines and red bookmark (Ledger screen tab) |
 | Legend | `crates/presentation/assets/icons/ui/Legend.png` | Map-key card with color chips and caption lines (Legend screen tab) |
 
-## terrain/ (7)
+## terrain/ (25)
 
 Per-tile terrain motifs layered over the color fill in Terrain map mode, so
 each tile reads as art (mountains, forest, …) rather than a flat tint.
+
+Cards #542/#540: a tile whose resource is visible to the player renders the
+integrated `<Terrain><Resource>` variant instead of the plain motif — the
+resource is woven into the hex design, replacing the old commodity-icon
+overlay. When a prospector reveals a hidden deposit, the tile art swaps to
+the variant on the next map rebuild. The variant set covers exactly the
+(terrain, resource) pairs map generation produces. Variants are authored in
+`pixel-src/terrain_variants.py`, composing on the plain motifs from
+`pixel-src/sprites.py`.
+
+Forests are special (#540): `Forest` (vivid pines) is the *good timber*
+look, used when the tile carries Timber (developable); `ForestScrub`
+(sparse, desaturated trees with a dead snag) is the timberless scrub wood.
 
 | Name | Output | Pictogram |
 |------|--------|-----------|
 | Mountain | `crates/presentation/assets/icons/terrain/Mountain.png` | Two snow-capped grey peaks |
 | Hills | `crates/presentation/assets/icons/terrain/Hills.png` | Two rounded green mounds |
-| Forest | `crates/presentation/assets/icons/terrain/Forest.png` | Pair of pine trees |
+| Forest | `crates/presentation/assets/icons/terrain/Forest.png` | Pair of vivid pine trees (good-timber forest) |
+| ForestScrub | `crates/presentation/assets/icons/terrain/ForestScrub.png` | Sparse washed-out trees with a bare snag (timberless forest) |
 | Swamp | `crates/presentation/assets/icons/terrain/Swamp.png` | Murky water pool with reeds |
 | Desert | `crates/presentation/assets/icons/terrain/Desert.png` | Sun over a dune with a cactus |
 | Tundra | `crates/presentation/assets/icons/terrain/Tundra.png` | Snowfield with a bare shrub and snowflake |
-| Grassland | `crates/presentation/assets/icons/terrain/Grassland.png` | Tufts of grass blades |
+| Grassland | `crates/presentation/assets/icons/terrain/Grassland.png` | Tufts of grass blades (not shown on the map — plain grassland is open ground) |
+| GrasslandGrain | `crates/presentation/assets/icons/terrain/GrasslandGrain.png` | Two staggered rows of golden wheat |
+| GrasslandFruit | `crates/presentation/assets/icons/terrain/GrasslandFruit.png` | Orchard tree studded with red fruit over grass tufts |
+| GrasslandCotton | `crates/presentation/assets/icons/terrain/GrasslandCotton.png` | Three low bushes heavy with white bolls |
+| GrasslandLivestock | `crates/presentation/assets/icons/terrain/GrasslandLivestock.png` | Grazing cow with white hide patch |
+| GrasslandHorses | `crates/presentation/assets/icons/terrain/GrasslandHorses.png` | Standing horse in profile |
+| HillsWool | `crates/presentation/assets/icons/terrain/HillsWool.png` | Three sheep grazing the mounds |
+| HillsCoal | `crates/presentation/assets/icons/terrain/HillsCoal.png` | Exposed black seam wedge plus spoil lumps |
+| HillsIron | `crates/presentation/assets/icons/terrain/HillsIron.png` | Rust-flecked ore boulders breaking the turf |
+| HillsGold | `crates/presentation/assets/icons/terrain/HillsGold.png` | Scattered gold nuggets with glints |
+| HillsGems | `crates/presentation/assets/icons/terrain/HillsGems.png` | Two clusters of teal crystal spikes |
+| MountainCoal | `crates/presentation/assets/icons/terrain/MountainCoal.png` | Coal seam wedge on the scree apron |
+| MountainIron | `crates/presentation/assets/icons/terrain/MountainIron.png` | Rust-stained boulders on the lower slope |
+| MountainGold | `crates/presentation/assets/icons/terrain/MountainGold.png` | Gold vein zigzagging down the lit face |
+| MountainGems | `crates/presentation/assets/icons/terrain/MountainGems.png` | Teal crystals at the mountain foot |
+| DesertOil | `crates/presentation/assets/icons/terrain/DesertOil.png` | Black seep pooling in the dune hollow |
+| SwampOil | `crates/presentation/assets/icons/terrain/SwampOil.png` | Oil slick riding the pool surface |
+| TundraOil | `crates/presentation/assets/icons/terrain/TundraOil.png` | Dark seep staining the snowfield |
 
-## ground/ (8)
+## ground/ (9)
 
 Seamlessly tileable ground textures (authored in
 `pixel-src/ground.py`), repeated across the merged tile-fill meshes with
@@ -188,7 +219,8 @@ used in every map mode. Unlike the icon groups these fill all 32×32 pixels
 |------|--------|---------|
 | Grassland | `crates/presentation/assets/icons/ground/Grassland.png` | Meadow green, grass tufts, sparse straw flowers |
 | Hills | `crates/presentation/assets/icons/ground/Hills.png` | Tan folds with diagonal contour dashes |
-| Forest | `crates/presentation/assets/icons/ground/Forest.png` | Deep green with underbrush clumps |
+| Forest | `crates/presentation/assets/icons/ground/Forest.png` | Deep green with underbrush clumps (good-timber forest) |
+| ForestScrub | `crates/presentation/assets/icons/ground/ForestScrub.png` | Washed-out grey-green, sparser brush (timberless forest, card #540) |
 | Mountain | `crates/presentation/assets/icons/ground/Mountain.png` | Grey scree, crag dashes, snow flecks |
 | Desert | `crates/presentation/assets/icons/ground/Desert.png` | Sand with wind-combed ripple dashes |
 | Swamp | `crates/presentation/assets/icons/ground/Swamp.png` | Murk green with glinting pools |

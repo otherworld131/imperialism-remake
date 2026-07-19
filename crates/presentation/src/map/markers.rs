@@ -240,7 +240,11 @@ pub fn rebuild_marker_layers(
             }
         }
 
-        // ── Resource icons + improvement badges (terrain mode) ──────────
+        // ── Tile development badges (terrain mode) ──────────────────────
+        // Resource art is baked into the tile itself (cards #542/#540: the
+        // terrain motif swaps to a resource-integrated variant), so the old
+        // commodity-icon overlay is gone. What remains here is the small
+        // improvement-level badge on developed resource tiles.
         if settings.show_resources && *mode == MapMode::Terrain {
             let parent = group(&mut commands, 2.1, Some(LodGate::Resources));
             for tile in tiles {
@@ -253,23 +257,10 @@ pub fn rebuild_marker_layers(
                 if tile.resource_hidden && !settings.show_hidden_resources {
                     continue;
                 }
-                let Some(resource) = tile.resource.as_deref() else {
+                if tile.resource.is_none() {
                     continue;
-                };
-                let Some(image) = icons.get("commodities", resource) else {
-                    continue;
-                };
+                }
                 let p = geometry::hex_to_world(tile.q, tile.r);
-                let alpha = if tile.resource_hidden { 0.85 } else { 0.75 };
-                spawn_sprite(
-                    &mut commands,
-                    parent,
-                    image,
-                    p,
-                    0.0,
-                    rs(12.6),
-                    Color::WHITE.with_alpha(alpha),
-                );
                 if tile.improvement_level > 0 && tile.max_improvement_level > 0 {
                     let fully = tile.improvement_level >= tile.max_improvement_level;
                     let text = format!("{}/{}", tile.improvement_level, tile.max_improvement_level);

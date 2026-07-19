@@ -8,12 +8,14 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 
 /// The repeating ground textures the map renderer expects under
-/// `icons/ground/` — every terrain type plus the sea. A missing entry is
+/// `icons/ground/` — every terrain type plus the sea, plus the washed-out
+/// scrub ground for timberless forest tiles (card #540). A missing entry is
 /// not fatal (tiles fall back to flat fills) but is warned about loudly.
-pub const GROUND_TEXTURES: [&str; 8] = [
+pub const GROUND_TEXTURES: [&str; 9] = [
     "Grassland",
     "Hills",
     "Forest",
+    "ForestScrub",
     "Mountain",
     "Desert",
     "Swamp",

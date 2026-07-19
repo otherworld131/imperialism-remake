@@ -74,6 +74,13 @@ fn debug_screenshot(
     if std::env::var("MAP_DEBUG_AI_CIVS").as_deref() == Ok("1") && !settings.show_ai_civilians {
         settings.show_ai_civilians = true;
     }
+    // `MAP_DEBUG_HIDDEN_RES=1` reveals undiscovered deposits so captures
+    // show the resource-integrated tile art (cards #542/#540) everywhere.
+    if std::env::var("MAP_DEBUG_HIDDEN_RES").as_deref() == Ok("1")
+        && !settings.show_hidden_resources
+    {
+        settings.show_hidden_resources = true;
+    }
     // `MAP_DEBUG_BURGER=1` holds the top-bar burger menu open so the
     // capture shows the Display / Debug / Quit sections.
     if std::env::var("MAP_DEBUG_BURGER").as_deref() == Ok("1") {

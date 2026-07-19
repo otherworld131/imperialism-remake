@@ -310,6 +310,54 @@ pub fn tile_fill_color(tile: &MapTile, mode: MapMode, fill_map: &HashMap<String,
     }
 }
 
+/// Ground-texture key for a land tile in terrain mode. Forest tiles without
+/// Timber are scrub wood (card #540) and use the washed-out `ForestScrub`
+/// ground instead of the vivid deep-green `Forest` one.
+fn ground_texture_name(tile: &MapTile) -> &str {
+    if tile.terrain == "Forest" && tile.resource.as_deref() != Some("Timber") {
+        "ForestScrub"
+    } else {
+        &tile.terrain
+    }
+}
+
+/// Terrain motif sprite name for one land tile in terrain mode
+/// (cards #542 / #540).
+///
+/// - A tile whose resource is visible to the player uses the integrated
+///   `terrain/<Terrain><Resource>` art — the resource is woven into the hex
+///   design (grain rows, coal seams, sheep, …) instead of an icon overlay.
+///   Hidden deposits keep the plain art until a prospector reveals them;
+///   the swap then happens on the next map rebuild (view-model version bump).
+/// - The "Show resources" display toggle now switches between plain and
+///   resource-integrated tile art (plus the improvement badges).
+/// - Forests (#540): Timber present → the vivid `Forest` pines (good,
+///   developable timber); no Timber → the sparse, desaturated `ForestScrub`.
+///   This is the tile's identity, independent of the display toggle.
+/// - Plain grassland stays motif-free (open ground).
+pub fn terrain_motif_name(tile: &MapTile, settings: &RenderSettings) -> Option<String> {
+    if tile.is_sea() {
+        return None;
+    }
+    if tile.terrain == "Forest" {
+        return Some(if tile.resource.as_deref() == Some("Timber") {
+            "Forest".to_string()
+        } else {
+            "ForestScrub".to_string()
+        });
+    }
+    match tile.resource.as_deref() {
+        Some(resource)
+            if settings.show_resources
+                && (!tile.resource_hidden || settings.show_hidden_resources) =>
+        {
+            Some(format!("{}{}", tile.terrain, resource))
+        }
+        _ if tile.terrain == "Grassland" => None,
+        _ => Some(tile.terrain.clone()),
+    }
+}
+
 /// Fill spec for one tile: a multiplier color plus an optional repeating
 /// pixel-art ground texture (keyed by terrain name for mesh grouping).
 /// Terrain mode samples ground textures for land, the sea is textured in
@@ -323,9 +371,17 @@ pub fn tile_fill_spec(
     let ground = if tile.is_sea() {
         icons.get("ground", "Sea").map(|h| ("Sea".to_string(), h))
     } else if mode == MapMode::Terrain {
+        let key = ground_texture_name(tile);
         icons
-            .get("ground", &tile.terrain)
-            .map(|h| (tile.terrain.clone(), h))
+            .get("ground", key)
+            .map(|h| (key.to_string(), h))
+            .or_else(|| {
+                // Scrub texture missing → the vivid forest ground still
+                // beats a flat fill.
+                icons
+                    .get("ground", &tile.terrain)
+                    .map(|h| (tile.terrain.clone(), h))
+            })
     } else {
         None
     };
@@ -593,21 +649,24 @@ pub fn rebuild_layers(
     // ── Pass 1a: terrain motif sprites (terrain mode) ───────────────────
     // Every land tile gets an authored terrain icon (mountains, forest,
     // swamp, …) layered over its color fill, so terrain reads as art and
-    // not just a flat tint. These live in the static layer because they
-    // depend only on the map, not on per-turn marker state.
+    // not just a flat tint. Tiles with a visible resource swap to the
+    // integrated `<Terrain><Resource>` variant (cards #542/#540) — the
+    // resource is part of the hex art, not an overlay. These live in the
+    // static layer: a prospector's find bumps the view-model version and
+    // rebuilds them with the revealed variant.
     if *mode == MapMode::Terrain {
         let terrain_size = HEX_SIZE * 1.5;
         for tile in tiles {
-            if tile.is_sea() {
+            // Plain grassland reads cleaner as open ground: no motif (the
+            // grass-tuft art looked like stray clutter on every tile).
+            let Some(motif) = terrain_motif_name(tile, &settings) else {
                 continue;
-            }
-            // Plains read cleaner as open ground: the grass-tuft motif looked
-            // like stray clutter on every grassland tile, so grassland keeps
-            // only its ground texture (other terrains keep their motifs).
-            if tile.terrain == "Grassland" {
-                continue;
-            }
-            let Some(image) = icons.get("terrain", &tile.terrain) else {
+            };
+            // Missing variant art falls back to the plain terrain motif.
+            let Some(image) = icons
+                .get("terrain", &motif)
+                .or_else(|| icons.get("terrain", &tile.terrain))
+            else {
                 continue;
             };
             let p = geometry::hex_to_world(tile.q, tile.r);
@@ -1508,12 +1567,12 @@ mod tests {
     #[test]
     fn terrain_mode_owned_land_tints_the_texture() {
         let (color, texture) = tile_fill_spec(
-            &tile("Forest", "Red"),
+            &tile("Hills", "Red"),
             MapMode::Terrain,
             &HashMap::new(),
             &icons_with_ground(),
         );
-        assert_eq!(texture.expect("forest ground texture").0, "Forest");
+        assert_eq!(texture.expect("hills ground texture").0, "Hills");
         assert_ne!(color, Color::WHITE, "nation tint must survive texturing");
     }
 
@@ -1623,6 +1682,103 @@ mod tests {
             expected_phases(width_b),
             "textured UV phase shifts must follow the new map width"
         );
+    }
+
+    fn tile_with_resource(terrain: &str, resource: &str, hidden: bool) -> MapTile {
+        let mut t = tile(terrain, "");
+        t.resource = Some(resource.to_string());
+        t.resource_hidden = hidden;
+        t
+    }
+
+    /// Cards #542/#540: visible resources swap the terrain motif to the
+    /// integrated `<Terrain><Resource>` variant; hidden deposits keep the
+    /// plain art until revealed; forests key vivid-vs-scrub on Timber.
+    #[test]
+    fn terrain_motif_integrates_visible_resources() {
+        let settings = RenderSettings::default();
+        assert_eq!(
+            terrain_motif_name(&tile_with_resource("Hills", "Coal", false), &settings),
+            Some("HillsCoal".to_string())
+        );
+        assert_eq!(
+            terrain_motif_name(&tile_with_resource("Grassland", "Grain", false), &settings),
+            Some("GrasslandGrain".to_string())
+        );
+        // Undiscovered deposit → plain art until a prospector reveals it.
+        assert_eq!(
+            terrain_motif_name(&tile_with_resource("Mountain", "Gold", true), &settings),
+            Some("Mountain".to_string())
+        );
+        // Debug reveal shows the integrated art for hidden deposits too.
+        let debug = RenderSettings {
+            show_hidden_resources: true,
+            ..settings
+        };
+        assert_eq!(
+            terrain_motif_name(&tile_with_resource("Mountain", "Gold", true), &debug),
+            Some("MountainGold".to_string())
+        );
+        // "Show resources" off → plain terrain art everywhere.
+        let plain = RenderSettings {
+            show_resources: false,
+            ..settings
+        };
+        assert_eq!(
+            terrain_motif_name(&tile_with_resource("Hills", "Coal", false), &plain),
+            Some("Hills".to_string())
+        );
+        // Bare grassland stays motif-free; sea never has a motif.
+        assert_eq!(terrain_motif_name(&tile("Grassland", ""), &settings), None);
+        assert_eq!(terrain_motif_name(&tile("Sea", ""), &settings), None);
+    }
+
+    /// Card #540: two forest looks — vivid pines for good (Timber) forest,
+    /// desaturated scrub otherwise — independent of the display toggle.
+    #[test]
+    fn forest_keys_vivid_vs_scrub_on_timber() {
+        for show_resources in [true, false] {
+            let settings = RenderSettings {
+                show_resources,
+                ..RenderSettings::default()
+            };
+            assert_eq!(
+                terrain_motif_name(&tile_with_resource("Forest", "Timber", false), &settings),
+                Some("Forest".to_string())
+            );
+            assert_eq!(
+                terrain_motif_name(&tile("Forest", ""), &settings),
+                Some("ForestScrub".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn scrub_forest_uses_scrub_ground_texture() {
+        let icons = icons_with_ground();
+        let (_, texture) = tile_fill_spec(
+            &tile("Forest", ""),
+            MapMode::Terrain,
+            &HashMap::new(),
+            &icons,
+        );
+        assert_eq!(texture.expect("scrub ground").0, "ForestScrub");
+        let (_, texture) = tile_fill_spec(
+            &tile_with_resource("Forest", "Timber", false),
+            MapMode::Terrain,
+            &HashMap::new(),
+            &icons,
+        );
+        assert_eq!(texture.expect("vivid ground").0, "Forest");
+        // Missing scrub texture → vivid forest ground beats a flat fill.
+        let vivid_only = IconAssets::for_test(&[("ground", "Forest")]);
+        let (_, texture) = tile_fill_spec(
+            &tile("Forest", ""),
+            MapMode::Terrain,
+            &HashMap::new(),
+            &vivid_only,
+        );
+        assert_eq!(texture.expect("fallback ground").0, "Forest");
     }
 
     #[test]
