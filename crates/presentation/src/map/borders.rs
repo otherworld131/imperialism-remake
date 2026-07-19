@@ -11,8 +11,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::game::vm::MapTile;
 use crate::map::organic::{
-    self, AnchoredOpts, BORDER_OCTAVES, BORDER_SEED, BORDER_SMOOTHING, COAST_AMPLITUDE_FRAC,
-    COAST_SUBDIV, COUNTRY_BORDER_AMPLITUDE_FRAC, COUNTRY_BORDER_SUBDIV, Edge,
+    self, AnchoredOpts, BORDER_OCTAVES, BORDER_SEED, BORDER_SLOPE_CLAMP, BORDER_SMOOTHING,
+    COAST_AMPLITUDE_FRAC, COAST_SUBDIV, COUNTRY_BORDER_AMPLITUDE_FRAC, COUNTRY_BORDER_SUBDIV, Edge,
     PROVINCE_BORDER_AMPLITUDE_FRAC, PROVINCE_BORDER_SUBDIV, Point, border_frequency,
     ruggedness_frequency, ruggedness_multiplier, smooth_polyline_anchored, stitch_polylines,
 };
@@ -273,6 +273,9 @@ pub fn classify(tiles: &[MapTile], hex_size: f64) -> MapBorders {
         seed: BORDER_SEED,
         smoothing: BORDER_SMOOTHING,
         closed: false,
+        // Anti-spike taper: strips and strokes share this opts value, so
+        // clamped curves still coincide exactly (see `slope_clamp` docs).
+        slope_clamp: BORDER_SLOPE_CLAMP,
     };
 
     // ── Stroke polylines: stitch each bucket and smooth with canonical

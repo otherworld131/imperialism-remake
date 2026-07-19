@@ -442,8 +442,10 @@ pub fn rebuild_marker_layers(
             }
         }
 
-        // ── Civilians on tiles ───────────────────────────────────────────
-        {
+        // ── Civilians on tiles (terrain map only) ────────────────────────
+        // Civilian workers are an economic-map affordance: on the political
+        // and overlay maps they only cluttered the nation fills.
+        if *mode == MapMode::Terrain {
             let parent = group(&mut commands, 3.2, Some(LodGate::Civilians));
             let civ_size = rs((RH * 0.9).max(12.0));
             for tile in tiles {
@@ -951,8 +953,8 @@ fn spawn_labels(
                 TextStyle2d {
                     font: theme.fonts.italic.clone(),
                     size: rs(14.0),
-                    color: Color::srgba(200.0 / 255.0, 230.0 / 255.0, 1.0, 0.6),
-                    shadow: Color::srgba(0.0, 0.0, 0.0, 0.3),
+                    color: Color::srgba(200.0 / 255.0, 230.0 / 255.0, 1.0, 0.75),
+                    shadow: Color::srgba(0.0, 0.0, 0.0, 0.55),
                 },
             );
         }
@@ -1046,17 +1048,17 @@ fn spawn_labels(
         {
             continue;
         }
-        let size = ((label.size as f32).sqrt() * 3.0).clamp(12.0, 28.0);
+        let size = ((label.size as f32).sqrt() * 3.0).clamp(14.0, 28.0);
         let pos = react_to_world([label.cx, label.cy]);
         let (color, shadow) = if label.is_anarchic {
             (
                 Color::srgba(0.0, 0.0, 0.0, 0.95),
-                Color::srgba(1.0, 1.0, 1.0, 0.55),
+                Color::srgba(1.0, 1.0, 1.0, 0.8),
             )
         } else {
             (
-                Color::srgba(1.0, 1.0, 1.0, 0.9),
-                Color::srgba(0.0, 0.0, 0.0, 0.5),
+                Color::srgba(1.0, 1.0, 1.0, 0.96),
+                Color::srgba(0.0, 0.0, 0.0, 0.75),
             )
         };
         spawn_label_text(
@@ -1092,7 +1094,7 @@ fn spawn_labels(
     let parent = group(commands, 2.6, Some(LodGate::PastLabels));
     for name in order {
         let (sx, sy, count) = centroids[name];
-        let size = ((count as f32).sqrt() * 2.5).clamp(7.0, 14.0);
+        let size = ((count as f32).sqrt() * 2.5).clamp(9.0, 15.0);
         let pos = react_to_world([sx / count as f64, sy / count as f64]);
         spawn_label_text(
             commands,
@@ -1102,12 +1104,26 @@ fn spawn_labels(
             TextStyle2d {
                 font: theme.fonts.regular.clone(),
                 size: rs(size),
-                color: Color::srgba(230.0 / 255.0, 220.0 / 255.0, 190.0 / 255.0, 0.9),
-                shadow: Color::srgba(0.0, 0.0, 0.0, 0.55),
+                color: Color::srgba(1.0, 0.96, 0.86, 0.98),
+                shadow: Color::srgba(0.0, 0.0, 0.0, 0.8),
             },
         );
     }
 }
+
+/// Map place-name label root: `0` is the authored font size in world units.
+/// [`scale_map_labels`] boosts the whole label (outline included) whenever
+/// that size would fall below a readable on-screen height at the current
+/// zoom.
+#[derive(Component)]
+pub struct MapLabelScale(pub f32);
+
+/// Minimum on-screen glyph height (in window pixels) a map label is allowed
+/// to render at before [`scale_map_labels`] boosts it.
+const MIN_LABEL_SCREEN_PX: f32 = 14.0;
+/// Upper bound for the legibility boost, so far-out zooms don't turn labels
+/// into map-covering banners.
+const MAX_LABEL_BOOST: f32 = 3.0;
 
 fn spawn_label_text(
     commands: &mut Commands,
@@ -1116,19 +1132,40 @@ fn spawn_label_text(
     text: &str,
     style: TextStyle2d,
 ) {
-    let offset = (style.size * 0.06).max(0.8);
-    commands.spawn((
-        Text2d::new(text.to_string()),
-        TextFont {
-            font: style.font.clone(),
-            font_size: style.size,
-            ..default()
-        },
-        TextColor(style.shadow),
-        Anchor::CENTER,
-        Transform::from_xyz(pos.x + offset, pos.y - offset, -0.005),
-        ChildOf(parent),
-    ));
+    let offset = (style.size * 0.07).max(1.0);
+    let root = commands
+        .spawn((
+            Transform::from_xyz(pos.x, pos.y, 0.0),
+            Visibility::default(),
+            MapLabelScale(style.size),
+            ChildOf(parent),
+        ))
+        .id();
+    // Full 8-direction outline (not a single drop shadow): place names must
+    // stay legible over any terrain/nation fill.
+    for (dx, dy) in [
+        (-1.0, -1.0),
+        (1.0, -1.0),
+        (-1.0, 1.0),
+        (1.0, 1.0),
+        (0.0, -1.0),
+        (0.0, 1.0),
+        (-1.0, 0.0),
+        (1.0, 0.0),
+    ] {
+        commands.spawn((
+            Text2d::new(text.to_string()),
+            TextFont {
+                font: style.font.clone(),
+                font_size: style.size,
+                ..default()
+            },
+            TextColor(style.shadow),
+            Anchor::CENTER,
+            Transform::from_xyz(dx * offset, dy * offset, -0.005),
+            ChildOf(root),
+        ));
+    }
     commands.spawn((
         Text2d::new(text.to_string()),
         TextFont {
@@ -1138,9 +1175,33 @@ fn spawn_label_text(
         },
         TextColor(style.color),
         Anchor::CENTER,
-        Transform::from_xyz(pos.x, pos.y, 0.0),
-        ChildOf(parent),
+        Transform::from_xyz(0.0, 0.0, 0.0),
+        ChildOf(root),
     ));
+}
+
+/// Keep map place names readable at any zoom: when a label's authored world
+/// size would render below [`MIN_LABEL_SCREEN_PX`] on screen, scale the whole
+/// label root up to compensate (outline offsets scale along with the glyphs).
+pub fn scale_map_labels(
+    camera: Query<&Projection, With<crate::map::camera::GameCamera>>,
+    mut labels: Query<(&MapLabelScale, &mut Transform)>,
+) {
+    let Ok(Projection::Orthographic(ortho)) = camera.single() else {
+        return;
+    };
+    let ortho_scale = ortho.scale.max(f32::EPSILON);
+    for (base, mut transform) in &mut labels {
+        let on_screen = base.0 / ortho_scale;
+        let boost = if on_screen > 0.0 {
+            (MIN_LABEL_SCREEN_PX / on_screen).clamp(1.0, MAX_LABEL_BOOST)
+        } else {
+            1.0
+        };
+        if (transform.scale.x - boost).abs() > 1e-3 {
+            transform.scale = Vec3::new(boost, boost, 1.0);
+        }
+    }
 }
 
 /// Blink the selected troop indicator / civilian, and show the halo behind

@@ -7,7 +7,7 @@ use crate::game::commands::{self, GameCommand};
 use crate::game::refresh;
 use crate::game::resources::{
     Blink, CameraCentered, CurrentTurnNews, DataVersion, DeferredProposals, DeployMode, DiploUi,
-    EngineerPrompt, FleetTargets, GameMeta, MoveTargets, NewsArchive, NewsDebugSettings,
+    EngineerPrompt, FleetTargets, FreshRail, GameMeta, MoveTargets, NewsArchive, NewsDebugSettings,
     PendingMoveList, PendingMoves, PerspectiveNation, PrevLedger, ProposalPrompt, ProvinceUnits,
     QueuedDiplomacyAction, RailLinkOptions, RenderSettings, SelectedCivilian, SelectedNavy,
     SelectedShips, SelectedUnits, SessionRes, TileIndex, TreatyMarkerIndex, TurnInfo, ViewModels,
@@ -1755,6 +1755,7 @@ pub fn run_game() {
         .init_resource::<PendingMoveList>()
         .init_resource::<MoveTargets>()
         .init_resource::<FleetTargets>()
+        .init_resource::<FreshRail>()
         .init_resource::<ProvinceUnits>()
         .init_resource::<SelectedUnits>()
         .init_resource::<SelectedShips>()
@@ -1826,6 +1827,8 @@ pub fn run_game() {
                 tick_blink,
                 markers::blink_selected_markers,
                 markers::animate_map_markers,
+                markers::scale_map_labels,
+                layers::animate_fresh_rail,
                 debug_screenshot,
                 turn_runner::poll_begin_task.run_if(in_state(TurnPhase::Processing)),
                 turn_runner::poll_turn_task.run_if(in_state(TurnPhase::Processing)),

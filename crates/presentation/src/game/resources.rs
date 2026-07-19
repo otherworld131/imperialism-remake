@@ -55,6 +55,26 @@ pub struct TileIndex {
     pub by_coord: HashMap<(i32, i32), usize>,
 }
 
+/// A physical rail link between two hexes, in the canonical draw-once form
+/// used by the renderer: the first endpoint owns direction indices 0-2.
+pub type RailEdge = ((i32, i32), (i32, i32));
+
+/// Rail links that appeared with the latest turn change. The map renderer
+/// pulses a highlight on these so freshly laid track is easy to spot; the
+/// set rotates on every turn-label change, so the glow lasts exactly one
+/// turn. Reset when a new session is installed (new game / load).
+#[derive(Resource, Default)]
+pub struct FreshRail {
+    /// Turn label the baseline below was captured at (`None` = no baseline
+    /// yet — nothing is highlighted until a turn has resolved).
+    pub fetched_turn: Option<String>,
+    /// All rail edges known at the last turn boundary, plus any revealed
+    /// mid-turn (fog toggles must not read as new construction).
+    pub prev_edges: HashSet<RailEdge>,
+    /// Edges that are new since the previous turn.
+    pub fresh_edges: HashSet<RailEdge>,
+}
+
 /// Calendar display for the HUD, updated from each turn report.
 #[derive(Resource)]
 pub struct TurnInfo {

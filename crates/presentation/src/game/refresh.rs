@@ -4,10 +4,43 @@
 use bevy::prelude::*;
 
 use crate::game::resources::{
-    DataVersion, PendingMoveList, PerspectiveNation, PrevLedger, RenderSettings, SessionRes,
-    TileIndex, TurnInfo, ViewModels,
+    DataVersion, FreshRail, PendingMoveList, PerspectiveNation, PrevLedger, RailEdge,
+    RenderSettings, SessionRes, TileIndex, TurnInfo, ViewModels,
 };
 use crate::game::vm;
+use crate::map::layers::RAIL_DIRS;
+
+/// Rotate the fresh-rail tracker against the freshly fetched map tiles: on a
+/// turn-label change the difference against the previous turn's edge set
+/// becomes the highlighted "laid last turn" set; mid-turn refreshes only
+/// absorb newly revealed edges into the baseline (rail cannot be built
+/// mid-turn — every order resolves at end turn).
+fn update_fresh_rail(fresh: &mut FreshRail, tiles: &[vm::MapTile], turn_label: &str) {
+    let current: std::collections::HashSet<RailEdge> = tiles
+        .iter()
+        .flat_map(|t| {
+            t.rail_links
+                .iter()
+                .filter(|&&dir| dir <= 2)
+                .map(|&dir| {
+                    let (dq, dr) = RAIL_DIRS[dir as usize];
+                    ((t.q, t.r), (t.q + dq, t.r + dr))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    if fresh.fetched_turn.as_deref() == Some(turn_label) {
+        fresh.prev_edges.extend(current);
+        return;
+    }
+    fresh.fresh_edges = if fresh.fetched_turn.is_some() {
+        current.difference(&fresh.prev_edges).copied().collect()
+    } else {
+        Default::default()
+    };
+    fresh.prev_edges = current;
+    fresh.fetched_turn = Some(turn_label.to_string());
+}
 
 pub fn refresh_view_models(
     session: Res<SessionRes>,
@@ -19,6 +52,7 @@ pub fn refresh_view_models(
     mut index: ResMut<TileIndex>,
     mut pending_moves: ResMut<PendingMoveList>,
     mut prev_ledger: ResMut<PrevLedger>,
+    mut fresh_rail: ResMut<FreshRail>,
 ) {
     if vms.version == data_version.0 && vms.fetched_fog_disabled == settings.disable_fog {
         return;
@@ -63,6 +97,7 @@ pub fn refresh_view_models(
                 .enumerate()
                 .map(|(i, t)| ((t.q, t.r), i))
                 .collect();
+            update_fresh_rail(&mut fresh_rail, &tiles, &turn_info.label);
             vms.map = Some(tiles);
         }
         Ok(Err(err)) => {
