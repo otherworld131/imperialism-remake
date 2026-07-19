@@ -439,6 +439,7 @@ pub fn get_navy_markers(
 
         let owner_name = nation.name.as_str();
         let owner_color = format!("{:?}", nation.color);
+        let iron_navy = nation_has_iron_navy_tech(game, nation);
 
         // Fleet markers always represent ships at their actual location. A
         // Beachhead assignment is just intent until `pending_landings`
@@ -553,6 +554,7 @@ pub fn get_navy_markers(
                     owner_name,
                     &owner_color,
                     "fleet",
+                    iron_navy,
                     None,
                     None,
                     &zone_ships,
@@ -621,6 +623,7 @@ pub fn get_navy_markers(
                 owner_name,
                 &owner_color,
                 "beachhead",
+                iron_navy,
                 Some(target_province_name),
                 coast_tile,
                 &ships,
@@ -634,6 +637,26 @@ pub fn get_navy_markers(
     Ok(serde_json::Value::Array(markers))
 }
 
+/// True when `nation` has researched a technology that unlocks an iron /
+/// steam warship (ship era ≥ 2, e.g. "Advanced Iron Working" → Ironclad).
+/// Drives the fleet-marker art era on the map (card #544): sail silhouettes
+/// before, battleship/cruiser silhouettes after.
+fn nation_has_iron_navy_tech(game: &GameState, nation: &domain::nation::Nation) -> bool {
+    use domain::military::ships::ShipType;
+    use domain::tech::TechEffect;
+    nation.researched_techs.iter().any(|tid| {
+        game.game_data.tech_tree.get(*tid).is_some_and(|tech| {
+            tech.effects.iter().any(|effect| match effect {
+                TechEffect::UnlockShip(name) => name.parse::<ShipType>().is_ok_and(|ship_type| {
+                    let stats = game.game_data.ship_stats(ship_type);
+                    stats.category == ShipCategory::Warship && stats.era >= 2
+                }),
+                _ => false,
+            })
+        })
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_marker(
     anchor: domain::hex::HexCoord,
@@ -641,6 +664,7 @@ fn build_marker(
     owner_name: &str,
     owner_color: &str,
     kind: &str,
+    iron_navy: bool,
     target_province: Option<String>,
     target_hex: Option<domain::hex::HexCoord>,
     ships: &[&Ship],
@@ -677,6 +701,9 @@ fn build_marker(
         "total_hull": total_hull,
         "by_type": by_type,
         "by_operation": by_operation,
+        // Card #544: the owning nation has unlocked iron/steam warships —
+        // the map draws battleship/cruiser silhouettes instead of sail ships.
+        "iron_navy": iron_navy,
         // Always true at emission — invisible markers are filtered upstream.
         // The field is kept in the contract so the frontend never has to
         // re-derive visibility.

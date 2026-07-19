@@ -714,6 +714,11 @@ pub fn rebuild_layers(
         // (card #539), in one of a few hash-picked appearance variants.
         let river_sources = river_source_coords(tiles);
         for tile in tiles {
+            // Capital hexes show their city art instead (card #541) — a
+            // motif underneath would just clutter the palace / town cluster.
+            if tile.is_capital {
+                continue;
+            }
             let river_variant = river_sources
                 .contains(&(tile.q, tile.r))
                 .then(|| river_source_variant(tile.q, tile.r));
@@ -1176,42 +1181,9 @@ pub fn rebuild_layers(
         }
     }
 
-    // ── Pass 3c: provincial-capital dots (white dot + dark outline) ─────
-    {
-        let mut dots = MeshBuilder2d::default();
-        let mut outlines = MeshBuilder2d::default();
-        let dot_r = 2.5 * REACT_SCALE;
-        for tile in tiles {
-            if !tile.is_capital || tile.is_country_capital || tile.is_sea() {
-                continue;
-            }
-            let p = geometry::hex_to_world(tile.q, tile.r);
-            dots.add_circle(p, dot_r, 12);
-            outlines.add_ring(p, dot_r, dot_r + 0.8 * REACT_SCALE, 12);
-        }
-        if !dots.is_empty() {
-            spawn_mesh(
-                &mut commands,
-                &mut meshes,
-                &mut materials,
-                dots.build(),
-                Color::srgba(1.0, 1.0, 1.0, 0.7),
-                None,
-                1.4,
-                None,
-            );
-            spawn_mesh(
-                &mut commands,
-                &mut meshes,
-                &mut materials,
-                outlines.build(),
-                Color::srgba(0.0, 0.0, 0.0, 0.4),
-                None,
-                1.41,
-                None,
-            );
-        }
-    }
+    // Provincial capitals no longer draw the white marker dot — the
+    // province-town city art in the marker layer is the tile's identity now
+    // (card #541).
 
     match classify_elapsed {
         Some(classify) => info!(

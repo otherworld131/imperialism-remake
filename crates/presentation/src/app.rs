@@ -38,6 +38,9 @@ use crate::widgets::{self, ButtonActivated, TabGroup, WidgetsPlugin};
 /// the captured view; `MAP_DEBUG_SKIP=<n>` fast-forwards n turns (no
 /// newspaper interstitials) before the capture. Frames only count while idle
 /// so async turn resolution never races the capture.
+/// `MAP_DEBUG_IRON_NAVY=1` (read in `map/markers.rs`) forces the iron-era
+/// fleet silhouettes so the post-tech navy art can be captured without
+/// fast-forwarding to the research (card #544).
 fn debug_screenshot(
     mut commands: Commands,
     mut frames: Local<u32>,

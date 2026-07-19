@@ -71,6 +71,7 @@ mod tests {
             total_hull: 1,
             by_type: BTreeMap::new(),
             by_operation: BTreeMap::new(),
+            iron_navy: false,
             visible: true,
             sea_zone_id: None,
             sea_zone_name: None,

@@ -16,6 +16,7 @@ import sprites2
 import sprites3
 import sprites4
 import sprites5
+import sprites6
 import terrain_variants
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
@@ -27,6 +28,7 @@ for batch in (
     sprites3.BATCH3,
     sprites4.BATCH4,
     sprites5.BATCH5,
+    sprites6.BATCH6,
     terrain_variants.VARIANTS,
     ground.GROUND,
     rail.RAIL,

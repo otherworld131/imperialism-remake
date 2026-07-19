@@ -221,21 +221,23 @@ pub fn rebuild_marker_layers(
             entity.id()
         };
 
-        // ── Capitals (gold star icon at country capitals) ───────────────
+        // ── Capital city art (card #541) ────────────────────────────────
+        // The city IS the tile's identity, like the terrain motifs: a
+        // country capital shows a palace with a couple of smaller houses, a
+        // province capital a cluster of small houses. Drawn in every map
+        // mode (terrain AND political/diplomatic) so capitals stay findable
+        // on the nation-color fills; the old gold star / white dot are gone.
         {
             let parent = group(&mut commands, 2.0, None);
-            if let Some(star) = icons.get("infrastructure", "Capital") {
-                for tile in tiles.iter().filter(|t| t.is_country_capital && !t.is_sea()) {
+            for tile in tiles.iter().filter(|t| t.is_capital && !t.is_sea()) {
+                let (name, size) = if tile.is_country_capital {
+                    ("CapitalCity", rs(24.0))
+                } else {
+                    ("ProvinceTown", rs(17.0))
+                };
+                if let Some(image) = icons.get("infrastructure", name) {
                     let p = geometry::hex_to_world(tile.q, tile.r);
-                    spawn_sprite(
-                        &mut commands,
-                        parent,
-                        star.clone(),
-                        p,
-                        0.0,
-                        rs(16.2),
-                        Color::WHITE,
-                    );
+                    spawn_sprite(&mut commands, parent, image, p, 0.0, size, Color::WHITE);
                 }
             }
         }
@@ -567,10 +569,17 @@ pub fn rebuild_marker_layers(
         }
 
         // ── Navy markers + beachhead lines + fleet arrows ────────────────
+        // Card #544: fleets render as a pair of pixel-art ship silhouettes
+        // (sail era: ship-of-the-line + frigate; after the owning nation
+        // researches an iron/steam-warship tech: battleship + cruiser)
+        // instead of the old anchor-in-a-circle badge. Ownership reads from
+        // a small nation-color roundel; the count badge and the gold
+        // selection ring keep their behavior. `MAP_DEBUG_IRON_NAVY=1`
+        // forces the iron-era art for screenshot verification.
         {
             let parent = group(&mut commands, 3.5, None);
             let radius = navy::NAVY_MARKER_RADIUS;
-            let anchor_icon = icons.get("ui", "Anchor");
+            let force_iron = std::env::var("MAP_DEBUG_IRON_NAVY").as_deref() == Ok("1");
             let zone_centroids: HashMap<u32, Vec2> = vms
                 .sea_zones
                 .iter()
@@ -632,46 +641,83 @@ pub fn rebuild_marker_layers(
                     );
                 }
 
-                // Owner-colored disc.
+                // Soft water shadow behind the ships: keeps the silhouettes
+                // readable against every sea shade without bringing the old
+                // solid disc back.
                 commands.spawn((
-                    Mesh2d(meshes.add(Circle::new(radius))),
-                    MeshMaterial2d(materials.add(theme::nation_color(&marker.owner_color))),
-                    Transform::from_xyz(pos.x, pos.y, 0.0),
+                    Mesh2d(meshes.add(Ellipse::new(radius * 1.15, radius * 0.62))),
+                    MeshMaterial2d(materials.add(Color::srgba(0.0, 0.05, 0.12, 0.38))),
+                    Transform::from_xyz(pos.x, pos.y - rs(2.5), 0.0),
                     ChildOf(parent),
                 ));
-                // Border ring: red beachhead, gold selected, white otherwise.
-                let (ring_color, ring_width) = if marker.kind == "beachhead" {
-                    (Color::srgb_u8(0xe6, 0x26, 0x26), rs(1.5))
-                } else if is_selected {
-                    (Color::srgb_u8(0xff, 0xd9, 0x00), rs(2.5))
+                // Selection / beachhead ring only — the plain white circle
+                // of the old badge is gone.
+                if marker.kind == "beachhead" || is_selected {
+                    let (ring_color, ring_width) = if is_selected {
+                        (Color::srgb_u8(0xff, 0xd9, 0x00), rs(2.5))
+                    } else {
+                        (Color::srgb_u8(0xe6, 0x26, 0x26), rs(1.5))
+                    };
+                    let ring_r = radius * 1.15;
+                    let mut ring = MeshBuilder2d::default();
+                    ring.add_ring(
+                        pos,
+                        ring_r - ring_width / 2.0,
+                        ring_r + ring_width / 2.0,
+                        24,
+                    );
+                    commands.spawn((
+                        Mesh2d(meshes.add(ring.build())),
+                        MeshMaterial2d(materials.add(ring_color)),
+                        Transform::from_xyz(0.0, 0.0, 0.01),
+                        ChildOf(parent),
+                    ));
+                }
+                // The fleet itself: rear escort behind, flagship in front.
+                let (flagship, escort) = if marker.iron_navy || force_iron {
+                    ("Dreadnought", "ArmouredCruiser")
                 } else {
-                    (Color::srgba(1.0, 1.0, 1.0, 0.9), rs(1.5))
+                    ("ShipOfTheLine", "Frigate")
                 };
-                let mut ring = MeshBuilder2d::default();
-                ring.add_ring(
-                    pos,
-                    radius - ring_width / 2.0,
-                    radius + ring_width / 2.0,
-                    24,
-                );
-                commands.spawn((
-                    Mesh2d(meshes.add(ring.build())),
-                    MeshMaterial2d(materials.add(ring_color)),
-                    Transform::from_xyz(0.0, 0.0, 0.01),
-                    ChildOf(parent),
-                ));
-                // Anchor glyph.
-                if let Some(image) = anchor_icon.clone() {
+                if let Some(image) = icons.get("ships", escort) {
                     spawn_sprite(
                         &mut commands,
                         parent,
                         image,
-                        pos,
+                        pos + Vec2::new(-rs(3.5), rs(3.5)),
                         0.02,
-                        rs(12.0),
+                        rs(13.0),
                         Color::WHITE,
                     );
                 }
+                if let Some(image) = icons.get("ships", flagship) {
+                    spawn_sprite(
+                        &mut commands,
+                        parent,
+                        image,
+                        pos + Vec2::new(rs(1.5), -rs(2.0)),
+                        0.025,
+                        rs(18.0),
+                        Color::WHITE,
+                    );
+                }
+                // Nation-color roundel, bottom left — ownership at a glance
+                // (the role the old disc fill played).
+                let roundel = pos + Vec2::new(-(radius - rs(2.0)), -(radius - rs(2.0)));
+                commands.spawn((
+                    Mesh2d(meshes.add(Circle::new(rs(4.2)))),
+                    MeshMaterial2d(materials.add(theme::nation_color(&marker.owner_color))),
+                    Transform::from_xyz(roundel.x, roundel.y, 0.03),
+                    ChildOf(parent),
+                ));
+                let mut roundel_ring = MeshBuilder2d::default();
+                roundel_ring.add_ring(roundel, rs(4.2), rs(5.0), 16);
+                commands.spawn((
+                    Mesh2d(meshes.add(roundel_ring.build())),
+                    MeshMaterial2d(materials.add(Color::srgba(1.0, 1.0, 1.0, 0.9))),
+                    Transform::from_xyz(0.0, 0.0, 0.035),
+                    ChildOf(parent),
+                ));
                 // Ship-count badge, top right.
                 let badge = pos + Vec2::new(radius - rs(2.0), radius - rs(2.0));
                 commands.spawn((
