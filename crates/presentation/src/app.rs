@@ -33,17 +33,18 @@ use crate::widgets::{self, ButtonActivated, TabGroup, WidgetsPlugin};
 
 /// Debug hook: when `MAP_SCREENSHOT=<path>` is set, capture the primary
 /// window after the map settles, then exit. `MAP_DEBUG_MODE` (a map-mode
-/// label) and `MAP_DEBUG_ZOOM` (orthographic scale) tweak the captured view;
-/// `MAP_DEBUG_SKIP=<n>` fast-forwards n turns (no newspaper interstitials)
-/// before the capture. Frames only count while idle so async turn
-/// resolution never races the capture.
+/// label), `MAP_DEBUG_ZOOM` (orthographic scale) and `MAP_DEBUG_CENTER=q,r`
+/// (center the camera on a hex — captures aren't tied to the capital) tweak
+/// the captured view; `MAP_DEBUG_SKIP=<n>` fast-forwards n turns (no
+/// newspaper interstitials) before the capture. Frames only count while idle
+/// so async turn resolution never races the capture.
 fn debug_screenshot(
     mut commands: Commands,
     mut frames: Local<u32>,
     mut mode: ResMut<MapMode>,
     mut settings: ResMut<RenderSettings>,
     phase: Res<State<TurnPhase>>,
-    mut camera: Query<&mut Projection, With<camera::GameCamera>>,
+    mut camera: Query<(&mut Projection, &mut Transform), With<camera::GameCamera>>,
     mut game_commands: MessageWriter<GameCommand>,
     screen: Res<State<Screen>>,
     mut next_screen: ResMut<NextState<Screen>>,
@@ -121,11 +122,24 @@ fn debug_screenshot(
     // and session install would otherwise overwrite an early one-shot value.
     if let Ok(zoom) = std::env::var("MAP_DEBUG_ZOOM")
         && let Ok(zoom) = zoom.parse::<f32>()
-        && let Ok(mut projection) = camera.single_mut()
+        && let Ok((mut projection, _)) = camera.single_mut()
         && let Projection::Orthographic(ref mut ortho) = *projection
         && ortho.scale != zoom
     {
         ortho.scale = zoom;
+    }
+    // `MAP_DEBUG_CENTER=q,r` aims the capture at a hex instead of the
+    // capital-centered default (e.g. a river course, card #539).
+    if let Ok(center) = std::env::var("MAP_DEBUG_CENTER")
+        && let Some((q, r)) = center.split_once(',')
+        && let (Ok(q), Ok(r)) = (q.trim().parse::<i32>(), r.trim().parse::<i32>())
+        && let Ok((_, mut transform)) = camera.single_mut()
+    {
+        let target = crate::map::geometry::hex_to_world(q, r);
+        if transform.translation.truncate() != target {
+            transform.translation.x = target.x;
+            transform.translation.y = target.y;
+        }
     }
     // Fires after the M6/M7 drivers' scripted clicks (latest at frame 70) so
     // a queued order (e.g. a civilian deploy) resolves during the skip.

@@ -15,8 +15,16 @@ produces (`roll_surface_resource` / `random_mineral_deposit` in
 `crates/domain/src/map/generator.rs`).
 """
 
+import pixelkit
 import sprites
 from pixelkit import Canvas
+
+# Stream water colors (card #539). "river" matches the map renderer's river
+# polyline color (rgba 68/140/220) so the sprite's outflow stream reads as
+# the same water as the meandering course it feeds.
+pixelkit.PAL.setdefault("river", "#448cdc")
+pixelkit.PAL.setdefault("river_lt", "#7fb4e8")
+pixelkit.PAL.setdefault("river_dk", "#2f66a4")
 
 
 # ── Shared resource elements ────────────────────────────────────────────
@@ -287,6 +295,82 @@ def mountain_gems():
     return c
 
 
+# ── Mountain river sources (card #539) ──────────────────────────────────
+#
+# Mountains where a river originates show a meltwater stream flowing out of
+# the flank. Three appearance variants (left cascade / right-groove cascade /
+# front falls) are COMPOSED over every mountain base — plain and each
+# resource variant — at generation time, so 5 bases x 3 streams = 15 sprites
+# without hand-drawing any combination. The map renderer picks a variant by
+# hashing the hex coords (`river_source_variant` in
+# `crates/presentation/src/map/layers.rs`).
+
+
+def _stream_path(c, path):
+    """2px-wide watercourse along `path` (head first), with sheen + foam."""
+    for i, (x, y) in enumerate(path):
+        c.px(x, y, "river")
+        c.px(x + 1, y, "river_dk" if i % 3 == 2 else "river")
+        if i % 4 == 1:
+            c.px(x, y, "river_lt")
+    x0, y0 = path[0]
+    c.px(x0, y0 - 1, "snow")  # spring foam at the head
+    c.px(x0 + 1, y0, "snow_sh")
+
+
+def _pool(c, x0, x1, y):
+    """Small pool where the stream leaves the rock and meets the ground."""
+    c.rect(x0, y, x1, y + 1, "river")
+    c.hline(x0 + 1, x1 - 1, y, "river_lt")
+    c.px(x0, y + 1, "river_dk")
+    c.px(x1, y + 1, "river_dk")
+
+
+def _stream_left(c):
+    """V1: cascade meandering down the lit left face, pooling bottom-left."""
+    _stream_path(c, [
+        (8, 11), (8, 12), (7, 13), (7, 14), (6, 15), (7, 16), (6, 17),
+        (5, 18), (6, 19), (5, 20), (4, 21), (4, 22), (3, 23), (4, 24),
+        (3, 25), (2, 26), (2, 27), (1, 28),
+    ])
+    _pool(c, 1, 5, 29)
+
+
+def _stream_right(c):
+    """V2: stream down the groove between the peaks, out bottom-right."""
+    _stream_path(c, [
+        (18, 16), (19, 17), (18, 18), (19, 19), (20, 20), (19, 21),
+        (20, 22), (21, 23), (20, 24), (21, 25), (22, 26), (21, 27),
+        (22, 28),
+    ])
+    _pool(c, 21, 26, 29)
+
+
+def _stream_front(c):
+    """V3: waterfall down the front face below the snowcap jag."""
+    _stream_path(c, [
+        (13, 11), (14, 12), (13, 13), (14, 14), (14, 15), (15, 16),
+        (14, 17), (15, 18), (15, 19), (16, 20), (15, 21), (16, 22),
+        (16, 23), (15, 24), (16, 25), (15, 26), (16, 27), (15, 28),
+    ])
+    _pool(c, 13, 18, 29)
+
+
+_STREAMS = (_stream_left, _stream_right, _stream_front)
+
+
+def _with_stream(base_fn, stream):
+    """Compose stream variant `stream` (1-based) over a mountain base."""
+
+    def build():
+        c = base_fn()
+        _STREAMS[stream - 1](c)
+        c.outline_silhouette()
+        return c
+
+    return build
+
+
 # ── Oil terrains (Desert / Swamp / Tundra) ──────────────────────────────
 
 
@@ -341,4 +425,20 @@ VARIANTS = [
     ("terrain/DesertOil", desert_oil),
     ("terrain/SwampOil", swamp_oil),
     ("terrain/TundraOil", tundra_oil),
+]
+
+# River-source mountains (card #539): every mountain base x every stream
+# variant, named `Mountain[<Resource>]River<1..3>` to match
+# `terrain_motif_name`'s suffix composition.
+_MOUNTAIN_BASES = [
+    ("Mountain", sprites.mountain),
+    ("MountainCoal", mountain_coal),
+    ("MountainIron", mountain_iron),
+    ("MountainGold", mountain_gold),
+    ("MountainGems", mountain_gems),
+]
+VARIANTS += [
+    (f"terrain/{name}River{v}", _with_stream(fn, v))
+    for name, fn in _MOUNTAIN_BASES
+    for v in (1, 2, 3)
 ]

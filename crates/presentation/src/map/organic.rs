@@ -77,6 +77,56 @@ pub fn border_frequency(hex_size: f64) -> f64 {
     BORDER_FREQUENCY * REACT_HEX_SIZE / hex_size
 }
 
+// ── Rivers (card #539) ─────────────────────────────────────────────────────
+
+/// River meander amplitude as a fraction of the hex size. Kept well under
+/// half the hex inradius (`√3/2 · hex_size / 2`) so a displaced segment stays
+/// inside the corridor of its two hexes and never wanders into a neighboring
+/// hex's features.
+pub const RIVER_AMPLITUDE_FRAC: f64 = 0.18;
+/// Sub-points inserted along each hex-center-to-hex-center river segment.
+pub const RIVER_SUBDIV: usize = 10;
+/// fBm octaves for river displacement.
+pub const RIVER_OCTAVES: u32 = 3;
+/// Chaikin passes per river segment.
+pub const RIVER_SMOOTHING: u32 = 2;
+/// Seed for the river-displacement noise field. Distinct from
+/// [`BORDER_SEED`] / [`RUGGEDNESS_SEED`] so rivers meander independently of
+/// coastlines; constant across rebuilds so rivers never wiggle frame to
+/// frame.
+pub const RIVER_SEED: i32 = 4547;
+/// Anchor-taper clamp for rivers (see [`AnchoredOpts::slope_clamp`]). The
+/// displacement tapers to zero at both hex-center anchors, so consecutive
+/// segments meeting at a shared hex center stay continuous and spike-free.
+pub const RIVER_SLOPE_CLAMP: f64 = 1.0;
+
+/// Meandering river course between two hex centers: the straight segment
+/// `a → b` displaced by seeded world-space fBm noise and Chaikin-smoothed,
+/// with both endpoints pinned exactly. Pure and deterministic — the same
+/// endpoints always produce the same curve, and because the endpoints are
+/// hard anchors, chains of segments sharing a hex center join continuously.
+///
+/// Callers must feed each undirected river edge in ONE canonical direction:
+/// reversing `a` and `b` mirrors the displacement (the walk normal flips
+/// while the noise field does not).
+#[must_use]
+pub fn river_polyline(a: Point, b: Point, hex_size: f64) -> Vec<Point> {
+    smooth_polyline_anchored(
+        &[a, b],
+        &[RIVER_AMPLITUDE_FRAC * hex_size],
+        &[RIVER_SUBDIV],
+        AnchoredOpts {
+            frequency: border_frequency(hex_size),
+            octaves: RIVER_OCTAVES,
+            seed: RIVER_SEED,
+            smoothing: RIVER_SMOOTHING,
+            closed: false,
+            slope_clamp: RIVER_SLOPE_CLAMP,
+        },
+        None,
+    )
+}
+
 /// Ruggedness-noise frequency scaled the same way as [`border_frequency`].
 #[must_use]
 pub fn ruggedness_frequency(hex_size: f64) -> f64 {
@@ -1287,6 +1337,53 @@ mod tests {
         // Somewhere mid-edge the noise must actually displace (the clamp is
         // a taper, not a flattener).
         assert!(out.iter().any(|p| p[1].abs() > 1.0));
+    }
+
+    /// Card #539: river meanders must be deterministic (same endpoints →
+    /// bit-identical curve on every rebuild), pinned at both hex-center
+    /// anchors, stay within the hex corridor, and actually meander.
+    #[test]
+    fn river_polyline_is_deterministic_pinned_and_bounded() {
+        let hex = 24.0;
+        // A representative hex-center-to-hex-center segment (pointy-top
+        // neighbors are √3·hex apart) plus an arbitrary diagonal one.
+        let cases: &[(Point, Point)] = &[
+            ([100.0, -50.0], [100.0 + 3.0_f64.sqrt() * hex, -50.0]),
+            ([0.0, 0.0], [3.0_f64.sqrt() / 2.0 * hex, -1.5 * hex]),
+        ];
+        for &(a, b) in cases {
+            let first = river_polyline(a, b, hex);
+            let second = river_polyline(a, b, hex);
+            assert_eq!(first, second, "same endpoints must give the same curve");
+            assert!(first.len() > 2, "curve must gain meander sub-points");
+
+            // Endpoints pinned exactly: joints between chained segments and
+            // the coastline mouth stay continuous.
+            assert_eq!(first[0], a, "start anchor must be pinned");
+            assert_eq!(*first.last().unwrap(), b, "end anchor must be pinned");
+
+            // Every point stays within the meander corridor around the
+            // chord (Chaikin only shrinks toward the displaced polyline, and
+            // |fbm| <= 1, so amplitude bounds the perpendicular deviation).
+            let dx = b[0] - a[0];
+            let dy = b[1] - a[1];
+            let len = dx.hypot(dy);
+            let (nx, ny) = (-dy / len, dx / len);
+            let max_dev = first
+                .iter()
+                .map(|p| ((p[0] - a[0]) * nx + (p[1] - a[1]) * ny).abs())
+                .fold(0.0_f64, f64::max);
+            let bound = RIVER_AMPLITUDE_FRAC * hex + EPS;
+            assert!(
+                max_dev <= bound,
+                "deviation {max_dev} exceeds corridor bound {bound}"
+            );
+            // ... and the course is not just the straight line.
+            assert!(
+                max_dev > 0.5,
+                "river must visibly meander (max deviation {max_dev})"
+            );
+        }
     }
 
     #[test]

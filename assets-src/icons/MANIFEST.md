@@ -161,7 +161,7 @@ on a tile the map marker plays the three images ping-pong
 | Ledger | `crates/presentation/assets/icons/ui/Ledger.png` | Open ledger book with entry lines and red bookmark (Ledger screen tab) |
 | Legend | `crates/presentation/assets/icons/ui/Legend.png` | Map-key card with color chips and caption lines (Legend screen tab) |
 
-## terrain/ (25)
+## terrain/ (40)
 
 Per-tile terrain motifs layered over the color fill in Terrain map mode, so
 each tile reads as art (mountains, forest, …) rather than a flat tint.
@@ -178,6 +178,15 @@ the variant on the next map rebuild. The variant set covers exactly the
 Forests are special (#540): `Forest` (vivid pines) is the *good timber*
 look, used when the tile carries Timber (developable); `ForestScrub`
 (sparse, desaturated trees with a dead snag) is the timberless scrub wood.
+
+River sources are special too (#539): a mountain hex where a river
+originates renders `Mountain[<Resource>]River<1..3>` — the mountain art with
+a meltwater stream flowing out of the flank (three appearance variants,
+picked per hex by `river_source_variant` in
+`crates/presentation/src/map/layers.rs`). The 15 sprites are composed at
+generation time in `terrain_variants.py`: each stream overlay is drawn over
+every mountain base (plain + Coal/Iron/Gold/Gems), so no combination is
+hand-drawn twice.
 
 | Name | Output | Pictogram |
 |------|--------|-----------|
@@ -203,6 +212,9 @@ look, used when the tile carries Timber (developable); `ForestScrub`
 | MountainIron | `crates/presentation/assets/icons/terrain/MountainIron.png` | Rust-stained boulders on the lower slope |
 | MountainGold | `crates/presentation/assets/icons/terrain/MountainGold.png` | Gold vein zigzagging down the lit face |
 | MountainGems | `crates/presentation/assets/icons/terrain/MountainGems.png` | Teal crystals at the mountain foot |
+| Mountain{,Coal,Iron,Gold,Gems}River1 | `crates/presentation/assets/icons/terrain/<Base>River1.png` | Base mountain art + cascade meandering down the lit left face into a pool |
+| Mountain{,Coal,Iron,Gold,Gems}River2 | `crates/presentation/assets/icons/terrain/<Base>River2.png` | Base mountain art + stream down the groove between the peaks, out bottom-right |
+| Mountain{,Coal,Iron,Gold,Gems}River3 | `crates/presentation/assets/icons/terrain/<Base>River3.png` | Base mountain art + waterfall down the front face below the snowcap |
 | DesertOil | `crates/presentation/assets/icons/terrain/DesertOil.png` | Black seep pooling in the dune hollow |
 | SwampOil | `crates/presentation/assets/icons/terrain/SwampOil.png` | Oil slick riding the pool surface |
 | TundraOil | `crates/presentation/assets/icons/terrain/TundraOil.png` | Dark seep staining the snowfield |
