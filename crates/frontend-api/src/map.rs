@@ -1021,3 +1021,49 @@ pub fn get_political_snapshot(game: &GameState, turn: u32) -> Result<serde_json:
         "tiles": tiles,
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use domain::events::TechId;
+    use domain::game_state::new_game;
+    use domain::types::Difficulty;
+
+    /// "Advanced Iron Working" (tech id 15, scripts/config/tech_tree.lua)
+    /// unlocks the Ironclad, a warship at era 2 — the doc comment on
+    /// `nation_has_iron_navy_tech` calls out this exact tech/ship pair as
+    /// the canonical example of the iron-navy threshold.
+    #[test]
+    fn nation_has_iron_navy_tech_true_after_advanced_iron_working() {
+        let mut game = new_game("test", Difficulty::Normal, 0);
+        let nation_id = game.world.nations[0].id;
+        game.get_nation_mut(nation_id)
+            .unwrap()
+            .research_tech(TechId(15));
+
+        let nation = game.get_nation(nation_id).unwrap().clone();
+        assert!(nation_has_iron_navy_tech(&game, &nation));
+    }
+
+    #[test]
+    fn nation_has_iron_navy_tech_false_with_no_researched_techs() {
+        let game = new_game("test", Difficulty::Normal, 0);
+        let nation_id = game.world.nations[0].id;
+        let nation = game.get_nation(nation_id).unwrap().clone();
+        assert!(!nation_has_iron_navy_tech(&game, &nation));
+    }
+
+    /// "Streamlined Hulls" (tech id 7) unlocks the Clipper — a merchant
+    /// ship, not a warship — so it must not trip the iron-navy predicate.
+    #[test]
+    fn nation_has_iron_navy_tech_false_for_non_warship_unlock() {
+        let mut game = new_game("test", Difficulty::Normal, 0);
+        let nation_id = game.world.nations[0].id;
+        game.get_nation_mut(nation_id)
+            .unwrap()
+            .research_tech(TechId(7));
+
+        let nation = game.get_nation(nation_id).unwrap().clone();
+        assert!(!nation_has_iron_navy_tech(&game, &nation));
+    }
+}

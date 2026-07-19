@@ -9,6 +9,7 @@ use crate::guards::{
     reject_if_great_power_target_for_consulate, reject_if_target_in_anarchy,
 };
 use crate::parse::parse_treaty_type;
+use domain::diplomacy::relations::{BREAK_TREATY_RELATIONS_LOSS, BREAK_TREATY_STANDING_LOSS};
 use domain::events::TreatyType;
 use domain::game_state::GameState;
 use domain::types::*;
@@ -583,19 +584,20 @@ pub fn dismiss_pending_action(
 }
 
 /// One-line factual consequence of accepting a proposal (decision context,
-/// card #514). Numbers mirror the domain: `break_treaty` costs 15 standing
-/// and 20 relations, alliances auto-join wars, a separate peace breaks the
-/// peacemaker's alliances, and a snubbed join-empire minor drops 20.
+/// card #514). Standing/relations numbers are pulled from the domain's
+/// [`BREAK_TREATY_STANDING_LOSS`] / [`BREAK_TREATY_RELATIONS_LOSS`]
+/// constants (`break_treaty` in `crates/domain/src/diplomacy/relations.rs`),
+/// so this text can't drift from the actual penalty. Alliances auto-join
+/// wars, a separate peace breaks the peacemaker's alliances, and a snubbed
+/// join-empire minor drops 20.
 fn accept_hint(proposal_type: TreatyType, from_name: &str, attacker_name: Option<&str>) -> String {
     match proposal_type {
-        TreatyType::NonAggressionPact => {
-            "Mutual promise not to attack; breaking it later costs 15 standing and 20 relations."
-                .into()
-        }
-        TreatyType::Alliance => {
-            "Allies automatically join each other's wars; breaking it or making a separate peace costs 15 standing."
-                .into()
-        }
+        TreatyType::NonAggressionPact => format!(
+            "Mutual promise not to attack; breaking it later costs {BREAK_TREATY_STANDING_LOSS} standing and {BREAK_TREATY_RELATIONS_LOSS} relations."
+        ),
+        TreatyType::Alliance => format!(
+            "Allies automatically join each other's wars; breaking it or making a separate peace costs {BREAK_TREATY_STANDING_LOSS} standing."
+        ),
         TreatyType::PeaceTreaty => format!(
             "Ends your war with {from_name}; allies still fighting them will break their alliance with you."
         ),
@@ -607,7 +609,7 @@ fn accept_hint(proposal_type: TreatyType, from_name: &str, attacker_name: Option
         }
         TreatyType::PactDefenseRequest => format!(
             "Declares war on {} and brings {from_name} into your empire; rejecting passes the plea to other powers.",
-            attacker_name.unwrap_or("the aggressor")
+            attacker_name.unwrap_or("an aggressor")
         ),
     }
 }
@@ -834,4 +836,36 @@ pub fn reject_proposal(
     // WarDeclaration rejection has no extra effect — the war is already live.
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The NAP hint's penalty numbers must come from the domain's
+    /// `break_treaty` constants — if someone changes
+    /// `BREAK_TREATY_STANDING_LOSS` / `BREAK_TREATY_RELATIONS_LOSS` without
+    /// updating this text, that drift should fail a test, not surface as a
+    /// stale number in the UI.
+    #[test]
+    fn accept_hint_non_aggression_pact_uses_domain_penalty_constants() {
+        let hint = accept_hint(TreatyType::NonAggressionPact, "Gallia", None);
+        assert!(hint.contains(&format!("{BREAK_TREATY_STANDING_LOSS} standing")));
+        assert!(hint.contains(&format!("{BREAK_TREATY_RELATIONS_LOSS} relations")));
+    }
+
+    #[test]
+    fn accept_hint_alliance_uses_domain_standing_constant() {
+        let hint = accept_hint(TreatyType::Alliance, "Gallia", None);
+        assert!(hint.contains(&format!("{BREAK_TREATY_STANDING_LOSS} standing")));
+    }
+
+    /// `accept_hint` and `get_pending_proposals`'s `display_text` should
+    /// agree on how an unknown attacker is described (card review: they used
+    /// to disagree — "the aggressor" vs "an aggressor").
+    #[test]
+    fn accept_hint_pact_defense_request_default_attacker_matches_display_text() {
+        let hint = accept_hint(TreatyType::PactDefenseRequest, "Gallia", None);
+        assert!(hint.contains("an aggressor"));
+    }
 }
