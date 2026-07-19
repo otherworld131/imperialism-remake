@@ -56,11 +56,11 @@ const CIVILIAN_LEGEND: [(&str, &str); 7] = [
     ("Prospector", "Reveals hidden resources on tiles"),
 ];
 
-/// `(icon name, display name, description)`. `Capitol` doubles as the
-/// province-capital marker sprite.
+/// `(icon name, display name, description)`. The city sprites are the same
+/// art the map draws on capital hexes (card #541).
 const INFRASTRUCTURE_LEGEND: [(&str, &str, &str); 6] = [
-    ("Capital", "Capital", "Nation capital (gold star)"),
-    ("Capitol", "Province Capital", "Province center"),
+    ("CapitalCity", "Capital", "Nation capital (palace + houses)"),
+    ("ProvinceTown", "Province Capital", "Province center (town)"),
     ("Railroad", "Railroad", "Transport network for resources"),
     ("Depot", "Depot", "Railroad junction point"),
     ("Port", "Port", "Enables naval trade and transport"),

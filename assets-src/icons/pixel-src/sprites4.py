@@ -185,38 +185,6 @@ def port():
     return c
 
 
-def capital():
-    c = Canvas()
-    _polygon(c, [(16, 2), (20, 11), (30, 12), (22, 18), (25, 29), (16, 23),
-                 (7, 29), (10, 18), (2, 12), (12, 11)], "gold")
-    # facet shading: left arm lit, lower-right shaded
-    c.line(16, 4, 16, 21, "gold_lt"); c.line(15, 6, 15, 20, "gold_lt")
-    c.px(23, 17, "gold_sh"); c.px(23, 26, "gold_sh"); c.px(24, 27, "gold_sh")
-    c.px(21, 14, "gold_sh")
-    c.outline_silhouette()
-    return c
-
-
-def capitol():
-    c = Canvas()
-    # steps
-    c.rect(4, 26, 27, 28, "grey_lt"); c.hline(4, 27, 26, "snow_sh")
-    # colonnade
-    c.rect(6, 15, 25, 25, "parch_sh")
-    for x in (8, 12, 16, 20, 23):
-        c.vline(x, 16, 25, "parch"); c.vline(x + 1, 16, 25, "parch_dk")
-    # entablature + pediment
-    c.rect(5, 13, 26, 15, "parch")
-    # dome on a drum
-    c.rect(11, 10, 20, 12, "parch_sh")
-    c.disc(15, 9, 5, "parch")
-    c.rect(10, 9, 21, 9, "parch") if False else None
-    c.hline(12, 15, 5, "snow_sh")  # dome highlight
-    c.px(15, 2, "gold"); c.px(15, 3, "gold_sh")  # finial
-    c.outline_silhouette()
-    return c
-
-
 # ---- diplomacy ----
 
 def consulate():
@@ -588,8 +556,6 @@ BATCH4 = [
     ("infrastructure/Depot", depot),
     ("infrastructure/Port", port),
     ("infrastructure/Fort", fort),
-    ("infrastructure/Capital", capital),
-    ("infrastructure/Capitol", capitol),
     ("diplomacy/Consulate", consulate),
     ("diplomacy/Embassy", embassy),
     ("diplomacy/NonAggressionPact", handshake),

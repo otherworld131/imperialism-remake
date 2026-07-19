@@ -98,6 +98,11 @@ on a tile the map marker plays the three images ping-pong
 
 ## ships/ (13)
 
+Card #544: the map's navy fleet markers are composed from these sprites —
+sail era draws `ShipOfTheLine` (flagship) + `Frigate` (escort), and once the
+owning nation researches an iron/steam-warship tech (`iron_navy` on the
+navy-marker view model) the pair swaps to `Dreadnought` + `ArmouredCruiser`.
+
 | Name | Output | Pictogram |
 |------|--------|-----------|
 | Trader | `crates/presentation/assets/icons/ships/Trader.png` | Small single-mast sloop |
@@ -116,14 +121,20 @@ on a tile the map marker plays the three images ping-pong
 
 ## infrastructure/ (6)
 
+Card #541: `CapitalCity` / `ProvinceTown` are the capital hexes' tile art on
+the main map — drawn in every map mode (terrain and political alike, like
+the terrain motifs they are the tile's identity) by `map/markers.rs`. They
+replaced the old gold-star country-capital marker and the white
+province-capital dot.
+
 | Name | Output | Pictogram |
 |------|--------|-----------|
 | Railroad | `crates/presentation/assets/icons/infrastructure/Railroad.png` | Receding rail track with sleepers |
 | Depot | `crates/presentation/assets/icons/infrastructure/Depot.png` | Warehouse with red roof over track |
 | Port | `crates/presentation/assets/icons/infrastructure/Port.png` | Quay crane lowering a crate |
 | Fort | `crates/presentation/assets/icons/infrastructure/Fort.png` | Crenellated stone tower with gate |
-| Capital | `crates/presentation/assets/icons/infrastructure/Capital.png` | Gold five-point star |
-| Capitol | `crates/presentation/assets/icons/infrastructure/Capitol.png` | Domed classical building with columns |
+| CapitalCity | `crates/presentation/assets/icons/infrastructure/CapitalCity.png` | Domed palace with colonnade, flanked by two small houses |
+| ProvinceTown | `crates/presentation/assets/icons/infrastructure/ProvinceTown.png` | Cluster of small pitched-roof houses with a shed |
 
 ## diplomacy/ (8)
 
@@ -142,7 +153,7 @@ on a tile the map marker plays the three images ping-pong
 
 | Name | Output | Pictogram |
 |------|--------|-----------|
-| Anchor | `crates/presentation/assets/icons/ui/Anchor.png` | Classic navy anchor with stock and flukes |
+| Anchor | `crates/presentation/assets/icons/ui/Anchor.png` | Classic navy anchor with stock and flukes (legacy; map fleet markers now use ship silhouettes) |
 | Swords | `crates/presentation/assets/icons/ui/Swords.png` | Two crossed straight swords (legacy; map now uses tents) |
 | Treasury | `crates/presentation/assets/icons/ui/Treasury.png` | Gold coin with crown emboss |
 | Workers | `crates/presentation/assets/icons/ui/Workers.png` | Two capped worker busts |

@@ -105,6 +105,10 @@ pub struct NavyMarker {
     pub total_hull: i64,
     pub by_type: BTreeMap<String, u32>,
     pub by_operation: BTreeMap<String, u32>,
+    /// Card #544: the owning nation has unlocked iron/steam warships, so the
+    /// map marker draws battleship + cruiser silhouettes instead of sail era.
+    #[serde(default)]
+    pub iron_navy: bool,
     pub visible: bool,
     #[serde(default)]
     pub sea_zone_id: Option<u32>,
