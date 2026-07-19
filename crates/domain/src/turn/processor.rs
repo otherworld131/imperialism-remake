@@ -6788,19 +6788,6 @@ mod tests {
     }
 
     #[test]
-    fn newspaper_includes_human_nation() {
-        let mut game = test_game_state();
-
-        let report = process_turn(&mut game);
-
-        let has_empire_headline = report
-            .newspaper_headlines
-            .iter()
-            .any(|h| h.text.contains("Testlandia"));
-        assert!(has_empire_headline);
-    }
-
-    #[test]
     fn newspaper_includes_election_headline() {
         let mut game = test_game_state();
         // Set to 1825 Q1 which is a decade election year

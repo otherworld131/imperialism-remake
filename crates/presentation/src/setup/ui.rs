@@ -87,6 +87,7 @@ pub fn init_setup(mut ui: ResMut<SetupUi>) {
 /// parked on the preview step, which would otherwise render nothing.
 pub fn reset_setup_flow(mut ui: ResMut<SetupUi>) {
     ui.step = SetupStep::Config;
+    ui.stage = PreviewStage::default();
     ui.config_dirty = true;
 }
 
@@ -681,6 +682,7 @@ pub fn rebuild_preview_ui(
     config: Res<SetupConfig>,
     flags: Res<FlagCache>,
     icons: Option<Res<IconAssets>>,
+    mode: Res<MapMode>,
     roots: Query<Entity, With<PreviewChrome>>,
 ) {
     if !ui.preview_dirty {
@@ -698,9 +700,28 @@ pub fn rebuild_preview_ui(
     let observer = config.observer;
     let icons = icons.as_deref();
 
-    // Header.
+    // Header. Each preview stage is its own step with one job (#528):
+    // terrain first, then country choice, then (non-observer) the capital.
+    let has_terrain_step = config.scenario.is_none();
+    let total_steps = 2 + u32::from(has_terrain_step) + u32::from(!observer);
+    let step_no = match stage {
+        PreviewStage::Terrain => 2,
+        PreviewStage::Nation => 2 + u32::from(has_terrain_step),
+        PreviewStage::Capital => 3 + u32::from(has_terrain_step),
+    };
+    let title = match stage {
+        PreviewStage::Terrain => "Shape the World",
+        PreviewStage::Nation => {
+            if observer {
+                "Viewpoint Nation"
+            } else {
+                "Choose Your Empire"
+            }
+        }
+        PreviewStage::Capital => "Place Capital",
+    };
     let sub = format!(
-        "{} · Names: {} · {}{}{}",
+        "Step {step_no} of {total_steps} · {} · Names: {} · {}{}",
         match &config.scenario {
             Some(id) => format!("Scenario: {id}"),
             None => format!("Seed: {}", config.effective_map_key()),
@@ -712,11 +733,6 @@ pub fn rebuild_preview_ui(
         },
         config.difficulty_label(),
         if observer { " · Observer Mode" } else { "" },
-        if !observer && stage == PreviewStage::Capital {
-            " · Place Capital"
-        } else {
-            ""
-        },
     );
     commands
         .spawn((
@@ -740,7 +756,7 @@ pub fn rebuild_preview_ui(
         ))
         .with_children(|bar| {
             bar.spawn((
-                Text::new("Preview"),
+                Text::new(title),
                 theme.font_bold(16.0),
                 TextColor(theme::GOLD),
             ));
@@ -749,8 +765,14 @@ pub fn rebuild_preview_ui(
                 flex_grow: 1.0,
                 ..default()
             },));
-            // Terrain/Political as the shared tab widget (CC-5).
-            let tabs = widgets::spawn_tabs(bar, &theme, &["Terrain", "Political"], 1);
+            // Terrain/Political as the shared tab widget (CC-5); starts on
+            // the mode the current step owns.
+            let tabs = widgets::spawn_tabs(
+                bar,
+                &theme,
+                &["Terrain", "Political"],
+                usize::from(*mode == MapMode::Political),
+            );
             let mut bar_commands = bar.commands();
             bar_commands.entity(tabs.root).insert((
                 PreviewModeTabs,
@@ -831,15 +853,14 @@ pub fn rebuild_preview_ui(
                         ),
                         ..default()
                     },))
-                    .with_children(|col| {
-                        let show_terrain =
-                            stage == PreviewStage::Nation && config.scenario.is_none();
-                        if show_terrain {
+                    .with_children(|col| match stage {
+                        PreviewStage::Terrain => {
                             spawn_terrain_section(col, &theme, &config);
                         }
-                        if observer || stage == PreviewStage::Nation {
+                        PreviewStage::Nation => {
                             spawn_nation_picker(col, &theme, &ui, &config, &flags, observer);
-                        } else {
+                        }
+                        PreviewStage::Capital => {
                             spawn_capital_section(col, &theme, &ui, &config, icons);
                         }
                     });
@@ -871,19 +892,30 @@ pub fn rebuild_preview_ui(
         ))
         .with_children(|footer| {
             let back = widgets::spawn_button(footer, &theme, ButtonProps::label("Back"));
-            footer.commands().entity(back).insert(SetupActionBtn(
-                if !observer && stage == PreviewStage::Capital {
-                    SetupAction::LeaveCapitalStage
-                } else {
-                    SetupAction::BackToConfig
-                },
-            ));
-            if stage == PreviewStage::Nation {
+            footer
+                .commands()
+                .entity(back)
+                .insert(SetupActionBtn(match stage {
+                    PreviewStage::Terrain => SetupAction::BackToConfig,
+                    PreviewStage::Nation => {
+                        if has_terrain_step {
+                            SetupAction::LeaveNationStage
+                        } else {
+                            SetupAction::BackToConfig
+                        }
+                    }
+                    PreviewStage::Capital => SetupAction::LeaveCapitalStage,
+                }));
+            if stage == PreviewStage::Terrain {
                 let reroll = widgets::spawn_button(footer, &theme, ButtonProps::label("Re-roll"));
-                footer
-                    .commands()
-                    .entity(reroll)
-                    .insert(SetupActionBtn(SetupAction::Reroll));
+                footer.commands().entity(reroll).insert((
+                    SetupActionBtn(SetupAction::Reroll),
+                    widgets::TooltipText(
+                        "Generate a brand-new world from a fresh random seed.".into(),
+                    ),
+                ));
+            }
+            if stage == PreviewStage::Nation {
                 let names =
                     widgets::spawn_button(footer, &theme, ButtonProps::label("Re-roll Names"));
                 footer.commands().entity(names).insert((
@@ -898,54 +930,34 @@ pub fn rebuild_preview_ui(
                 flex_grow: 1.0,
                 ..default()
             },));
-            if observer {
-                let begin = widgets::spawn_button(
-                    footer,
-                    &theme,
-                    ButtonProps {
-                        label: "Begin Campaign".into(),
-                        width: Some(Val::Px(190.0)),
-                        font_size: 14.0,
-                        ..default()
-                    },
-                );
-                footer
-                    .commands()
-                    .entity(begin)
-                    .insert(SetupActionBtn(SetupAction::BeginCampaign));
-            } else if stage == PreviewStage::Nation {
-                let place = widgets::spawn_button(
-                    footer,
-                    &theme,
-                    ButtonProps {
-                        label: "Place Capital".into(),
-                        width: Some(Val::Px(190.0)),
-                        font_size: 14.0,
-                        enabled: can_place,
-                        ..default()
-                    },
-                );
-                footer
-                    .commands()
-                    .entity(place)
-                    .insert(SetupActionBtn(SetupAction::EnterCapitalStage));
-            } else {
-                let begin = widgets::spawn_button(
-                    footer,
-                    &theme,
-                    ButtonProps {
-                        label: "Begin Campaign".into(),
-                        width: Some(Val::Px(190.0)),
-                        font_size: 14.0,
-                        enabled: can_begin,
-                        ..default()
-                    },
-                );
-                footer
-                    .commands()
-                    .entity(begin)
-                    .insert(SetupActionBtn(SetupAction::BeginCampaign));
-            }
+            // The primary (rightmost) button advances one step: terrain →
+            // country → capital placement, with observers beginning straight
+            // from the country step.
+            let (label, enabled, action) = match stage {
+                PreviewStage::Terrain => ("Choose Nation", true, SetupAction::EnterNationStage),
+                PreviewStage::Nation if observer => {
+                    ("Begin Campaign", true, SetupAction::BeginCampaign)
+                }
+                PreviewStage::Nation => {
+                    ("Place Capital", can_place, SetupAction::EnterCapitalStage)
+                }
+                PreviewStage::Capital => ("Begin Campaign", can_begin, SetupAction::BeginCampaign),
+            };
+            let next = widgets::spawn_button(
+                footer,
+                &theme,
+                ButtonProps {
+                    label: label.into(),
+                    width: Some(Val::Px(190.0)),
+                    font_size: 14.0,
+                    enabled,
+                    ..default()
+                },
+            );
+            footer
+                .commands()
+                .entity(next)
+                .insert(SetupActionBtn(action));
         });
 }
 
@@ -1501,6 +1513,7 @@ pub fn handle_terrain_sliders(
     fields: Query<&TerrainField>,
     mut config: ResMut<SetupConfig>,
     mut ui: ResMut<SetupUi>,
+    mut mode: ResMut<MapMode>,
     mut active: ResMut<ActiveSetupJob>,
     mut next_phase: ResMut<NextState<crate::state::TurnPhase>>,
 ) {
@@ -1514,6 +1527,9 @@ pub fn handle_terrain_sliders(
     if changed {
         // Ranges of the sea sliders are interdependent; rebuild them.
         ui.preview_dirty = true;
+        // Editing the world shape must be visible: force the terrain map
+        // even if the player peeked at the political view (#545).
+        *mode = MapMode::Terrain;
         jobs::start_preview(&mut active, &mut next_phase, &config);
     }
 }
@@ -1564,7 +1580,7 @@ pub fn handle_setup_actions(
             }
             SetupAction::BackToConfig => {
                 ui.step = SetupStep::Config;
-                ui.stage = PreviewStage::Nation;
+                ui.stage = PreviewStage::default();
                 ui.config_dirty = true;
                 ui.preview_dirty = true;
             }
@@ -1593,12 +1609,24 @@ pub fn handle_setup_actions(
             SetupAction::RandomizeTerrain => {
                 randomize_terrain(&mut config.terrain);
                 ui.preview_dirty = true;
+                *mode = MapMode::Terrain;
                 jobs::start_preview(&mut active, &mut next_phase, &config);
             }
             SetupAction::ResetTerrain => {
                 config.terrain = default();
                 ui.preview_dirty = true;
+                *mode = MapMode::Terrain;
                 jobs::start_preview(&mut active, &mut next_phase, &config);
+            }
+            SetupAction::EnterNationStage => {
+                ui.stage = PreviewStage::Nation;
+                *mode = MapMode::Political;
+                ui.preview_dirty = true;
+            }
+            SetupAction::LeaveNationStage => {
+                ui.stage = PreviewStage::Terrain;
+                *mode = MapMode::Terrain;
+                ui.preview_dirty = true;
             }
             SetupAction::PickNation(idx) => {
                 config.picked_nation = Some(*idx);
@@ -1764,7 +1792,12 @@ pub fn handle_preview_map_clicks(
             continue;
         };
         let tile = &tiles[tile_index];
-        if config.observer || ui.stage == PreviewStage::Nation {
+        // The terrain step has no clickable entities; nation rows react on
+        // the country step, capital hexes on the capital step.
+        if ui.stage == PreviewStage::Terrain {
+            continue;
+        }
+        if ui.stage == PreviewStage::Nation {
             if let Some(gp) = ui.gps.iter().find(|gp| gp.id == tile.nation_id) {
                 actions.write(SetupAction::PickNation(gp.idx));
             }

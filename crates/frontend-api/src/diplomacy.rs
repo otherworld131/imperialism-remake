@@ -582,7 +582,39 @@ pub fn dismiss_pending_action(
     Ok(())
 }
 
-/// Get pending diplomatic proposals for a nation.
+/// One-line factual consequence of accepting a proposal (decision context,
+/// card #514). Numbers mirror the domain: `break_treaty` costs 15 standing
+/// and 20 relations, alliances auto-join wars, a separate peace breaks the
+/// peacemaker's alliances, and a snubbed join-empire minor drops 20.
+fn accept_hint(proposal_type: TreatyType, from_name: &str, attacker_name: Option<&str>) -> String {
+    match proposal_type {
+        TreatyType::NonAggressionPact => {
+            "Mutual promise not to attack; breaking it later costs 15 standing and 20 relations."
+                .into()
+        }
+        TreatyType::Alliance => {
+            "Allies automatically join each other's wars; breaking it or making a separate peace costs 15 standing."
+                .into()
+        }
+        TreatyType::PeaceTreaty => format!(
+            "Ends your war with {from_name}; allies still fighting them will break their alliance with you."
+        ),
+        TreatyType::RequestToJoinEmpire => format!(
+            "{from_name}'s provinces join your empire; rejecting drops their relations by 20."
+        ),
+        TreatyType::WarDeclaration => {
+            "The war is already in effect — this notice only acknowledges it.".into()
+        }
+        TreatyType::PactDefenseRequest => format!(
+            "Declares war on {} and brings {from_name} into your empire; rejecting passes the plea to other powers.",
+            attacker_name.unwrap_or("the aggressor")
+        ),
+    }
+}
+
+/// Get pending diplomatic proposals for a nation, each with the decision
+/// context the player needs: current relation with the proposer (score,
+/// status, treaties, embassies) and what accepting means (card #514).
 pub fn get_pending_proposals(
     game: &GameState,
     nation_id: u32,
@@ -605,6 +637,41 @@ pub fn get_pending_proposals(
                 .get_nation(p.from)
                 .map(|n| format!("{:?}", n.color))
                 .unwrap_or_default();
+
+            // Relation context (same source as the diplomacy screen).
+            let rel = game.world.diplomacy.get_relation(nid, p.from);
+            let relation_score = rel.map(|r| r.score).unwrap_or(0);
+            let at_war = rel.map(|r| r.at_war).unwrap_or(false);
+            let has_consulate = rel.map(|r| r.has_consulate).unwrap_or(false);
+            let has_embassy = rel.map(|r| r.has_embassy).unwrap_or(false);
+            let treaties: Vec<String> = rel
+                .map(|r| {
+                    r.active_treaties
+                        .iter()
+                        .map(|t| format!("{:?}", t))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let proposer_in_anarchy = game
+                .get_nation(p.from)
+                .map(|n| n.diplomacy.is_in_anarchy)
+                .unwrap_or(false);
+            let relation_status = if proposer_in_anarchy {
+                "Anarchy"
+            } else if at_war {
+                "At War"
+            } else if rel.is_some_and(|r| r.has_treaty(TreatyType::Alliance)) {
+                "Alliance"
+            } else if rel.is_some_and(|r| r.has_treaty(TreatyType::NonAggressionPact)) {
+                "NAP"
+            } else {
+                "Neutral"
+            };
+            let attacker_name = p
+                .attacker
+                .and_then(|a| game.get_nation(a))
+                .map(|n| n.name.as_str());
+
             let display_text = match p.proposal_type {
                 TreatyType::NonAggressionPact => {
                     format!("{} proposes a Non-Aggression Pact", from_name)
@@ -618,14 +685,10 @@ pub fn get_pending_proposals(
                     format!("{} declares war", from_name)
                 }
                 TreatyType::PactDefenseRequest => {
-                    let attacker_name = p
-                        .attacker
-                        .and_then(|a| game.get_nation(a))
-                        .map(|n| n.name.as_str())
-                        .unwrap_or("an aggressor");
                     format!(
                         "{} requests your protection against {}",
-                        from_name, attacker_name
+                        from_name,
+                        attacker_name.unwrap_or("an aggressor")
                     )
                 }
             };
@@ -639,6 +702,13 @@ pub fn get_pending_proposals(
                 "display_text": display_text,
                 "turn_proposed": p.turn_proposed.0,
                 "turns_until_expiry": turns_until_expiry.max(0),
+                "relation_score": relation_score,
+                "relation_status": relation_status,
+                "at_war": at_war,
+                "treaties": treaties,
+                "has_consulate": has_consulate,
+                "has_embassy": has_embassy,
+                "accept_hint": accept_hint(p.proposal_type, from_name, attacker_name),
             })
         })
         .collect();

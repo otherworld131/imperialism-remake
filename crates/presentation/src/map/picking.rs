@@ -49,7 +49,10 @@ pub struct PickingBlocker;
 #[derive(Message, Debug, Clone, PartialEq, Eq)]
 pub struct MapClick(pub HoverTarget);
 
-fn cursor_over_ui(blockers: &Query<&Interaction, With<PickingBlocker>>) -> bool {
+/// True when the cursor is over any HUD node tagged [`PickingBlocker`] (its
+/// `Interaction` is `Hovered` or `Pressed`). Shared by map picking and the
+/// camera wheel-zoom guard so both agree on "the pointer is over UI".
+pub(crate) fn cursor_over_ui(blockers: &Query<&Interaction, With<PickingBlocker>>) -> bool {
     blockers
         .iter()
         .any(|interaction| *interaction != Interaction::None)

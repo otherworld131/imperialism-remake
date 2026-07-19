@@ -11,6 +11,7 @@ use bevy::math::Affine2;
 use bevy::prelude::*;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use crate::game::resources::{
     DeployMode, FleetTargets, FreshRail, MoveTargets, RailLinkOptions, RenderSettings, ViewModels,
@@ -21,7 +22,7 @@ use crate::map::camera::GameCamera;
 use crate::map::geometry::{self, HEX_SIZE};
 use crate::map::icons::IconAssets;
 use crate::map::lod::LodGate;
-use crate::map::organic::Point;
+use crate::map::organic::{self, Point};
 use crate::map::picking::{HoveredHex, SelectedHex};
 use crate::map::polyline::MeshBuilder2d;
 use crate::theme;
@@ -310,6 +311,107 @@ pub fn tile_fill_color(tile: &MapTile, mode: MapMode, fill_map: &HashMap<String,
     }
 }
 
+/// Ground-texture key for a land tile in terrain mode. Forest tiles without
+/// Timber are scrub wood (card #540) and use the washed-out `ForestScrub`
+/// ground instead of the vivid deep-green `Forest` one.
+fn ground_texture_name(tile: &MapTile) -> &str {
+    if tile.terrain == "Forest" && tile.resource.as_deref() != Some("Timber") {
+        "ForestScrub"
+    } else {
+        &tile.terrain
+    }
+}
+
+/// Number of authored river-source mountain appearance variants
+/// (`terrain/Mountain…River1..N`, card #539).
+pub const RIVER_SOURCE_VARIANTS: u32 = 3;
+
+/// Deterministic 1-based appearance variant for a river-source mountain hex.
+/// Keyed on the hex coords with an integer hash so maps look varied but the
+/// pick is stable across rebuilds and sessions.
+#[must_use]
+pub fn river_source_variant(q: i32, r: i32) -> u32 {
+    let mut h = (q.wrapping_mul(374_761_393) ^ r.wrapping_mul(668_265_263)) as u32;
+    h = (h ^ (h >> 13)).wrapping_mul(1_274_126_177);
+    1 + (h ^ (h >> 16)) % RIVER_SOURCE_VARIANTS
+}
+
+/// Coords of the hexes where a river originates (card #539): a mountain
+/// river tile with exactly one river-flagged land neighbor is the head of a
+/// generated river path. (Map generation starts every river on a mountain,
+/// forbids two rivers from touching, and forbids a path from re-approaching
+/// itself, so mid-course mountain tiles always have two river neighbors.)
+#[must_use]
+pub fn river_source_coords(tiles: &[MapTile]) -> HashSet<(i32, i32)> {
+    let river: HashSet<(i32, i32)> = tiles
+        .iter()
+        .filter(|t| t.has_river && !t.is_sea())
+        .map(|t| (t.q, t.r))
+        .collect();
+    tiles
+        .iter()
+        .filter(|t| t.terrain == "Mountain" && t.has_river && !t.is_sea())
+        .filter(|t| {
+            let downstream = borders::hex_neighbors(t.q, t.r)
+                .iter()
+                .filter(|n| river.contains(*n))
+                .count();
+            downstream == 1
+        })
+        .map(|t| (t.q, t.r))
+        .collect()
+}
+
+/// Terrain motif sprite name for one land tile in terrain mode
+/// (cards #542 / #540 / #539).
+///
+/// - A tile whose resource is visible to the player uses the integrated
+///   `terrain/<Terrain><Resource>` art — the resource is woven into the hex
+///   design (grain rows, coal seams, sheep, …) instead of an icon overlay.
+///   Hidden deposits keep the plain art until a prospector reveals them;
+///   the swap then happens on the next map rebuild (view-model version bump).
+/// - The "Show resources" display toggle now switches between plain and
+///   resource-integrated tile art (plus the improvement badges).
+/// - Forests (#540): Timber present → the vivid `Forest` pines (good,
+///   developable timber); no Timber → the sparse, desaturated `ForestScrub`.
+///   This is the tile's identity, independent of the display toggle.
+/// - Plain grassland stays motif-free (open ground).
+/// - Mountains where a river originates (#539) append `River<variant>` to
+///   the motif (`MountainRiver2`, `MountainGoldRiver1`, …) — the art shows
+///   the stream flowing out of the flank. `river_variant` is the
+///   [`river_source_variant`] pick for source hexes, `None` otherwise; like
+///   the forest split it is terrain identity, not a display toggle.
+pub fn terrain_motif_name(
+    tile: &MapTile,
+    settings: &RenderSettings,
+    river_variant: Option<u32>,
+) -> Option<String> {
+    if tile.is_sea() {
+        return None;
+    }
+    if tile.terrain == "Forest" {
+        return Some(if tile.resource.as_deref() == Some("Timber") {
+            "Forest".to_string()
+        } else {
+            "ForestScrub".to_string()
+        });
+    }
+    let base = match tile.resource.as_deref() {
+        Some(resource)
+            if settings.show_resources
+                && (!tile.resource_hidden || settings.show_hidden_resources) =>
+        {
+            Some(format!("{}{}", tile.terrain, resource))
+        }
+        _ if tile.terrain == "Grassland" => None,
+        _ => Some(tile.terrain.clone()),
+    };
+    match (base, river_variant) {
+        (Some(base), Some(v)) if tile.terrain == "Mountain" => Some(format!("{base}River{v}")),
+        (base, _) => base,
+    }
+}
+
 /// Fill spec for one tile: a multiplier color plus an optional repeating
 /// pixel-art ground texture (keyed by terrain name for mesh grouping).
 /// Terrain mode samples ground textures for land, the sea is textured in
@@ -323,9 +425,17 @@ pub fn tile_fill_spec(
     let ground = if tile.is_sea() {
         icons.get("ground", "Sea").map(|h| ("Sea".to_string(), h))
     } else if mode == MapMode::Terrain {
+        let key = ground_texture_name(tile);
         icons
-            .get("ground", &tile.terrain)
-            .map(|h| (tile.terrain.clone(), h))
+            .get("ground", key)
+            .map(|h| (key.to_string(), h))
+            .or_else(|| {
+                // Scrub texture missing → the vivid forest ground still
+                // beats a flat fill.
+                icons
+                    .get("ground", &tile.terrain)
+                    .map(|h| (tile.terrain.clone(), h))
+            })
     } else {
         None
     };
@@ -593,21 +703,30 @@ pub fn rebuild_layers(
     // ── Pass 1a: terrain motif sprites (terrain mode) ───────────────────
     // Every land tile gets an authored terrain icon (mountains, forest,
     // swamp, …) layered over its color fill, so terrain reads as art and
-    // not just a flat tint. These live in the static layer because they
-    // depend only on the map, not on per-turn marker state.
+    // not just a flat tint. Tiles with a visible resource swap to the
+    // integrated `<Terrain><Resource>` variant (cards #542/#540) — the
+    // resource is part of the hex art, not an overlay. These live in the
+    // static layer: a prospector's find bumps the view-model version and
+    // rebuilds them with the revealed variant.
     if *mode == MapMode::Terrain {
         let terrain_size = HEX_SIZE * 1.5;
+        // Mountains where a river originates get the outflow-stream art
+        // (card #539), in one of a few hash-picked appearance variants.
+        let river_sources = river_source_coords(tiles);
         for tile in tiles {
-            if tile.is_sea() {
+            let river_variant = river_sources
+                .contains(&(tile.q, tile.r))
+                .then(|| river_source_variant(tile.q, tile.r));
+            // Plain grassland reads cleaner as open ground: no motif (the
+            // grass-tuft art looked like stray clutter on every tile).
+            let Some(motif) = terrain_motif_name(tile, &settings, river_variant) else {
                 continue;
-            }
-            // Plains read cleaner as open ground: the grass-tuft motif looked
-            // like stray clutter on every grassland tile, so grassland keeps
-            // only its ground texture (other terrains keep their motifs).
-            if tile.terrain == "Grassland" {
-                continue;
-            }
-            let Some(image) = icons.get("terrain", &tile.terrain) else {
+            };
+            // Missing variant art falls back to the plain terrain motif.
+            let Some(image) = icons
+                .get("terrain", &motif)
+                .or_else(|| icons.get("terrain", &tile.terrain))
+            else {
                 continue;
             };
             let p = geometry::hex_to_world(tile.q, tile.r);
@@ -887,6 +1006,11 @@ pub fn rebuild_layers(
     }
 
     // ── Pass 3a: rivers (terrain mode only) ─────────────────────────────
+    // Card #539: river courses meander. Each hex-center-to-hex-center
+    // segment runs through the organic displacement pipeline with a
+    // dedicated seeded noise field (stable per rebuild), endpoints pinned at
+    // the hex centers so chained segments join continuously and the
+    // amplitude tuned to stay inside the two hexes' corridor.
     if *mode == MapMode::Terrain {
         let index: HashMap<(i32, i32), &MapTile> = tiles.iter().map(|t| ((t.q, t.r), t)).collect();
         let mut builder = MeshBuilder2d::default();
@@ -900,16 +1024,34 @@ pub fn rebuild_layers(
                 let Some(neighbor) = index.get(&(nq, nr)) else {
                     continue;
                 };
-                if !neighbor.has_river && !neighbor.is_sea() {
+                let to_sea = neighbor.is_sea();
+                if !neighbor.has_river && !to_sea {
+                    continue;
+                }
+                // A land-land river edge is visited from both endpoints;
+                // draw it once, from the lexicographically smaller coord.
+                // (Reversing a displaced segment mirrors its meander, so the
+                // duplicate would double-image the curve. Sea mouths are
+                // only ever visited from the land side.)
+                if !to_sea && (nq, nr) < (tile.q, tile.r) {
                     continue;
                 }
                 let np = geometry::hex_to_world(nq, nr);
-                let target = if neighbor.is_sea() {
-                    p + (np - p) * 0.45
+                let target = if to_sea { p + (np - p) * 0.45 } else { np };
+                if settings.organic_borders {
+                    let curve = organic::river_polyline(
+                        [f64::from(p.x), f64::from(p.y)],
+                        [f64::from(target.x), f64::from(target.y)],
+                        f64::from(HEX_SIZE),
+                    );
+                    let pts: Vec<Vec2> = curve
+                        .iter()
+                        .map(|c| Vec2::new(c[0] as f32, c[1] as f32))
+                        .collect();
+                    builder.add_polyline_strip(&pts, width, false);
                 } else {
-                    np
-                };
-                builder.add_segment(p, target, width);
+                    builder.add_segment(p, target, width);
+                }
                 // Round-ish cap at each endpoint so meeting segments blend.
                 builder.add_circle(p, width / 2.0, 8);
                 builder.add_circle(target, width / 2.0, 8);
@@ -1508,12 +1650,12 @@ mod tests {
     #[test]
     fn terrain_mode_owned_land_tints_the_texture() {
         let (color, texture) = tile_fill_spec(
-            &tile("Forest", "Red"),
+            &tile("Hills", "Red"),
             MapMode::Terrain,
             &HashMap::new(),
             &icons_with_ground(),
         );
-        assert_eq!(texture.expect("forest ground texture").0, "Forest");
+        assert_eq!(texture.expect("hills ground texture").0, "Hills");
         assert_ne!(color, Color::WHITE, "nation tint must survive texturing");
     }
 
@@ -1623,6 +1765,196 @@ mod tests {
             expected_phases(width_b),
             "textured UV phase shifts must follow the new map width"
         );
+    }
+
+    fn tile_with_resource(terrain: &str, resource: &str, hidden: bool) -> MapTile {
+        let mut t = tile(terrain, "");
+        t.resource = Some(resource.to_string());
+        t.resource_hidden = hidden;
+        t
+    }
+
+    /// Cards #542/#540: visible resources swap the terrain motif to the
+    /// integrated `<Terrain><Resource>` variant; hidden deposits keep the
+    /// plain art until revealed; forests key vivid-vs-scrub on Timber.
+    #[test]
+    fn terrain_motif_integrates_visible_resources() {
+        let settings = RenderSettings::default();
+        assert_eq!(
+            terrain_motif_name(&tile_with_resource("Hills", "Coal", false), &settings, None),
+            Some("HillsCoal".to_string())
+        );
+        assert_eq!(
+            terrain_motif_name(
+                &tile_with_resource("Grassland", "Grain", false),
+                &settings,
+                None
+            ),
+            Some("GrasslandGrain".to_string())
+        );
+        // Undiscovered deposit → plain art until a prospector reveals it.
+        assert_eq!(
+            terrain_motif_name(
+                &tile_with_resource("Mountain", "Gold", true),
+                &settings,
+                None
+            ),
+            Some("Mountain".to_string())
+        );
+        // Debug reveal shows the integrated art for hidden deposits too.
+        let debug = RenderSettings {
+            show_hidden_resources: true,
+            ..settings
+        };
+        assert_eq!(
+            terrain_motif_name(&tile_with_resource("Mountain", "Gold", true), &debug, None),
+            Some("MountainGold".to_string())
+        );
+        // "Show resources" off → plain terrain art everywhere.
+        let plain = RenderSettings {
+            show_resources: false,
+            ..settings
+        };
+        assert_eq!(
+            terrain_motif_name(&tile_with_resource("Hills", "Coal", false), &plain, None),
+            Some("Hills".to_string())
+        );
+        // Bare grassland stays motif-free; sea never has a motif.
+        assert_eq!(
+            terrain_motif_name(&tile("Grassland", ""), &settings, None),
+            None
+        );
+        assert_eq!(terrain_motif_name(&tile("Sea", ""), &settings, None), None);
+    }
+
+    /// Card #539: mountains at a river's head get the outflow-stream motif
+    /// in a deterministic hash-picked variant; mid-course mountains, plain
+    /// mountains and non-mountain river tiles stay unchanged.
+    #[test]
+    fn river_source_mountains_get_stream_motif_variants() {
+        let settings = RenderSettings::default();
+
+        // River path: mountain source (0,0) → mountain (1,0) → hills (2,0),
+        // plus a dry mountain at (0,2) and a sea tile at (3,0).
+        let mut source = tile("Mountain", "");
+        source.has_river = true;
+        let mut mid = tile("Mountain", "");
+        (mid.q, mid.has_river) = (1, true);
+        let mut hills = tile("Hills", "");
+        (hills.q, hills.has_river) = (2, true);
+        let mut dry = tile("Mountain", "");
+        dry.r = 2;
+        let mut sea = tile("Sea", "");
+        sea.q = 3;
+        let tiles = vec![source.clone(), mid.clone(), hills, dry.clone(), sea];
+
+        let sources = river_source_coords(&tiles);
+        assert_eq!(
+            sources,
+            HashSet::from([(0, 0)]),
+            "only the head of the path is a source"
+        );
+
+        // The hash pick is stable and in range.
+        let v = river_source_variant(0, 0);
+        assert_eq!(v, river_source_variant(0, 0));
+        assert!((1..=RIVER_SOURCE_VARIANTS).contains(&v));
+
+        // Source mountain motif gains the River suffix; resource variants
+        // compose (MountainGoldRiver<v>); everyone else is untouched.
+        assert_eq!(
+            terrain_motif_name(&source, &settings, Some(v)),
+            Some(format!("MountainRiver{v}"))
+        );
+        let mut gold_source = tile_with_resource("Mountain", "Gold", false);
+        gold_source.has_river = true;
+        assert_eq!(
+            terrain_motif_name(&gold_source, &settings, Some(v)),
+            Some(format!("MountainGoldRiver{v}"))
+        );
+        assert_eq!(
+            terrain_motif_name(&mid, &settings, None),
+            Some("Mountain".to_string())
+        );
+        assert_eq!(
+            terrain_motif_name(&dry, &settings, None),
+            Some("Mountain".to_string())
+        );
+        // A non-mountain tile never gets the suffix even if a variant is
+        // passed by mistake.
+        let mut river_hills = tile("Hills", "");
+        river_hills.has_river = true;
+        assert_eq!(
+            terrain_motif_name(&river_hills, &settings, Some(v)),
+            Some("Hills".to_string())
+        );
+    }
+
+    /// Card #539: every coordinate hashes into a valid variant, and the
+    /// variants actually vary across coords ("multiple versions").
+    #[test]
+    fn river_source_variant_is_bounded_and_varied() {
+        let mut seen = HashSet::new();
+        for q in -20..20 {
+            for r in -20..20 {
+                let v = river_source_variant(q, r);
+                assert!((1..=RIVER_SOURCE_VARIANTS).contains(&v));
+                seen.insert(v);
+            }
+        }
+        assert_eq!(seen.len() as u32, RIVER_SOURCE_VARIANTS);
+    }
+
+    /// Card #540: two forest looks — vivid pines for good (Timber) forest,
+    /// desaturated scrub otherwise — independent of the display toggle.
+    #[test]
+    fn forest_keys_vivid_vs_scrub_on_timber() {
+        for show_resources in [true, false] {
+            let settings = RenderSettings {
+                show_resources,
+                ..RenderSettings::default()
+            };
+            assert_eq!(
+                terrain_motif_name(
+                    &tile_with_resource("Forest", "Timber", false),
+                    &settings,
+                    None
+                ),
+                Some("Forest".to_string())
+            );
+            assert_eq!(
+                terrain_motif_name(&tile("Forest", ""), &settings, None),
+                Some("ForestScrub".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn scrub_forest_uses_scrub_ground_texture() {
+        let icons = icons_with_ground();
+        let (_, texture) = tile_fill_spec(
+            &tile("Forest", ""),
+            MapMode::Terrain,
+            &HashMap::new(),
+            &icons,
+        );
+        assert_eq!(texture.expect("scrub ground").0, "ForestScrub");
+        let (_, texture) = tile_fill_spec(
+            &tile_with_resource("Forest", "Timber", false),
+            MapMode::Terrain,
+            &HashMap::new(),
+            &icons,
+        );
+        assert_eq!(texture.expect("vivid ground").0, "Forest");
+        // Missing scrub texture → vivid forest ground beats a flat fill.
+        let vivid_only = IconAssets::for_test(&[("ground", "Forest")]);
+        let (_, texture) = tile_fill_spec(
+            &tile("Forest", ""),
+            MapMode::Terrain,
+            &HashMap::new(),
+            &vivid_only,
+        );
+        assert_eq!(texture.expect("fallback ground").0, "Forest");
     }
 
     #[test]

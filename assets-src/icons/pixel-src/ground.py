@@ -24,10 +24,13 @@ def _shade(hex_color, factor):
 
 
 # terrain → base color (mirrors theme::terrain_color).
+# "ForestScrub" is the washed-out ground for timberless forest tiles
+# (card #540): same family as Forest, but grey-green and less vivid.
 BASES = {
     "Grassland": "#a8b860",
     "Hills": "#9a8a68",
     "Forest": "#3a7a3a",
+    "ForestScrub": "#5c7a52",
     "Mountain": "#7a7068",
     "Desert": "#d8c888",
     "Swamp": "#5a7a5a",
@@ -111,6 +114,18 @@ def forest():
     return cv
 
 
+def forest_scrub():
+    cv, k = _base_canvas("ForestScrub")
+    rng = random.Random("ForestScrub")
+    # Sparser + paler than Forest: fewer speckles, thinner underbrush.
+    _speckle(cv, rng, 34, [f"{k}_lt", f"{k}_dk"])
+    for _ in range(5):
+        x, y = rng.randrange(SIZE), rng.randrange(SIZE)
+        _wrap_px(cv, x, y, f"{k}_dk2")
+        _wrap_px(cv, x + 1, y, f"{k}_dk")
+    return cv
+
+
 def mountain():
     cv, k = _base_canvas("Mountain")
     rng = random.Random("Mountain")
@@ -183,6 +198,7 @@ GROUND = [
     ("ground/Grassland", grassland),
     ("ground/Hills", hills),
     ("ground/Forest", forest),
+    ("ground/ForestScrub", forest_scrub),
     ("ground/Mountain", mountain),
     ("ground/Desert", desert),
     ("ground/Swamp", swamp),

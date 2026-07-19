@@ -763,6 +763,18 @@ pub struct ProposalVm {
     pub display_text: String,
     pub turn_proposed: u32,
     pub turns_until_expiry: u32,
+    /// Decision context (card #514): the player's current relation with the
+    /// proposer, mirrored from the diplomacy-screen relation row.
+    pub relation_score: i64,
+    /// `"Anarchy" | "At War" | "Alliance" | "NAP" | "Neutral"`.
+    pub relation_status: String,
+    pub at_war: bool,
+    /// Active treaties with the proposer (`"NonAggressionPact"`, `"Alliance"`).
+    pub treaties: Vec<String>,
+    pub has_consulate: bool,
+    pub has_embassy: bool,
+    /// One factual line on what accepting this proposal does.
+    pub accept_hint: String,
 }
 
 // ── Between-turns session (`frontend_api::turn_session::session_view`) ──

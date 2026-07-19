@@ -278,11 +278,27 @@ pub fn poll_setup_job(
             settings.preview_hide_ownership = !config.observer;
             settings.organic_borders = config.organic_borders;
             settings.hide_hex_grid = config.hide_hex_grid;
-            *mode = MapMode::Political;
             centered.0 = false;
             commands.remove_resource::<MapBounds>();
+            // Entering from the config step starts at the terrain step
+            // (scenarios have no terrain knobs and skip straight to the
+            // country step); a regeneration (slider commit / Randomize /
+            // Re-roll) keeps the player on their current step.
+            if ui.step != SetupStep::Preview {
+                ui.stage = if config.scenario.is_some() {
+                    PreviewStage::Nation
+                } else {
+                    PreviewStage::Terrain
+                };
+            }
+            // Each step owns its map mode: terrain edits are shown on the
+            // terrain map, country choice on the political map (#528/#545).
+            *mode = if ui.stage == PreviewStage::Terrain {
+                MapMode::Terrain
+            } else {
+                MapMode::Political
+            };
             ui.step = SetupStep::Preview;
-            ui.stage = PreviewStage::Nation;
             ui.hovered_capital = None;
             ui.picked_capital = None;
             ui.sidebar_hovered = None;

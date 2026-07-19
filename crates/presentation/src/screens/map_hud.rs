@@ -201,6 +201,11 @@ pub fn setup_hud(
                         BackgroundColor(theme::PANEL_BG_SOLID),
                         BorderColor::all(theme::BORDER),
                         GlobalZIndex(20),
+                        // The popover spills below the top bar over the map;
+                        // tag it so map picking and wheel-zoom treat it as UI
+                        // (Trello #543).
+                        Interaction::default(),
+                        PickingBlocker,
                     ))
                     .with_children(|menu| {
                         let scroll = widgets::spawn_scroll_area(
