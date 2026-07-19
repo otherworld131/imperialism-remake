@@ -29,6 +29,17 @@ fn update_fresh_rail(fresh: &mut FreshRail, tiles: &[vm::MapTile], turn_label: &
                 .collect::<Vec<_>>()
         })
         .collect();
+    rotate_fresh_rail(fresh, current, turn_label);
+}
+
+/// The tile-independent core of [`update_fresh_rail`]: rotate the tracker
+/// against the current edge set. Split out so the branching (first fetch,
+/// mid-turn absorb, turn-boundary diff) is unit-testable with plain sets.
+fn rotate_fresh_rail(
+    fresh: &mut FreshRail,
+    current: std::collections::HashSet<RailEdge>,
+    turn_label: &str,
+) {
     if fresh.fetched_turn.as_deref() == Some(turn_label) {
         fresh.prev_edges.extend(current);
         return;
@@ -342,4 +353,64 @@ pub fn refresh_view_models(
         data_version.0,
         refresh_started.elapsed(),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn edges(list: &[((i32, i32), (i32, i32))]) -> HashSet<RailEdge> {
+        list.iter().copied().collect()
+    }
+
+    #[test]
+    fn first_fetch_highlights_nothing() {
+        let mut fresh = FreshRail::default();
+        rotate_fresh_rail(&mut fresh, edges(&[((0, 0), (1, 0))]), "1815 Q1");
+        assert!(fresh.fresh_edges.is_empty());
+        assert_eq!(fresh.prev_edges, edges(&[((0, 0), (1, 0))]));
+        assert_eq!(fresh.fetched_turn.as_deref(), Some("1815 Q1"));
+    }
+
+    #[test]
+    fn turn_boundary_diffs_only_new_edges() {
+        let mut fresh = FreshRail::default();
+        rotate_fresh_rail(&mut fresh, edges(&[((0, 0), (1, 0))]), "1815 Q1");
+        rotate_fresh_rail(
+            &mut fresh,
+            edges(&[((0, 0), (1, 0)), ((1, 0), (2, 0))]),
+            "1815 Q2",
+        );
+        assert_eq!(fresh.fresh_edges, edges(&[((1, 0), (2, 0))]));
+        // Next turn with no construction: the glow rotates out.
+        rotate_fresh_rail(
+            &mut fresh,
+            edges(&[((0, 0), (1, 0)), ((1, 0), (2, 0))]),
+            "1815 Q3",
+        );
+        assert!(fresh.fresh_edges.is_empty());
+    }
+
+    #[test]
+    fn mid_turn_refresh_absorbs_reveals_without_highlighting() {
+        let mut fresh = FreshRail::default();
+        rotate_fresh_rail(&mut fresh, edges(&[((0, 0), (1, 0))]), "1815 Q1");
+        // Same turn label (fog toggle revealed an edge): baseline grows,
+        // nothing highlighted.
+        rotate_fresh_rail(
+            &mut fresh,
+            edges(&[((0, 0), (1, 0)), ((5, 5), (6, 5))]),
+            "1815 Q1",
+        );
+        assert!(fresh.fresh_edges.is_empty());
+        assert!(fresh.prev_edges.contains(&((5, 5), (6, 5))));
+        // The revealed edge does not read as new construction next turn.
+        rotate_fresh_rail(
+            &mut fresh,
+            edges(&[((0, 0), (1, 0)), ((5, 5), (6, 5))]),
+            "1815 Q2",
+        );
+        assert!(fresh.fresh_edges.is_empty());
+    }
 }

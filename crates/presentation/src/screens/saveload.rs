@@ -230,7 +230,9 @@ pub fn open_load_modal(commands: &mut Commands, stack: &mut ModalStack, theme: &
             .entity(scroll.content)
             .with_children(|list| {
                 for save in &saves {
-                    let incompatible = save.version.is_some_and(|v| v != current_version);
+                    // `None` (unreadable metadata) is just as non-loadable
+                    // as a version mismatch.
+                    let incompatible = save.version != Some(current_version);
                     list.spawn((
                         Node {
                             width: Val::Percent(100.0),
@@ -277,11 +279,14 @@ pub fn open_load_modal(commands: &mut Commands, stack: &mut ModalStack, theme: &
                                     TextColor(theme::TEXT_DIM),
                                 ));
                                 if incompatible {
+                                    let reason = match save.version {
+                                        Some(version) => format!(
+                                            "Incompatible save (version {version}; current {current_version})"
+                                        ),
+                                        None => "Unreadable save — cannot load".to_string(),
+                                    };
                                     info.spawn((
-                                        Text::new(format!(
-                                            "Incompatible save (version {}; current {current_version})",
-                                            save.version.unwrap_or(0)
-                                        )),
+                                        Text::new(reason),
                                         theme.font(10.5),
                                         TextColor(theme::ERROR),
                                     ));
@@ -447,6 +452,7 @@ pub fn handle_saveload_buttons(
     mut active_job: ResMut<ActiveSetupJob>,
     mut next_phase: ResMut<NextState<TurnPhase>>,
     mut toasts: MessageWriter<Toast>,
+    intro_roots: Query<Entity, With<crate::intro::IntroRoot>>,
 ) {
     let SaveLoadButtons {
         save: save_buttons,
@@ -481,22 +487,31 @@ pub fn handle_saveload_buttons(
         } else if let Ok(button) = load_buttons.get(*entity) {
             // Version gate (the row button is also disabled; this guard
             // covers keyboard activation): keep the modal open and explain
-            // instead of failing silently later.
+            // instead of failing silently later. `None` = unreadable
+            // metadata — equally non-loadable.
             let current = frontend_api::session::current_save_version();
-            if let Some(version) = button.version
-                && version != current
-            {
-                for mut line in &mut error_lines {
-                    **line = format!("Incompatible save (version {version}; current {current}).");
+            match button.version {
+                Some(version) if version == current => {}
+                Some(version) => {
+                    for mut line in &mut error_lines {
+                        **line =
+                            format!("Incompatible save (version {version}; current {current}).");
+                    }
+                    continue;
                 }
-                continue;
+                None => {
+                    for mut line in &mut error_lines {
+                        **line = "Unreadable save — cannot load.".to_string();
+                    }
+                    continue;
+                }
             }
             commands.entity(button.modal).despawn();
             jobs::start_load(&mut active_job, &mut next_phase, button.path.clone());
         } else if let Ok(button) = delete_buttons.get(*entity) {
             open_delete_modal(&mut commands, &mut stack, &theme, button);
         } else if let Ok(button) = delete_confirm_buttons.get(*entity) {
-            match frontend_api::session::delete_save(&button.path) {
+            match frontend_api::session::delete_save(&saves_dir(), &button.path) {
                 Ok(()) => {
                     toasts.write(Toast::success(format!("Deleted \"{}\".", button.file_name)));
                     for modal in button.modals {
@@ -504,6 +519,12 @@ pub fn handle_saveload_buttons(
                     }
                     // Reopen the browser with a fresh listing.
                     open_load_modal(&mut commands, &mut stack, &theme);
+                    // On the title screen, the Continue button caches the
+                    // newest-save path; respawn the intro menu so it is
+                    // recomputed (or dropped) after the deletion.
+                    for root in &intro_roots {
+                        commands.entity(root).despawn();
+                    }
                 }
                 Err(err) => {
                     toasts.write(Toast::error(format!("Delete failed: {}", err.message())));

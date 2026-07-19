@@ -524,6 +524,14 @@ pub fn populate_screen_tab_icons(
     for (entity, slot) in &slots {
         if let Some(image) = icons.get("ui", slot.0) {
             commands.entity(entity).insert(ImageNode::new(image));
+        } else {
+            // Insert a blank ImageNode so the slot leaves the query and the
+            // warning fires once, not every frame.
+            warn!(
+                "screen-tab icon 'ui/{}' missing — tab renders blank",
+                slot.0
+            );
+            commands.entity(entity).insert(ImageNode::default());
         }
     }
 }

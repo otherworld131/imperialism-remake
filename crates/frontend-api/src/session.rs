@@ -37,9 +37,23 @@ pub fn current_save_version() -> u32 {
     infrastructure::persistence::CURRENT_SAVE_VERSION
 }
 
-/// Delete a save file from disk.
-pub fn delete_save(path: &Path) -> Result<(), ApiError> {
-    infrastructure::persistence::delete_save(path)
+/// Delete a save file from disk. The path must resolve inside `dir` (the
+/// saves directory the caller listed from) — a bare filename joined
+/// elsewhere or a traversal path is rejected.
+pub fn delete_save(dir: &Path, path: &Path) -> Result<(), ApiError> {
+    let canonical_dir = dir
+        .canonicalize()
+        .map_err(|e| ApiError::json(format!("delete: {e}")))?;
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| ApiError::json(format!("delete: {e}")))?;
+    if !canonical.starts_with(&canonical_dir) {
+        return Err(ApiError::json(format!(
+            "delete: {} is outside the saves directory",
+            path.display()
+        )));
+    }
+    infrastructure::persistence::delete_save(&canonical)
         .map_err(|e| ApiError::json(format!("delete: {e}")))
 }
 

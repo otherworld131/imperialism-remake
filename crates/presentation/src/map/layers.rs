@@ -1248,9 +1248,9 @@ pub fn rebuild_highlight_layers(
 }
 
 /// Pulse the fresh-rail under-glow (card: newly laid track has very quiet
-/// feedback). The three wrap copies share one material, so one write per
-/// frame animates them all; the alpha floor keeps the highlight obvious even
-/// in still screenshots.
+/// feedback). The wrap copies clone the same material handle (same asset),
+/// so the per-copy writes are idempotent re-writes of one shared asset; the
+/// alpha floor keeps the highlight obvious even in still screenshots.
 pub fn animate_fresh_rail(
     time: Res<Time>,
     glows: Query<&MeshMaterial2d<ColorMaterial>, With<FreshRailGlow>>,

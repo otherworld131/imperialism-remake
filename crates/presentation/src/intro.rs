@@ -107,10 +107,14 @@ pub fn setup_intro(
                 BackgroundColor(Color::srgba(0.05, 0.05, 0.1, 0.55)),
             ))
             .with_children(|menu| {
-                // Continue = load the newest save; hidden when none exist.
+                // Continue = load the newest *loadable* save; hidden when
+                // none exist. Incompatible or unreadable saves are skipped —
+                // the load modal disables them, and a one-click shortcut
+                // must not route around that gate.
+                let current = frontend_api::session::current_save_version();
                 let newest_save = frontend_api::session::list_saves(&saveload::saves_dir())
                     .into_iter()
-                    .next();
+                    .find(|save| save.version == Some(current));
                 if let Some(save) = newest_save {
                     let detail = if save.nation_name.is_empty() {
                         save.file_name.clone()
