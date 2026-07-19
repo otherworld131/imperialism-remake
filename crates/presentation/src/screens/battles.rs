@@ -366,9 +366,11 @@ pub fn update_battles(
                     return;
                 }
 
-                // Left column: mini-map + engagement list.
+                // Left column: mini-map + engagement list. Sized so the
+                // details panel keeps readable width at 175% UI scale on a
+                // 1280×720 window.
                 body.spawn(Node {
-                    width: Val::Px(384.0),
+                    width: Val::Px(MAP_W + 24.0),
                     flex_shrink: 0.0,
                     flex_direction: FlexDirection::Column,
                     row_gap: Val::Px(8.0),
@@ -440,11 +442,14 @@ pub fn update_battles(
                     });
                 });
 
-                // Right column: details.
+                // Right column: details. `width: Auto` (not the default
+                // 100%) so the panel fills the space next to the fixed left
+                // column instead of overflowing the right screen edge.
                 let scroll = widgets::spawn_scroll_area(
                     body,
                     &theme,
                     ScrollProps {
+                        width: Val::Auto,
                         flex_grow: 1.0,
                         ..default()
                     },
@@ -535,9 +540,9 @@ fn battle_list_row(
 
 // ── Province mini-map ────────────────────────────────────────────────────
 
-const MAP_W: f32 = 360.0;
-const MAP_H: f32 = 260.0;
-const MAP_HEX: f32 = 18.0;
+const MAP_W: f32 = 300.0;
+const MAP_H: f32 = 220.0;
+const MAP_HEX: f32 = 15.0;
 const MAP_RADIUS: i32 = 15;
 
 fn spawn_minimap(
@@ -669,7 +674,13 @@ fn spawn_minimap(
     raster.draw_dot(to, 4.0, [255, 64, 64], [26, 26, 26]);
     let image = images.add(raster.into_image());
 
-    let labels = minimap::compute_nation_labels(&label_tiles, 5, MAP_HEX, offset);
+    let labels = minimap::place_nation_labels(
+        minimap::compute_nation_labels(&label_tiles, 5, MAP_HEX, offset),
+        Vec2::new(MAP_W, MAP_H),
+        3.0,
+        10.0,
+        18.0,
+    );
     parent
         .spawn((
             frame,
@@ -678,19 +689,7 @@ fn spawn_minimap(
         ))
         .with_children(|map| {
             for label in &labels {
-                let font_size = ((label.size as f32).sqrt() * 3.0).clamp(10.0, 18.0);
-                let name = label.name.to_uppercase();
-                // Clamp the label center so the rendered text stays inside
-                // the clipped minimap frame instead of getting cut mid-word.
-                let half_text = name.chars().count() as f32 * font_size * 0.30;
-                let pos = Vec2::new(
-                    label.pos.x.clamp(
-                        half_text.min(MAP_W / 2.0),
-                        (MAP_W - half_text).max(MAP_W / 2.0),
-                    ),
-                    label.pos.y.clamp(12.0, MAP_H - 12.0),
-                );
-                map_label(map, theme, &name, pos, font_size);
+                map_label(map, theme, &label.name, label.pos, label.font_size);
             }
         });
 }
@@ -1190,6 +1189,9 @@ fn force_column(
                     flex_direction: FlexDirection::Row,
                     align_items: AlignItems::Center,
                     column_gap: Val::Px(6.0),
+                    // Wrap "(Attacker)" under the name in narrow columns
+                    // instead of running into the neighbouring header.
+                    flex_wrap: FlexWrap::Wrap,
                     ..default()
                 })
                 .with_children(|header| {
@@ -1215,18 +1217,33 @@ fn force_column(
                         TextColor(theme::TEXT_DIM),
                     ));
                 });
-            column.spawn((
-                Text::new(format!(
-                    "{initial} engaged · {survived} survived · {} lost",
-                    casualties.len()
-                )),
-                theme.font(12.0),
-                TextColor(Color::srgb_u8(0xbb, 0xbb, 0xbb)),
-                Node {
+            // One text node per stat so a narrow column wraps between the
+            // stats ("… · 0 lost") instead of mid-phrase ("0\nlost").
+            column
+                .spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    flex_wrap: FlexWrap::Wrap,
+                    column_gap: Val::Px(4.0),
                     margin: UiRect::bottom(Val::Px(4.0)),
                     ..default()
-                },
-            ));
+                })
+                .with_children(|stats| {
+                    for (i, stat) in [
+                        format!("{initial} engaged"),
+                        format!("{survived} survived"),
+                        format!("{} lost", casualties.len()),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        let text = if i == 0 { stat } else { format!("· {stat}") };
+                        stats.spawn((
+                            Text::new(text),
+                            theme.font(12.0),
+                            TextColor(Color::srgb_u8(0xbb, 0xbb, 0xbb)),
+                        ));
+                    }
+                });
 
             let use_logs = debug.show_battle_firepower && !logs.is_empty();
             if use_logs {

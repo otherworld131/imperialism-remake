@@ -48,6 +48,9 @@ pub fn spawn_scroll_area(
             width: props.width,
             height: props.height,
             flex_grow: props.flex_grow,
+            // Shrinkable in both axes so a scroll area dropped into a row
+            // (battle details) or column never pushes siblings off-screen.
+            min_width: Val::Px(0.0),
             min_height: Val::Px(0.0),
             flex_direction: FlexDirection::Row,
             column_gap: Val::Px(2.0),
@@ -62,6 +65,11 @@ pub fn spawn_scroll_area(
                 UiScrollArea,
                 Node {
                     flex_grow: 1.0,
+                    // Container-driven sizing: basis 0 + grow gives the
+                    // viewport exactly (root − scrollbar), independent of
+                    // content width — wide rows then clip/shrink instead of
+                    // running under the scrollbar and off-screen.
+                    flex_basis: Val::Px(0.0),
                     min_width: Val::Px(0.0),
                     min_height: Val::Px(0.0),
                     height: Val::Percent(100.0),
@@ -118,6 +126,34 @@ pub fn spawn_scroll_area(
     }
 }
 
-/// This module only contributes the constructor; thumb behavior comes from
-/// the core `ScrollbarPlugin` registered by `WidgetsPlugin`.
-pub(super) fn plugin(_app: &mut App) {}
+/// Hide the styled scrollbar (track + thumb) while its target viewport has
+/// nothing to scroll — a full-height gold pillar next to content that fits
+/// reads as "scrollable" when it isn't. `Visibility::Hidden` (not
+/// `Display::None`) keeps the 8px gutter so layout stays stable when the
+/// bar reappears.
+fn hide_scrollbar_when_content_fits(
+    mut scrollbars: Query<(&Scrollbar, &mut Visibility)>,
+    viewports: Query<&bevy::ui::ComputedNode, With<UiScrollArea>>,
+) {
+    for (scrollbar, mut visibility) in &mut scrollbars {
+        let Ok(viewport) = viewports.get(scrollbar.target) else {
+            continue;
+        };
+        // Physical px; a sub-pixel epsilon avoids flicker on exact fits.
+        let overflows = viewport.content_size().y > viewport.size().y + 0.5;
+        let wanted = if overflows {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if *visibility != wanted {
+            *visibility = wanted;
+        }
+    }
+}
+
+/// Thumb behavior comes from the core `ScrollbarPlugin` registered by
+/// `WidgetsPlugin`; this module adds the fits-content visibility toggle.
+pub(super) fn plugin(app: &mut App) {
+    app.add_systems(Update, hide_scrollbar_when_content_fits);
+}

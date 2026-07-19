@@ -98,10 +98,17 @@ pub(super) fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
         }
     }
 
-    if let Some(human_nation) = game.get_nation(game.human_player_nation) {
+    // Replaces the old "grows stronger" filler headline (no fact behind it,
+    // fired unconditionally every turn) with the nation's actual current
+    // score — still unconditional, but now cites a real number.
+    if let Some((_, name, score)) = report
+        .scores
+        .iter()
+        .find(|(id, ..)| *id == game.human_player_nation)
+    {
         report.newspaper_headlines.push(
             Headline::new(
-                format!("The {} empire grows stronger", human_nation.name),
+                format!("The {name} empire holds a score of {score} points this quarter"),
                 HeadlineCategory::Default,
             )
             .for_nation(game.human_player_nation),

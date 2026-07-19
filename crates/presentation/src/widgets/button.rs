@@ -134,16 +134,19 @@ fn restyle_buttons(
         Has<Pressed>,
         Has<InteractionDisabled>,
         &mut BackgroundColor,
+        &mut BorderColor,
         &Children,
     )>,
     mut labels: Query<&mut TextColor, With<UiButtonLabel>>,
 ) {
-    for (button, hovered, pressed, disabled, mut background, children) in &mut buttons {
+    for (button, hovered, pressed, disabled, mut background, mut border, children) in &mut buttons {
         let rest = if button.flat {
             Color::NONE
         } else {
             theme::BUTTON_BG
         };
+        // Disabled is unmistakable: desaturated fill + muted border + muted
+        // label, vs the bright gold border every enabled button keeps.
         let (bg, fg) = if disabled {
             (
                 if button.flat {
@@ -151,7 +154,7 @@ fn restyle_buttons(
                 } else {
                     theme::BUTTON_BG_DISABLED
                 },
-                theme::TEXT_DIM,
+                theme::TEXT_DISABLED,
             )
         } else if pressed {
             (theme::BUTTON_BG_PRESSED, theme::GOLD)
@@ -162,6 +165,17 @@ fn restyle_buttons(
         };
         if background.0 != bg {
             background.0 = bg;
+        }
+        // Border: claim the muted color while disabled, release back to gold
+        // when re-enabled. Only the muted color is ever overwritten so
+        // custom borders (war-red confirm, tech-green picks) survive.
+        if !button.flat {
+            let muted = BorderColor::all(theme::BUTTON_BORDER_DISABLED);
+            if disabled && *border != muted {
+                *border = muted;
+            } else if !disabled && *border == muted {
+                *border = BorderColor::all(theme::GOLD);
+            }
         }
         if !button.auto_label_tint {
             continue;

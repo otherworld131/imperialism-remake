@@ -109,6 +109,10 @@ pub fn setup_side_panel(mut commands: Commands, theme: Res<Theme>) {
                         flex_direction: FlexDirection::Column,
                         row_gap: Val::Px(2.0),
                         min_height: Val::Px(60.0),
+                        // Never compress below content when the panel is
+                        // full — the explicit min_height would otherwise let
+                        // this section shrink and its text overlap "Legend".
+                        flex_shrink: 0.0,
                         ..default()
                     },
                     SelectedInfoSection,
@@ -118,6 +122,7 @@ pub fn setup_side_panel(mut commands: Commands, theme: Res<Theme>) {
                         flex_direction: FlexDirection::Column,
                         row_gap: Val::Px(3.0),
                         margin: UiRect::top(Val::Px(8.0)),
+                        flex_shrink: 0.0,
                         ..default()
                     },
                     LegendSection,
@@ -167,6 +172,8 @@ fn panel_section() -> Node {
         flex_direction: FlexDirection::Column,
         row_gap: Val::Px(2.0),
         margin: UiRect::top(Val::Px(8.0)),
+        // Sections scroll instead of compressing into each other.
+        flex_shrink: 0.0,
         ..default()
     }
 }
@@ -735,8 +742,15 @@ pub fn update_selected_info(
         ));
         commands.spawn((
             Text::new(format!(
-                "{} ships · {} FP · {} hull",
-                marker.ship_count, marker.total_fp, marker.total_hull
+                "{} {} · {} FP · {} hull",
+                marker.ship_count,
+                if marker.ship_count == 1 {
+                    "ship"
+                } else {
+                    "ships"
+                },
+                marker.total_fp,
+                marker.total_hull
             )),
             theme.font(12.0),
             TextColor(theme::TEXT),

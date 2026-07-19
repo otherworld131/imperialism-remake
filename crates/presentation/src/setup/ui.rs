@@ -821,7 +821,14 @@ pub fn rebuild_preview_ui(
                         width: Val::Percent(100.0),
                         flex_direction: FlexDirection::Column,
                         row_gap: Val::Px(14.0),
-                        padding: UiRect::all(Val::Px(12.0)),
+                        // Extra bottom padding so the last slider row sits
+                        // clear of the footer when scrolled to the end.
+                        padding: UiRect::new(
+                            Val::Px(12.0),
+                            Val::Px(12.0),
+                            Val::Px(12.0),
+                            Val::Px(24.0),
+                        ),
                         ..default()
                     },))
                     .with_children(|col| {

@@ -26,6 +26,21 @@ pub struct SaveSummary {
     pub difficulty: String,
     /// ISO 8601 timestamp the save was written at.
     pub timestamp: String,
+    /// Save-format version (`None` when the file is unreadable). Compare
+    /// with [`current_save_version`] before loading.
+    pub version: Option<u32>,
+}
+
+/// The save-format version this build writes and accepts (no backward
+/// compatibility — older saves are rejected).
+pub fn current_save_version() -> u32 {
+    infrastructure::persistence::CURRENT_SAVE_VERSION
+}
+
+/// Delete a save file from disk.
+pub fn delete_save(path: &Path) -> Result<(), ApiError> {
+    infrastructure::persistence::delete_save(path)
+        .map_err(|e| ApiError::json(format!("delete: {e}")))
 }
 
 /// List the save files in `dir` (newest first) with their metadata.
@@ -47,6 +62,7 @@ pub fn list_saves(dir: &Path) -> Vec<SaveSummary> {
                     turn_display: meta.turn_display,
                     difficulty: meta.difficulty,
                     timestamp: meta.timestamp,
+                    version: Some(meta.version),
                 },
                 None => SaveSummary {
                     file_name,
@@ -55,6 +71,7 @@ pub fn list_saves(dir: &Path) -> Vec<SaveSummary> {
                     turn_display: String::new(),
                     difficulty: String::new(),
                     timestamp: String::new(),
+                    version: None,
                 },
             }
         })

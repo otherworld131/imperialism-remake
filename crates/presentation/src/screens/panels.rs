@@ -441,17 +441,11 @@ pub fn update_unit_panel(
                         row.commands().entity(b).insert(SelectAllUnitsButton);
                     }
                 });
-            if has_selection {
-                content.spawn((
-                    Text::new(format!(
-                        "Click a highlighted hex to move {} unit{} · Esc to cancel",
-                        selected_units.0.len(),
-                        if selected_units.0.len() > 1 { "s" } else { "" }
-                    )),
-                    theme.font_italic(11.0),
-                    TextColor(theme::TEXT_DIM),
-                ));
-            }
+            // The Movement Mode banner (update_banners) already carries this
+            // instruction — a second copy here duplicated it with different
+            // terminology ("hex" vs "province"); moves resolve against the
+            // clicked tile's province (see `handle_map_click` step 2), so the
+            // banner's "province" wording is the one kept.
         }
 
         for unit in &units.army_units {

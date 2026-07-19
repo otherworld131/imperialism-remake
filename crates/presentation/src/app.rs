@@ -680,10 +680,17 @@ fn m9_debug_driver(
                 activations.write(ButtonActivated(button));
             }
         }
-        "battles" | "battlesdebug" => {
+        // `battlesscroll` additionally scrolls the details panel down so
+        // captures show the FORCES columns (engaged/survived/lost line).
+        "battles" | "battlesdebug" | "battlesscroll" => {
             if *frames == 1 && script == "battlesdebug" {
                 news_debug.show_battle_firepower = true;
                 news_debug.show_retreat_debug = true;
+            }
+            if script == "battlesscroll" && *frames == 100 {
+                for mut position in &mut scroll_areas {
+                    position.y = 220.0;
+                }
             }
             // Fast-forward turns synchronously (blocking is fine for a
             // capture run) until the battle archive has entries — battles
@@ -941,7 +948,10 @@ struct M10Driver<'w, 's> {
     restart_rows: Query<'w, 's, Entity, With<saveload::RestartConfirmBtn>>,
     save_rows: Query<'w, 's, Entity, With<saveload::SaveConfirmBtn>>,
     overwrite_rows: Query<'w, 's, Entity, With<saveload::OverwriteConfirmBtn>>,
+    delete_rows: Query<'w, 's, (Entity, &'static saveload::DeleteSaveBtn)>,
+    delete_confirm_rows: Query<'w, 's, Entity, With<saveload::DeleteConfirmBtn>>,
     activations: MessageWriter<'w, ButtonActivated>,
+    scroll_areas: Query<'w, 's, &'static mut bevy::ui::ScrollPosition, With<widgets::UiScrollArea>>,
 }
 
 /// Debug driver for the M10 setup flow: `M10_DEBUG=<script>` drives the
@@ -949,10 +959,14 @@ struct M10Driver<'w, 's> {
 /// check exercise live code. Scripts:
 /// - `config` — config step as booted.
 /// - `preview` — generate and show the preview step.
+/// - `previewscroll` — preview, then jump the sidebar scroll to the bottom
+///   (proves the terrain sliders scroll cleanly above the footer).
 /// - `capital` — non-observer flow into capital placement (yield preview +
 ///   suggestions visible).
 /// - `save` — begin an observer game, open the Save modal.
 /// - `load` — begin, write two saves, open the Load modal.
+/// - `deletesave` — begin, write a save, delete it through the Load modal's
+///   Delete → confirm flow; prints `M10_DELETESAVE OK/FAIL`.
 /// - `loadcli` — loads CLI-written saves (`save_1815_Q1.json` / `.bin`)
 ///   through the real Load-modal buttons; prints `M10_LOADCLI OK/FAIL`.
 /// - `restart` — begin → end turn → confirm Restart → same seed at turn 1;
@@ -1003,9 +1017,17 @@ fn m10_debug_driver(
 
     match script.as_str() {
         "config" => {}
-        "preview" => {
+        // `previewscroll`: same, then jump the sidebar scroll to the bottom
+        // so captures prove the terrain sliders scroll cleanly above the
+        // footer (the layout clamps the position to the true content end).
+        "preview" | "previewscroll" => {
             if *frames == 20 {
                 p.actions.write(SetupAction::PreviewMap);
+            }
+            if script == "previewscroll" && *frames == 120 {
+                for mut position in &mut p.scroll_areas {
+                    position.y = 100_000.0;
+                }
             }
         }
         "capital" => match *step {
@@ -1178,6 +1200,69 @@ fn m10_debug_driver(
                 _ => {}
             }
         }
+        // Delete proof: the load modal's per-row Delete opens a confirm
+        // modal; confirming removes the file and refreshes the browser.
+        // Prints `M10_DELETESAVE OK/FAIL`.
+        "deletesave" => match *step {
+            0 => {
+                p.actions.write(SetupAction::PreviewMap);
+                *step = 1;
+            }
+            1 if preview_ready => {
+                p.actions.write(SetupAction::BeginCampaign);
+                *step = 2;
+            }
+            2 if in_game => {
+                saveload::write_save(&p.session, "todelete.json.gz", &mut p.toasts);
+                saveload::open_load_modal(&mut p.commands, &mut p.modal_stack, &p.theme);
+                *step = 3;
+            }
+            3 => {
+                if let Some((entity, _)) = p.delete_rows.iter().find(|(_, row)| {
+                    row.path
+                        .file_name()
+                        .is_some_and(|n| n == "todelete.json.gz")
+                }) {
+                    p.activations.write(ButtonActivated(entity));
+                    *step = 4;
+                } else if *frames > 600 {
+                    fail(&mut p.exit, "M10_DELETESAVE", "delete button not listed");
+                }
+            }
+            4 => {
+                if let Some(entity) = p.delete_confirm_rows.iter().next() {
+                    println!("M10_DELETESAVE confirm modal appeared");
+                    p.activations.write(ButtonActivated(entity));
+                    *step = 5;
+                } else if *frames > 800 {
+                    fail(
+                        &mut p.exit,
+                        "M10_DELETESAVE",
+                        "confirm modal never appeared",
+                    );
+                }
+            }
+            5 if p.delete_confirm_rows.is_empty() => {
+                let gone = !saveload::saves_dir().join("todelete.json.gz").exists();
+                let relisted = !p.delete_rows.iter().any(|(_, row)| {
+                    row.path
+                        .file_name()
+                        .is_some_and(|n| n == "todelete.json.gz")
+                });
+                if gone && relisted {
+                    println!("M10_DELETESAVE OK: file deleted and browser refreshed");
+                    p.exit.write(AppExit::Success);
+                } else {
+                    fail(
+                        &mut p.exit,
+                        "M10_DELETESAVE",
+                        &format!("gone={gone} relisted={relisted}"),
+                    );
+                }
+                *step = 6;
+            }
+            _ => {}
+        },
         // Overwrite proof: saving onto an existing file must raise the
         // confirm modal, and confirming must write and close everything.
         "overwrite" => match *step {

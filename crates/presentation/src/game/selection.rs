@@ -501,17 +501,23 @@ fn parse_rail_link_state(
     })
 }
 
+/// Top bar height in UI px — the popover must never cover the top chrome.
+const POPOVER_TOP_MIN: f32 = 48.0;
+
 /// Where the popover opens: just beside the cursor, clamped to the window
-/// (in UI coordinates, i.e. divided by the global [`UiScale`]).
+/// (in UI coordinates, i.e. divided by the global [`UiScale`]) and always
+/// below the top bar so it never covers the burger menu / title.
 fn popover_anchor(windows: &Query<&Window, With<PrimaryWindow>>, ui_scale: &UiScale) -> Vec2 {
     let Ok(window) = windows.single() else {
-        return Vec2::new(40.0, 40.0);
+        return Vec2::new(40.0, POPOVER_TOP_MIN);
     };
     let scale = ui_scale.0.max(0.01);
     let cursor = window.cursor_position().unwrap_or_default() / scale;
     let bounds = Vec2::new(window.width(), window.height()) / scale;
-    // Keep the strip (~200×64 UI px) fully on screen.
-    (cursor + Vec2::new(14.0, 10.0)).min((bounds - Vec2::new(210.0, 80.0)).max(Vec2::ZERO))
+    // Keep the strip (~200×64 UI px) fully on screen, below the top bar.
+    (cursor + Vec2::new(14.0, 10.0))
+        .min((bounds - Vec2::new(210.0, 80.0)).max(Vec2::new(0.0, POPOVER_TOP_MIN)))
+        .max(Vec2::new(0.0, POPOVER_TOP_MIN))
 }
 
 /// Spawn the compact build strip: one icon button per build kind with the

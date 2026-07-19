@@ -878,6 +878,7 @@ fn capitalize(word: &str) -> String {
 
 // ── Interactions ─────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 pub fn handle_news_buttons(
     mut activations: MessageReader<ButtonActivated>,
     mode_tabs: Query<&NewsModeTab>,
@@ -894,7 +895,14 @@ pub fn handle_news_buttons(
     mut modal_stack: ResMut<ModalStack>,
     mut images: ResMut<Assets<Image>>,
     mut toasts: MessageWriter<Toast>,
+    window_ui: (Query<&Window>, Res<'_, bevy::ui::UiScale>),
 ) {
+    // Window size in UI px — the modal is sized to fit at any UI scale.
+    let (windows, ui_scale) = window_ui;
+    let window_logical = windows
+        .single()
+        .map(|w| Vec2::new(w.width(), w.height()) / ui_scale.0.max(0.01))
+        .unwrap_or(Vec2::new(1280.0, 720.0));
     for ButtonActivated(entity) in activations.read() {
         if let Ok(tab) = mode_tabs.get(*entity) {
             ui.archive_mode = tab.0;
@@ -919,6 +927,7 @@ pub fn handle_news_buttons(
                     &mut modal_stack,
                     &mut images,
                     &snapshot,
+                    window_logical,
                 ),
                 Ok(Err(err)) => {
                     toasts.write(Toast::error(format!("Snapshot decode failed: {err}")));
@@ -986,8 +995,15 @@ fn load_archive_increment(session: &SessionRes, archive: &mut NewsArchive) {
 
 // ── Political-map modal (web `PoliticalMapModal`) ────────────────────────
 
-const POLITICAL_MAP_W: f32 = 720.0;
-const POLITICAL_MAP_H: f32 = 480.0;
+/// Upper bounds; the modal shrinks to the window (in UI px) below these.
+const POLITICAL_MAP_MAX_W: f32 = 720.0;
+const POLITICAL_MAP_MAX_H: f32 = 480.0;
+/// Nations legend column width.
+const POLITICAL_LEGEND_W: f32 = 170.0;
+/// Modal chrome around the map: panel padding (2×14), column gap, borders.
+const POLITICAL_CHROME_W: f32 = 46.0;
+/// Vertical chrome: title bar + content padding + borders.
+const POLITICAL_CHROME_H: f32 = 76.0;
 
 fn open_political_map_modal(
     commands: &mut Commands,
@@ -995,7 +1011,13 @@ fn open_political_map_modal(
     modal_stack: &mut ModalStack,
     images: &mut Assets<Image>,
     snapshot: &PoliticalSnapshotVm,
+    window_logical: Vec2,
 ) {
+    // Fit the whole dialog inside the window at any UI scale: the map pane
+    // takes what's left after the legend + chrome, capped at the web sizes.
+    let map_w = (window_logical.x * 0.94 - POLITICAL_LEGEND_W - POLITICAL_CHROME_W)
+        .clamp(260.0, POLITICAL_MAP_MAX_W);
+    let map_h = (window_logical.y * 0.92 - POLITICAL_CHROME_H).clamp(200.0, POLITICAL_MAP_MAX_H);
     let handles = widgets::open_modal(
         commands,
         modal_stack,
@@ -1005,7 +1027,7 @@ fn open_political_map_modal(
                 "Political Map — {} Q{} (Turn {})",
                 snapshot.year, snapshot.quarter, snapshot.turn
             ),
-            width: Val::Px(POLITICAL_MAP_W + 240.0),
+            width: Val::Px(map_w + POLITICAL_LEGEND_W + POLITICAL_CHROME_W),
         },
     );
 
@@ -1023,11 +1045,9 @@ fn open_political_map_modal(
         max = Vec2::ONE;
     }
     let span = (max - min) + Vec2::splat(4.0);
-    let hex_size = (POLITICAL_MAP_W / span.x)
-        .min(POLITICAL_MAP_H / span.y)
-        .max(1.0);
+    let hex_size = (map_w / span.x).min(map_h / span.y).max(1.0);
     let center = (min + max) / 2.0 * hex_size;
-    let offset = Vec2::new(POLITICAL_MAP_W, POLITICAL_MAP_H) / 2.0 - center;
+    let offset = Vec2::new(map_w, map_h) / 2.0 - center;
 
     // Border groups: country = visual group (or owner), province = name.
     let mut country_ids: HashMap<&str, u32> = HashMap::new();
@@ -1073,8 +1093,8 @@ fn open_political_map_modal(
 
     let mut raster = Raster::new(
         RasterParams {
-            width: POLITICAL_MAP_W as u32,
-            height: POLITICAL_MAP_H as u32,
+            width: map_w as u32,
+            height: map_h as u32,
             hex_size,
             offset,
             background: minimap::rgb(theme::INSET_BG),
@@ -1095,14 +1115,20 @@ fn open_political_map_modal(
     }
     let image = images.add(raster.into_image());
 
-    // Nation labels.
+    // Nation labels, clamped + de-collided (overlapping small labels drop).
     let label_tiles: Vec<(i32, i32, &str)> = snapshot
         .tiles
         .iter()
         .filter(|t| t.terrain != "Sea" && !t.owner.is_empty())
         .map(|t| (t.q, t.r, t.visual_group_or_owner()))
         .collect();
-    let labels = minimap::compute_nation_labels(&label_tiles, 3, hex_size, offset);
+    let labels = minimap::place_nation_labels(
+        minimap::compute_nation_labels(&label_tiles, 3, hex_size, offset),
+        Vec2::new(map_w, map_h),
+        2.4,
+        10.0,
+        22.0,
+    );
 
     // Legend: unique owners in tile order.
     let mut legend: Vec<(String, Color)> = Vec::new();
@@ -1129,8 +1155,8 @@ fn open_political_map_modal(
             // Map image with absolutely-positioned label overlays.
             row.spawn((
                 Node {
-                    width: Val::Px(POLITICAL_MAP_W),
-                    height: Val::Px(POLITICAL_MAP_H),
+                    width: Val::Px(map_w),
+                    height: Val::Px(map_h),
                     flex_shrink: 0.0,
                     // Label overlays near the edge must not spill out.
                     overflow: Overflow::clip(),
@@ -1140,17 +1166,18 @@ fn open_political_map_modal(
             ))
             .with_children(|map| {
                 for label in &labels {
-                    let font_size = ((label.size as f32).sqrt() * 2.4).clamp(10.0, 22.0);
-                    map_label(map, theme, &label.name.to_uppercase(), label.pos, font_size);
+                    map_label(map, theme, &label.name, label.pos, label.font_size);
                 }
             });
-            // Nation legend.
+            // Nation legend: a fixed column the modal width budgets for,
+            // so names wrap inside it instead of truncating off-screen.
             row.spawn(Node {
                 flex_direction: FlexDirection::Column,
+                width: Val::Px(POLITICAL_LEGEND_W),
+                flex_shrink: 0.0,
                 row_gap: Val::Px(3.0),
-                max_height: Val::Px(POLITICAL_MAP_H),
+                max_height: Val::Px(map_h),
                 overflow: Overflow::scroll_y(),
-                flex_grow: 1.0,
                 ..default()
             })
             .with_children(|panel| {
@@ -1163,8 +1190,9 @@ fn open_political_map_modal(
                     panel
                         .spawn(Node {
                             flex_direction: FlexDirection::Row,
-                            align_items: AlignItems::Center,
+                            align_items: AlignItems::FlexStart,
                             column_gap: Val::Px(6.0),
+                            min_width: Val::Px(0.0),
                             ..default()
                         })
                         .with_children(|entry| {
@@ -1174,6 +1202,7 @@ fn open_political_map_modal(
                                     height: Val::Px(12.0),
                                     border: UiRect::all(Val::Px(1.0)),
                                     flex_shrink: 0.0,
+                                    margin: UiRect::top(Val::Px(2.0)),
                                     ..default()
                                 },
                                 BackgroundColor(*color),

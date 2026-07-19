@@ -266,6 +266,59 @@ pub struct NationLabel {
     pub size: usize,
 }
 
+/// A label ready to render: clamped inside the raster and guaranteed not to
+/// overlap any other placed label.
+pub struct PlacedLabel {
+    /// Uppercased display name.
+    pub name: String,
+    pub pos: Vec2,
+    pub font_size: f32,
+}
+
+/// De-collide + clamp nation labels for a `bounds`-sized raster. Labels are
+/// placed largest-component first; a label whose estimated text box would
+/// overlap an already-placed one is dropped (better absent than illegible).
+/// `font_mult` / `font_min` / `font_max` map component size → font size.
+pub fn place_nation_labels(
+    mut labels: Vec<NationLabel>,
+    bounds: Vec2,
+    font_mult: f32,
+    font_min: f32,
+    font_max: f32,
+) -> Vec<PlacedLabel> {
+    labels.sort_by(|a, b| b.size.cmp(&a.size));
+    let mut placed: Vec<(Vec2, Vec2)> = Vec::new();
+    let mut out = Vec::new();
+    for label in labels {
+        let font_size = ((label.size as f32).sqrt() * font_mult).clamp(font_min, font_max);
+        let name = label.name.to_uppercase();
+        // Clamp the label center so the rendered text stays inside the
+        // clipped frame instead of getting cut mid-word.
+        let half_text = name.chars().count() as f32 * font_size * 0.30;
+        let pos = Vec2::new(
+            label.pos.x.clamp(
+                half_text.min(bounds.x / 2.0),
+                (bounds.x - half_text).max(bounds.x / 2.0),
+            ),
+            label.pos.y.clamp(12.0, bounds.y - 12.0),
+        );
+        let half = Vec2::new(half_text, font_size * 0.65);
+        if placed
+            .iter()
+            .any(|(p, ph)| (pos - *p).abs().cmplt(half + *ph).all())
+        {
+            continue;
+        }
+        placed.push((pos, half));
+        out.push(PlacedLabel {
+            name,
+            pos,
+            font_size,
+        });
+    }
+    out
+}
+
 /// `tiles`: (q, r, group-name) for every labelable land tile.
 pub fn compute_nation_labels(
     tiles: &[(i32, i32, &str)],

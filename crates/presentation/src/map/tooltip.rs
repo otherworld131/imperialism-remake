@@ -472,8 +472,11 @@ fn spawn_marker_content(
         commands,
         parent,
         &format!(
-            "{} ships · {} FP · {} hull",
-            marker.ship_count, marker.total_fp, marker.total_hull
+            "{} ship{} · {} FP · {} hull",
+            marker.ship_count,
+            if marker.ship_count == 1 { "" } else { "s" },
+            marker.total_fp,
+            marker.total_hull
         ),
         theme.font(11.0),
         Color::srgb_u8(0xbb, 0xbb, 0xbb),

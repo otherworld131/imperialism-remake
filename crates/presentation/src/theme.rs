@@ -17,7 +17,13 @@ pub const INSET_BG: Color = Color::srgb_u8(0x12, 0x12, 0x20);
 pub const BUTTON_BG: Color = Color::srgb(0.18, 0.15, 0.08);
 pub const BUTTON_BG_HOVER: Color = Color::srgb(0.26, 0.21, 0.10);
 pub const BUTTON_BG_PRESSED: Color = Color::srgb(0.36, 0.28, 0.10);
-pub const BUTTON_BG_DISABLED: Color = Color::srgb(0.13, 0.12, 0.10);
+/// Desaturated, near-panel fill so a disabled button cannot be mistaken for
+/// an enabled one (the old warm dim-gold fill read as "slightly less lit").
+pub const BUTTON_BG_DISABLED: Color = Color::srgb(0.11, 0.11, 0.13);
+/// Muted border for disabled buttons — enabled buttons keep the bright gold.
+pub const BUTTON_BORDER_DISABLED: Color = Color::srgb_u8(0x4a, 0x46, 0x38);
+/// Muted label for disabled buttons (darker than [`TEXT_DIM`]).
+pub const TEXT_DISABLED: Color = Color::srgb_u8(0x6a, 0x66, 0x58);
 pub const OVERLAY_BG: Color = Color::srgba(0.05, 0.05, 0.10, 0.62);
 
 pub const SUCCESS: Color = Color::srgb_u8(0x6a, 0xb0, 0x4c);
