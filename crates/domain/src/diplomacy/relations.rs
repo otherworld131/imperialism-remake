@@ -7,6 +7,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 pub const BREAK_TREATY_STANDING_LOSS: i32 = 15;
 /// Relation-score lost between the two nations when a treaty is broken.
 pub const BREAK_TREATY_RELATIONS_LOSS: i32 = 20;
+/// Relation-score a minor loses toward the overlord that rejected its
+/// request to join the empire.
+pub const JOIN_EMPIRE_SNUB_RELATIONS_LOSS: i32 = 20;
 
 /// A diplomatic proposal awaiting evaluation by the target nation.
 #[derive(Debug, Clone)]

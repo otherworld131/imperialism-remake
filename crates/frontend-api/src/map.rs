@@ -1027,15 +1027,31 @@ mod tests {
     use super::*;
     use domain::events::TechId;
     use domain::game_state::new_game;
-    use domain::types::Difficulty;
+    use domain::tech::{TechEffect, TechTree, Technology};
+    use domain::types::{Difficulty, Money};
 
-    /// "Advanced Iron Working" (tech id 15, scripts/config/tech_tree.lua)
-    /// unlocks the Ironclad, a warship at era 2 — the doc comment on
-    /// `nation_has_iron_navy_tech` calls out this exact tech/ship pair as
-    /// the canonical example of the iron-navy threshold.
+    /// Install a one-tech tree so the predicate is tested against an
+    /// explicit effect — `new_game`'s stub `GameData` does not load the Lua
+    /// tech tree, so real tech ids (e.g. 15 = Advanced Iron Working) don't
+    /// resolve here.
+    fn install_tech(game: &mut domain::game_state::GameState, id: u32, effect: TechEffect) {
+        game.game_data.tech_tree = TechTree::from_technologies(vec![Technology {
+            id: TechId(id),
+            name: "Test Tech".to_string(),
+            cost: Money::dollars(1),
+            earliest_year: 1815,
+            latest_year: 1915,
+            prerequisites: vec![],
+            effects: vec![effect],
+        }]);
+    }
+
+    /// Mirrors "Advanced Iron Working" → Ironclad (Warship, era 2), the
+    /// canonical iron-navy threshold from scripts/config/tech_tree.lua.
     #[test]
-    fn nation_has_iron_navy_tech_true_after_advanced_iron_working() {
+    fn nation_has_iron_navy_tech_true_after_iron_warship_unlock() {
         let mut game = new_game("test", Difficulty::Normal, 0);
+        install_tech(&mut game, 15, TechEffect::UnlockShip("Ironclad".into()));
         let nation_id = game.world.nations[0].id;
         game.get_nation_mut(nation_id)
             .unwrap()
@@ -1053,11 +1069,12 @@ mod tests {
         assert!(!nation_has_iron_navy_tech(&game, &nation));
     }
 
-    /// "Streamlined Hulls" (tech id 7) unlocks the Clipper — a merchant
-    /// ship, not a warship — so it must not trip the iron-navy predicate.
+    /// A merchant-ship unlock (Clipper, era 2 but not a warship) must not
+    /// trip the iron-navy predicate.
     #[test]
     fn nation_has_iron_navy_tech_false_for_non_warship_unlock() {
         let mut game = new_game("test", Difficulty::Normal, 0);
+        install_tech(&mut game, 7, TechEffect::UnlockShip("Clipper".into()));
         let nation_id = game.world.nations[0].id;
         game.get_nation_mut(nation_id)
             .unwrap()

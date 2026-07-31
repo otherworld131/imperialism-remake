@@ -12,5 +12,6 @@ pub mod markers;
 pub mod navy;
 pub mod organic;
 pub mod picking;
+pub mod political;
 pub mod polyline;
 pub mod tooltip;

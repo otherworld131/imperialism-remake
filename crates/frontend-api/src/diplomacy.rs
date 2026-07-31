@@ -9,7 +9,9 @@ use crate::guards::{
     reject_if_great_power_target_for_consulate, reject_if_target_in_anarchy,
 };
 use crate::parse::parse_treaty_type;
-use domain::diplomacy::relations::{BREAK_TREATY_RELATIONS_LOSS, BREAK_TREATY_STANDING_LOSS};
+use domain::diplomacy::relations::{
+    BREAK_TREATY_RELATIONS_LOSS, BREAK_TREATY_STANDING_LOSS, JOIN_EMPIRE_SNUB_RELATIONS_LOSS,
+};
 use domain::events::TreatyType;
 use domain::game_state::GameState;
 use domain::types::*;
@@ -589,7 +591,7 @@ pub fn dismiss_pending_action(
 /// constants (`break_treaty` in `crates/domain/src/diplomacy/relations.rs`),
 /// so this text can't drift from the actual penalty. Alliances auto-join
 /// wars, a separate peace breaks the peacemaker's alliances, and a snubbed
-/// join-empire minor drops 20.
+/// join-empire minor drops [`JOIN_EMPIRE_SNUB_RELATIONS_LOSS`].
 fn accept_hint(proposal_type: TreatyType, from_name: &str, attacker_name: Option<&str>) -> String {
     match proposal_type {
         TreatyType::NonAggressionPact => format!(
@@ -602,7 +604,7 @@ fn accept_hint(proposal_type: TreatyType, from_name: &str, attacker_name: Option
             "Ends your war with {from_name}; allies still fighting them will break their alliance with you."
         ),
         TreatyType::RequestToJoinEmpire => format!(
-            "{from_name}'s provinces join your empire; rejecting drops their relations by 20."
+            "{from_name}'s provinces join your empire; rejecting drops their relations by {JOIN_EMPIRE_SNUB_RELATIONS_LOSS}."
         ),
         TreatyType::WarDeclaration => {
             "The war is already in effect — this notice only acknowledges it.".into()
@@ -867,5 +869,11 @@ mod tests {
     fn accept_hint_pact_defense_request_default_attacker_matches_display_text() {
         let hint = accept_hint(TreatyType::PactDefenseRequest, "Gallia", None);
         assert!(hint.contains("an aggressor"));
+    }
+
+    #[test]
+    fn accept_hint_join_empire_uses_domain_snub_constant() {
+        let hint = accept_hint(TreatyType::RequestToJoinEmpire, "Gallia", None);
+        assert!(hint.contains(&format!("by {JOIN_EMPIRE_SNUB_RELATIONS_LOSS}.")));
     }
 }

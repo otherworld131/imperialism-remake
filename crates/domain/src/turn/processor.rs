@@ -5554,7 +5554,7 @@ pub fn reject_request_to_join_empire(
     minor_id: NationId,
 ) {
     if let Some(rel) = game.world.diplomacy.get_relation_mut(minor_id, overlord_id) {
-        rel.improve_score(-20);
+        rel.improve_score(-crate::diplomacy::relations::JOIN_EMPIRE_SNUB_RELATIONS_LOSS);
     }
 }
 
