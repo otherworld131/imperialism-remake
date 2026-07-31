@@ -24,6 +24,7 @@ use crate::map::icons::IconAssets;
 use crate::map::lod::LodGate;
 use crate::map::organic::{self, Point};
 use crate::map::picking::{HoveredHex, SelectedHex};
+use crate::map::political::{self, PoliticalRasterCache};
 use crate::map::polyline::MeshBuilder2d;
 use crate::theme;
 
@@ -312,10 +313,14 @@ pub fn tile_fill_color(tile: &MapTile, mode: MapMode, fill_map: &HashMap<String,
 }
 
 /// Ground-texture key for a land tile in terrain mode. Forest tiles without
-/// Timber are scrub wood (card #540) and use the washed-out `ForestScrub`
-/// ground instead of the vivid deep-green `Forest` one.
+/// visible Timber are scrub wood (card #540) and use the washed-out
+/// `ForestScrub` ground instead of the vivid deep-green `Forest` one.
+/// Timber is never a hidden deposit today, but the `resource_hidden` guard
+/// keeps a modded hidden-Timber forest from leaking its deposit through the
+/// vivid art before a prospector reveals it.
 fn ground_texture_name(tile: &MapTile) -> &str {
-    if tile.terrain == "Forest" && tile.resource.as_deref() != Some("Timber") {
+    let visible_timber = tile.resource.as_deref() == Some("Timber") && !tile.resource_hidden;
+    if tile.terrain == "Forest" && !visible_timber {
         "ForestScrub"
     } else {
         &tile.terrain
@@ -337,10 +342,12 @@ pub fn river_source_variant(q: i32, r: i32) -> u32 {
 }
 
 /// Coords of the hexes where a river originates (card #539): a mountain
-/// river tile with exactly one river-flagged land neighbor is the head of a
+/// river tile with at most one river-flagged land neighbor is the head of a
 /// generated river path. (Map generation starts every river on a mountain,
 /// forbids two rivers from touching, and forbids a path from re-approaching
-/// itself, so mid-course mountain tiles always have two river neighbors.)
+/// itself, so mid-course mountain tiles always have two river neighbors.
+/// Zero land neighbors covers the degenerate single-tile river that flows
+/// straight into the sea — it still originates here.)
 #[must_use]
 pub fn river_source_coords(tiles: &[MapTile]) -> HashSet<(i32, i32)> {
     let river: HashSet<(i32, i32)> = tiles
@@ -356,7 +363,7 @@ pub fn river_source_coords(tiles: &[MapTile]) -> HashSet<(i32, i32)> {
                 .iter()
                 .filter(|n| river.contains(*n))
                 .count();
-            downstream == 1
+            downstream <= 1
         })
         .map(|t| (t.q, t.r))
         .collect()
@@ -390,7 +397,11 @@ pub fn terrain_motif_name(
         return None;
     }
     if tile.terrain == "Forest" {
-        return Some(if tile.resource.as_deref() == Some("Timber") {
+        // Hidden-deposit guard mirrors the other resource branches (Timber
+        // is never hidden today; defensive for mods).
+        let timber_visible = tile.resource.as_deref() == Some("Timber")
+            && (!tile.resource_hidden || settings.show_hidden_resources);
+        return Some(if timber_visible {
             "Forest".to_string()
         } else {
             "ForestScrub".to_string()
@@ -484,8 +495,10 @@ pub fn rebuild_layers(
     settings: Res<RenderSettings>,
     fresh_rail: Res<FreshRail>,
     mut cache: ResMut<BordersCache>,
+    mut raster_cache: ResMut<PoliticalRasterCache>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
+    mut images: ResMut<Assets<Image>>,
     icons: Res<IconAssets>,
     wrap_roots: Query<(Entity, &Transform), With<WrapRoot>>,
     layers: Query<Entity, With<StaticLayer>>,
@@ -668,12 +681,27 @@ pub fn rebuild_layers(
     };
 
     let fill_map = nation_fill_map(*mode, &vms);
+    // Political + overlay modes render land as one chunky pixel raster
+    // (card #531) instead of vector fills with organic borders; terrain
+    // mode keeps the full organic pipeline.
+    let pixel_political = *mode != MapMode::Terrain;
 
     // ── Pass 1: tile fills, grouped per (ground texture, color) ─────────
+    // In the pixel-political modes every tile (land included) lays down the
+    // pixel-art water underlay: the land raster above is texel-quantized, so
+    // its staircase coastline must meet water pixels, not background.
+    let sea_spec = match icons.get("ground", "Sea") {
+        Some(handle) => (Color::WHITE, Some(("Sea".to_string(), handle))),
+        None => (theme::terrain_color("Sea"), None),
+    };
     type FillGroup = (Color, Option<Handle<Image>>, Vec<Vec2>);
     let mut fill_groups: BTreeMap<(String, u32), FillGroup> = BTreeMap::new();
     for tile in tiles {
-        let (color, texture) = tile_fill_spec(tile, *mode, &fill_map, &icons);
+        let (color, texture) = if pixel_political {
+            sea_spec.clone()
+        } else {
+            tile_fill_spec(tile, *mode, &fill_map, &icons)
+        };
         let (tex_key, handle) = match texture {
             Some((key, handle)) => (key, Some(handle)),
             None => (String::new(), None),
@@ -698,6 +726,36 @@ pub fn rebuild_layers(
             0.0,
             None,
         );
+    }
+
+    // ── Pass 1p: pixel-political land raster (card #531) ────────────────
+    // One nearest-sampled texture bakes the nation fills, country borders
+    // and coastlines as chunky pixel staircases (see `map/political.rs`).
+    // Cached per (version, mode): display-toggle rebuilds reuse the pixels.
+    let mut raster_elapsed = None;
+    if pixel_political {
+        if raster_cache.key != Some((vms.version, *mode)) {
+            let raster_started = std::time::Instant::now();
+            if let Some(raster) = political::build_raster(tiles, *mode, &fill_map) {
+                raster_cache.handle = images.add(raster.image);
+                raster_cache.min = raster.min;
+                raster_cache.max = raster.max;
+                raster_cache.key = Some((vms.version, *mode));
+            }
+            raster_elapsed = Some(raster_started.elapsed());
+        }
+        if raster_cache.key.is_some() {
+            spawn_mesh_local_uv(
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+                political::raster_quad_mesh(raster_cache.min, raster_cache.max),
+                Color::WHITE,
+                raster_cache.handle.clone(),
+                0.15,
+                None,
+            );
+        }
     }
 
     // ── Pass 1a: terrain motif sprites (terrain mode) ───────────────────
@@ -756,16 +814,13 @@ pub fn rebuild_layers(
     // straight hex edge. Cover each excursion with the color of the side it
     // pokes into: tile color past the baseline outward, sea/neighbor color
     // inward. Result: fills meet exactly on the smoothed border like the
-    // web's clipped-canvas rendering.
-    if settings.organic_borders {
+    // web's clipped-canvas rendering. Terrain mode only — the
+    // pixel-political raster owns its own (texel-stepped) coastline.
+    if settings.organic_borders && !pixel_political {
         type StripGroup = (Color, Option<Handle<Image>>, MeshBuilder2d);
         let mut strip_builders: BTreeMap<(String, u32), StripGroup> = BTreeMap::new();
-        // Off-map water (no neighbor tile) matches the sea fill: textured
-        // pixel water when the ground texture is loaded, flat color if not.
-        let sea_spec = match icons.get("ground", "Sea") {
-            Some(handle) => (Color::WHITE, Some(("Sea".to_string(), handle))),
-            None => (theme::terrain_color("Sea"), None),
-        };
+        // Off-map water (no neighbor tile) matches the sea fill (the outer
+        // `sea_spec`): textured pixel water, flat color as fallback.
         let mut add_strips = |strips: &[borders::FillStrip]| {
             for strip in strips {
                 let tile_spec = tile_fill_spec(&tiles[strip.tile_idx], *mode, &fill_map, &icons);
@@ -947,8 +1002,10 @@ pub fn rebuild_layers(
     };
 
     // Province borders: hidden in diplomatic mode, gated to zoomed-in views.
+    // The pixel-political modes always use the straight hex-edge segments —
+    // organic curves would clash with the texel-stepped raster below.
     if *mode != MapMode::Diplomatic {
-        let builder = if settings.organic_borders {
+        let builder = if settings.organic_borders && !pixel_political {
             stroke_mesh(&map_borders.province_strokes, 1.5 * REACT_SCALE)
         } else {
             segment_mesh(&map_borders.straight_province_segments, 1.5 * REACT_SCALE)
@@ -967,7 +1024,11 @@ pub fn rebuild_layers(
         }
     }
 
-    if settings.organic_borders {
+    // Country + coast strokes: the pixel-political raster bakes both as
+    // texel staircases, so only terrain mode draws them as vector strokes.
+    if pixel_political {
+        // Nothing — borders live in the raster (Pass 1p).
+    } else if settings.organic_borders {
         let country = stroke_mesh(&map_borders.country_strokes, 3.5 * REACT_SCALE);
         if !country.is_empty() {
             spawn_mesh(
@@ -1185,23 +1246,24 @@ pub fn rebuild_layers(
     // province-town city art in the marker layer is the tile's identity now
     // (card #541).
 
-    match classify_elapsed {
-        Some(classify) => info!(
-            "map layers rebuild #{} (version {}, {} tiles): borders classify {:.1?}, total {:.1?}",
-            *rebuild_count,
-            vms.version,
-            tiles.len(),
-            classify,
-            build_started.elapsed(),
-        ),
-        None => info!(
-            "map layers rebuild #{} (version {}, {} tiles): borders cached, total {:.1?}",
-            *rebuild_count,
-            vms.version,
-            tiles.len(),
-            build_started.elapsed(),
-        ),
-    }
+    let classify_note = match classify_elapsed {
+        Some(classify) => format!("borders classify {classify:.1?}"),
+        None => "borders cached".to_string(),
+    };
+    let raster_note = match raster_elapsed {
+        Some(raster) => format!(", political raster {raster:.1?}"),
+        None if pixel_political => ", political raster cached".to_string(),
+        None => String::new(),
+    };
+    info!(
+        "map layers rebuild #{} (version {}, {} tiles): {}{}, total {:.1?}",
+        *rebuild_count,
+        vms.version,
+        tiles.len(),
+        classify_note,
+        raster_note,
+        build_started.elapsed(),
+    );
 }
 
 /// Move-target / fleet-target / deploy-target hex tints (plus the
@@ -1666,11 +1728,13 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<Assets<Mesh>>();
         app.init_resource::<Assets<ColorMaterial>>();
+        app.init_resource::<Assets<Image>>();
         app.init_resource::<ViewModels>();
         app.init_resource::<MapMode>();
         app.init_resource::<RenderSettings>();
         app.init_resource::<FreshRail>();
         app.init_resource::<BordersCache>();
+        app.init_resource::<PoliticalRasterCache>();
         app.insert_resource(icons_with_ground());
         app.add_systems(Update, rebuild_layers);
 

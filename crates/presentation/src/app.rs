@@ -80,6 +80,8 @@ fn debug_screenshot(
     }
     // `MAP_DEBUG_HIDDEN_RES=1` reveals undiscovered deposits so captures
     // show the resource-integrated tile art (cards #542/#540) everywhere.
+    // Like MAP_DEBUG_AI_CIVS, this mutates RenderSettings once and stays on
+    // for the whole session (env-driven debug switches are not per-capture).
     if std::env::var("MAP_DEBUG_HIDDEN_RES").as_deref() == Ok("1")
         && !settings.show_hidden_resources
     {
@@ -1819,6 +1821,7 @@ pub fn run_game() {
         .init_resource::<SelectedNavy>()
         .init_resource::<SelectedCivilian>()
         .init_resource::<BordersCache>()
+        .init_resource::<crate::map::political::PoliticalRasterCache>()
         .init_resource::<ZoomLod>()
         .init_resource::<Blink>()
         .init_resource::<PendingMoves>()

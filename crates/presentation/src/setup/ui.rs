@@ -569,8 +569,9 @@ fn spawn_config_body(
                                         group,
                                         theme,
                                         CheckboxProps {
-                                            label: "Organic Borders — smooth coasts & borders"
-                                                .into(),
+                                            label:
+                                                "Organic Borders — smooth terrain coasts & borders"
+                                                    .into(),
                                             checked: cfg.organic_borders,
                                             ..default()
                                         },

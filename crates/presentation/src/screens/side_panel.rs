@@ -223,9 +223,12 @@ pub fn spawn_display_and_debug(
 ) {
     section_title(parent, theme, "Display");
     let ui_toggles = [
+        // Terrain-mode only since card #531: the political map is always
+        // pixel-rastered, so the smooth/straight choice applies to terrain
+        // coasts, borders and rivers.
         (
             ToggleKind::OrganicBorders,
-            "Organic borders",
+            "Organic borders (terrain)",
             settings.organic_borders,
         ),
         (
